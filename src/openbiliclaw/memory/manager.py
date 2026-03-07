@@ -1,0 +1,148 @@
+"""Memory Manager — coordinates the multi-layer networked memory system.
+
+Manages the five memory layers and four memory types, handling
+cross-layer updates, bidirectional corrections, and self-editing.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryLayer:
+    """Base class for a single memory layer."""
+
+    def __init__(self, name: str, storage_path: Path) -> None:
+        self.name = name
+        self.storage_path = storage_path
+        self._data: dict[str, Any] = {}
+
+    def load(self) -> None:
+        """Load layer data from disk."""
+        if self.storage_path.exists():
+            with open(self.storage_path) as f:
+                self._data = json.load(f)
+            logger.debug("Loaded %s layer from %s", self.name, self.storage_path)
+
+    def save(self) -> None:
+        """Persist layer data to disk."""
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.storage_path, "w") as f:
+            json.dump(self._data, f, ensure_ascii=False, indent=2)
+        logger.debug("Saved %s layer to %s", self.name, self.storage_path)
+
+    @property
+    def data(self) -> dict[str, Any]:
+        return self._data
+
+    def update(self, key: str, value: Any) -> None:
+        """Update a specific key in the layer."""
+        self._data[key] = value
+
+
+class MemoryManager:
+    """Manages the five-layer networked memory architecture.
+
+    Layers (bottom to top):
+      1. Event Layer    — raw behavioral facts
+      2. Preference Layer — extracted preferences
+      3. Awareness Layer  — daily observations and trends
+      4. Insight Layer    — motivational analysis and hypotheses
+      5. Soul Layer       — personality portrait
+
+    Memory types:
+      - Core Memory     — always in agent context (Soul + Preference summary)
+      - Episodic Memory  — specific interaction episodes
+      - Semantic Memory  — factual knowledge about the user
+      - Working Memory   — current session context (in-memory only)
+
+    Interactions are bidirectional: new events flow up, and top-level
+    understanding flows down to guide interpretation.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self._data_dir = data_dir
+        self._layers: dict[str, MemoryLayer] = {}
+        self._working_memory: dict[str, Any] = {}  # Session-only
+
+        # Initialize the five layers
+        layer_names = ["event", "preference", "awareness", "insight", "soul"]
+        for name in layer_names:
+            layer_path = data_dir / "memory" / f"{name}.json"
+            self._layers[name] = MemoryLayer(name, layer_path)
+
+    def initialize(self) -> None:
+        """Load all layers from disk."""
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        for layer in self._layers.values():
+            layer.load()
+        logger.info("Memory manager initialized with %d layers.", len(self._layers))
+
+    def save_all(self) -> None:
+        """Persist all layers to disk."""
+        for layer in self._layers.values():
+            layer.save()
+
+    def get_layer(self, name: str) -> MemoryLayer:
+        """Get a specific memory layer by name."""
+        if name not in self._layers:
+            raise KeyError(f"Unknown memory layer: {name}")
+        return self._layers[name]
+
+    # --- Core Memory (always in context) ---
+
+    def get_core_memory(self) -> dict[str, Any]:
+        """Get core memory for LLM context injection.
+
+        Core memory includes the Soul layer and a summary of the Preference layer.
+        This is always provided to the LLM as part of the system prompt.
+        """
+        return {
+            "soul": self._layers["soul"].data,
+            "preference_summary": self._layers["preference"].data,
+        }
+
+    # --- Working Memory (session-only) ---
+
+    def set_working(self, key: str, value: Any) -> None:
+        """Set a value in working memory (session only, not persisted)."""
+        self._working_memory[key] = value
+
+    def get_working(self, key: str, default: Any = None) -> Any:
+        """Get a value from working memory."""
+        return self._working_memory.get(key, default)
+
+    def clear_working(self) -> None:
+        """Clear all working memory."""
+        self._working_memory.clear()
+
+    # --- Cross-layer operations ---
+
+    async def propagate_event(self, event: dict[str, Any]) -> None:
+        """Propagate a new event upward through the memory layers.
+
+        This is the main entry point for new behavioral data. The event
+        is stored in the Event layer and may trigger updates in higher layers.
+
+        Args:
+            event: Behavioral event data.
+        """
+        # TODO: Store in event layer
+        # TODO: Check if preference layer needs updating
+        # TODO: Check if this triggers awareness observations
+        # TODO: Check for significant events that bypass to soul layer
+        logger.debug("Event propagated: %s", event.get("type", "unknown"))
+
+    async def top_down_reinterpret(self) -> None:
+        """Use top-level understanding to reinterpret lower layers.
+
+        Soul-level personality understanding can change how we interpret
+        behavioral patterns at the preference and awareness layers.
+        """
+        # TODO: Implement top-down reinterpretation
+        logger.debug("Top-down reinterpretation triggered.")

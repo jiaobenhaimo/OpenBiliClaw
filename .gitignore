@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# User data (never commit)
+user_profiles/
+memory_store/
+behavior_logs/
+
+# Environment variables
+.env
+.env.local
+
+# Node (Chrome extension)
+extension/node_modules/
+extension/dist/
+
+# Logs
+*.log
+logs/

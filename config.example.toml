@@ -1,0 +1,53 @@
+# OpenBiliClaw configuration example
+# Copy this file to config.toml and edit as needed.
+
+[general]
+# Language for Agent output (zh / en)
+language = "zh"
+# Data directory (relative to project root)
+data_dir = "data"
+
+[llm]
+# Default LLM provider: "openai" | "claude" | "deepseek" | "ollama"
+default_provider = "openai"
+
+[llm.openai]
+api_key = ""
+model = "gpt-4o"
+base_url = ""  # Leave empty for default, or set for compatible APIs
+
+[llm.claude]
+api_key = ""
+model = "claude-sonnet-4-20250514"
+
+[llm.deepseek]
+api_key = ""
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com"
+
+[llm.ollama]
+# Local model via Ollama
+model = "llama3"
+base_url = "http://localhost:11434"
+
+[bilibili]
+# Authentication method: "cookie" | "qrcode" | "none"
+auth_method = "cookie"
+# Cookie string (from browser)
+cookie = ""
+
+[bilibili.browser]
+# agent-browser executable path (leave empty for global install)
+executable = ""
+# Use headed mode for debugging
+headed = false
+
+[scheduler]
+# Enable scheduled content discovery
+enabled = true
+# Cron expression for discovery task
+discovery_cron = "0 */4 * * *"  # Every 4 hours
+
+[storage]
+# SQLite database path
+db_path = "data/openbiliclaw.db"

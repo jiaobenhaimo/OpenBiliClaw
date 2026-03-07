@@ -1,0 +1,42 @@
+{
+    "manifest_version": 3,
+    "name": "OpenBiliClaw",
+    "version": "0.1.0",
+    "description": "你的 B 站专属 AI 朋友 — 行为采集与智能推荐",
+    "permissions": [
+        "activeTab",
+        "storage",
+        "tabs"
+    ],
+    "host_permissions": [
+        "*://*.bilibili.com/*"
+    ],
+    "background": {
+        "service_worker": "dist/background/service-worker.js",
+        "type": "module"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "*://*.bilibili.com/*"
+            ],
+            "js": [
+                "dist/content/collector.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "action": {
+        "default_popup": "popup/popup.html",
+        "default_icon": {
+            "16": "icons/icon16.png",
+            "48": "icons/icon48.png",
+            "128": "icons/icon128.png"
+        }
+    },
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    }
+}
