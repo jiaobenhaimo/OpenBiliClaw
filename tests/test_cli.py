@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from openbiliclaw import cli as cli_module
 from openbiliclaw import config as config_module
 from openbiliclaw.cli import app
 
@@ -87,3 +88,49 @@ def test_recommend_reports_clear_config_error(
     assert result.exit_code == 1
     assert "配置错误" in result.stdout
     assert "llm.openai.api_key" in result.stdout
+
+
+def test_config_show_displays_registered_providers(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeRegistry:
+        default_provider = "claude"
+        available_providers = ["claude", "ollama"]
+
+    monkeypatch.setattr(cli_module, "_build_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["config-show"])
+
+    assert result.exit_code == 0
+    assert "已注册 Provider" in result.stdout
+    assert "claude, ollama" in result.stdout
+    assert "最终默认 Provider: claude" in result.stdout
+
+
+def test_health_check_reports_provider_statuses(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    class FakeResult:
+        def __init__(self, available: bool, is_default: bool, error: str | None = None) -> None:
+            self.available = available
+            self.is_default = is_default
+            self.error = error
+
+    class FakeRegistry:
+        async def health_check_all(self) -> dict[str, FakeResult]:
+            return {
+                "openai": FakeResult(True, True),
+                "ollama": FakeResult(False, False, "connection refused"),
+            }
+
+    monkeypatch.setattr(cli_module, "_build_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["health-check"])
+
+    assert result.exit_code == 0
+    assert "Provider 健康检查" in result.stdout
+    assert "openai" in result.stdout
+    assert "可用" in result.stdout
+    assert "connection refused" in result.stdout

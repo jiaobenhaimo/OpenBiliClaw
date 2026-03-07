@@ -5,6 +5,7 @@ Provides the command-line entry point using Typer.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import typer
@@ -26,6 +27,14 @@ def _initialize_logging(log_level_override: str | None = None) -> None:
 
     config = load_config()
     configure_logging(config, console_level_override=log_level_override)
+
+
+def _build_registry() -> Any:
+    """Build the configured LLM registry."""
+    from openbiliclaw.config import load_config
+    from openbiliclaw.llm import build_llm_registry
+
+    return build_llm_registry(load_config())
 
 
 @app.callback()
@@ -113,6 +122,7 @@ def chat() -> None:
 def config_show() -> None:
     """显示当前配置."""
     from openbiliclaw.config import load_config_with_diagnostics
+    from openbiliclaw.llm import RegistryBuildError, summarize_registry
 
     cfg, diagnostics = load_config_with_diagnostics()
     console.print("[bold]⚙️ 当前配置[/bold]")
@@ -124,10 +134,41 @@ def config_show() -> None:
     if diagnostics.config_path:
         console.print(f"  配置文件: {diagnostics.config_path}")
 
+    try:
+        registry = _build_registry()
+        summary = summarize_registry(cfg, registry)
+        console.print(f"  已注册 Provider: {', '.join(summary.registered_providers)}")
+        console.print(f"  最终默认 Provider: {summary.effective_default}")
+    except RegistryBuildError as exc:
+        console.print("  已注册 Provider: 无")
+        console.print(f"  Provider 状态: {exc}")
+
     hints = diagnostics.messages + [
         f"{issue.field}: {issue.message}" for issue in diagnostics.issues
     ]
     _print_config_guidance(hints)
+
+
+@app.command("health-check")
+def health_check() -> None:
+    """检查当前已注册 LLM provider 的可用性."""
+    from openbiliclaw.llm import RegistryBuildError
+
+    try:
+        registry = _build_registry()
+    except RegistryBuildError as exc:
+        console.print("[bold red]Provider 健康检查失败[/bold red]")
+        console.print(f"  {exc}")
+        raise typer.Exit(code=1) from exc
+
+    results = asyncio.run(registry.health_check_all())
+    console.print("[bold]Provider 健康检查[/bold]")
+    for name, result in results.items():
+        status = "可用" if result.available else "不可用"
+        default_label = " (default)" if result.is_default else ""
+        console.print(f"  {name}{default_label}: {status}")
+        if result.error:
+            console.print(f"    原因: {result.error}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 """LLM package — multi-model provider support."""
 
 from .base import (
+    HealthCheckResult,
+    LLMFallbackError,
     LLMProvider,
     LLMProviderError,
     LLMRateLimitError,
@@ -11,10 +13,18 @@ from .base import (
 from .claude_provider import ClaudeProvider
 from .ollama_provider import OllamaProvider
 from .openai_provider import DeepSeekProvider, OpenAIProvider
+from .registry import (
+    RegistryBuildError,
+    RegistrySummary,
+    build_llm_registry,
+    summarize_registry,
+)
 
 __all__ = [
     "ClaudeProvider",
     "DeepSeekProvider",
+    "HealthCheckResult",
+    "LLMFallbackError",
     "LLMProvider",
     "LLMProviderError",
     "LLMRateLimitError",
@@ -23,4 +33,8 @@ __all__ = [
     "LLMTimeoutError",
     "OllamaProvider",
     "OpenAIProvider",
+    "RegistryBuildError",
+    "RegistrySummary",
+    "build_llm_registry",
+    "summarize_registry",
 ]

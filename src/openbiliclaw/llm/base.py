@@ -29,6 +29,10 @@ class LLMResponseError(LLMProviderError):
     """Raised when a provider returns an invalid or empty response."""
 
 
+class LLMFallbackError(LLMProviderError):
+    """Raised when all candidate providers fail."""
+
+
 @dataclass
 class LLMResponse:
     """Standardized response from any LLM provider."""
@@ -38,6 +42,15 @@ class LLMResponse:
     provider: str = ""
     usage: dict[str, int] | None = None  # token counts
     raw: Any = None  # Raw provider response
+
+
+@dataclass
+class HealthCheckResult:
+    """Availability result for one provider."""
+
+    available: bool
+    is_default: bool = False
+    error: str | None = None
 
 
 class LLMProvider(ABC):
@@ -141,3 +154,67 @@ class LLMRegistry:
     def default_provider(self) -> str:
         """Name of the default provider."""
         return self._default
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        """Execute a completion request with sequential provider fallback."""
+        last_error: Exception | None = None
+        attempted: list[str] = []
+
+        for provider_name in self._fallback_order():
+            attempted.append(provider_name)
+            provider = self.get(provider_name)
+            try:
+                return await provider.complete(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=json_mode,
+                )
+            except LLMResponseError:
+                raise
+            except (LLMProviderError, LLMRateLimitError, LLMTimeoutError) as exc:
+                last_error = exc
+                logger.warning("Provider %s failed, trying next fallback.", provider_name)
+
+        attempted_list = ", ".join(attempted)
+        if last_error is None:
+            raise LLMFallbackError("No provider was available to process the request.")
+        raise LLMFallbackError(
+            f"All providers failed ({attempted_list}). Last error: {last_error}"
+        ) from last_error
+
+    async def health_check_all(self) -> dict[str, HealthCheckResult]:
+        """Run health checks for all registered providers."""
+        results: dict[str, HealthCheckResult] = {}
+        for provider_name in self.available_providers:
+            provider = self.get(provider_name)
+            try:
+                available = await provider.health_check()
+                results[provider_name] = HealthCheckResult(
+                    available=available,
+                    is_default=provider_name == self._default,
+                    error=None if available else "health check returned false",
+                )
+            except Exception as exc:
+                results[provider_name] = HealthCheckResult(
+                    available=False,
+                    is_default=provider_name == self._default,
+                    error=str(exc),
+                )
+        return results
+
+    def _fallback_order(self) -> list[str]:
+        """Return the sequential provider order for fallback."""
+        if not self._default:
+            return self.available_providers
+        return [
+            self._default,
+            *[name for name in self.available_providers if name != self._default],
+        ]
