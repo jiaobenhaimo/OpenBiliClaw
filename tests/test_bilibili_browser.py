@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
 
+from openbiliclaw.bilibili import browser as browser_module
 from openbiliclaw.bilibili.browser import BilibiliBrowser, BrowserCommandError
 
 if TYPE_CHECKING:
@@ -41,6 +44,53 @@ def test_install_hint_mentions_official_setup() -> None:
 
     assert "npm install -g agent-browser" in hint
     assert "agent-browser install" in hint
+
+
+def test_is_available_does_not_treat_apachebench_ab_as_agent_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_which(name: str) -> str | None:
+        if name == "agent-browser":
+            return None
+        if name == "ab":
+            return "/usr/sbin/ab"
+        return None
+
+    monkeypatch.setattr("openbiliclaw.bilibili.browser.shutil.which", fake_which)
+
+    browser = BilibiliBrowser()
+
+    assert browser.executable == "agent-browser"
+    assert browser.is_available is False
+
+
+def test_is_available_rejects_non_runnable_agent_browser_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "openbiliclaw.bilibili.browser.shutil.which",
+        lambda name: "/Users/white/.volta/bin/agent-browser" if name == "agent-browser" else None,
+    )
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["agent-browser", "--version"],
+            returncode=126,
+            stdout="",
+            stderr="Volta error",
+        )
+
+    monkeypatch.setattr(
+        browser_module,
+        "subprocess",
+        SimpleNamespace(run=fake_run),
+        raising=False,
+    )
+
+    browser = BilibiliBrowser()
+
+    assert browser.executable == "/Users/white/.volta/bin/agent-browser"
+    assert browser.is_available is False
 
 
 @pytest.mark.asyncio

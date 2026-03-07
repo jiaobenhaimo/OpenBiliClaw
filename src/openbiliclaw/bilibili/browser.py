@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, cast
 
@@ -50,9 +51,6 @@ class BilibiliBrowser:
         path = shutil.which("agent-browser")
         if path:
             return path
-        path = shutil.which("ab")
-        if path:
-            return path
         return "agent-browser"
 
     @staticmethod
@@ -69,8 +67,23 @@ class BilibiliBrowser:
         """Check whether the configured executable is available."""
         executable_path = Path(executable)
         if executable_path.is_absolute() or "/" in executable:
-            return executable_path.exists() and executable_path.is_file()
-        return shutil.which(executable) is not None
+            if not (executable_path.exists() and executable_path.is_file()):
+                return False
+        elif shutil.which(executable) is None:
+            return False
+
+        try:
+            result = subprocess.run(
+                [executable, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        return result.returncode == 0
 
     @property
     def is_available(self) -> bool:
