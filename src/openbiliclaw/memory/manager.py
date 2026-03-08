@@ -110,32 +110,134 @@ class MemoryManager:
         Core memory includes the Soul layer and a summary of the Preference layer.
         This is always provided to the LLM as part of the system prompt.
         """
+        soul = self._layers["soul"].data
+        preference = self._layers["preference"].data
+        awareness = self._layers["awareness"].data.get("notes", [])
+        insights = self._layers["insight"].data.get("hypotheses", [])
+
         return {
-            "soul": self._layers["soul"].data,
-            "preference_summary": self._layers["preference"].data,
+            "soul_summary": {
+                "personality_portrait": soul.get("personality_portrait", ""),
+                "core_traits": self._as_str_list(soul.get("core_traits", [])),
+                "values": self._as_str_list(soul.get("values", [])),
+                "life_stage": str(soul.get("life_stage", "")),
+                "deep_needs": self._as_str_list(soul.get("deep_needs", [])),
+            },
+            "preference_summary": {
+                "top_interests": self._top_interests(preference.get("interests", [])),
+                "style": preference.get("style", {}),
+                "exploration_openness": preference.get("exploration_openness", 0.5),
+                "disliked_topics": self._as_str_list(preference.get("disliked_topics", []))[:5],
+                "favorite_up_users": self._as_str_list(
+                    preference.get("favorite_up_users", [])
+                )[:5],
+            },
+            "recent_awareness": self._recent_awareness(awareness),
+            "active_insights": self._active_insights(insights),
         }
 
     def render_core_memory_prompt(self) -> str:
         """Render core memory into stable prompt text."""
         core_memory = self.get_core_memory()
-        soul = core_memory["soul"]
+        soul = core_memory["soul_summary"]
         preference_summary = core_memory["preference_summary"]
+        recent_awareness = core_memory["recent_awareness"]
+        active_insights = core_memory["active_insights"]
 
-        if not soul and not preference_summary:
+        has_soul = any(soul.values())
+        has_preference = bool(
+            preference_summary.get("top_interests")
+            or preference_summary.get("disliked_topics")
+            or preference_summary.get("favorite_up_users")
+        )
+        if not has_soul and not has_preference and not recent_awareness and not active_insights:
             return "（尚未建立完整画像）"
 
         sections: list[str] = []
-        if soul:
-            portrait = soul.get("personality_portrait")
-            if portrait:
-                sections.append(f"## 用户画像\n{portrait}")
-            else:
-                sections.append(f"## 用户画像\n{soul}")
+        portrait = soul.get("personality_portrait")
+        if portrait:
+            sections.append(f"## 用户画像\n{portrait}")
 
-        if preference_summary:
-            sections.append(f"## 偏好摘要\n{preference_summary}")
+        preference_lines: list[str] = []
+        top_interests = preference_summary.get("top_interests", [])
+        if top_interests:
+            interest_text = ", ".join(
+                item["name"]
+                for item in top_interests
+                if isinstance(item, dict) and item.get("name")
+            )
+            if interest_text:
+                preference_lines.append(f"兴趣标签: {interest_text}")
+        disliked_topics = preference_summary.get("disliked_topics", [])
+        if disliked_topics:
+            preference_lines.append(f"不喜欢: {', '.join(disliked_topics)}")
+        favorite_up_users = preference_summary.get("favorite_up_users", [])
+        if favorite_up_users:
+            preference_lines.append(f"常看UP主: {', '.join(favorite_up_users)}")
+        if preference_lines:
+            sections.append("## 偏好摘要\n" + "\n".join(preference_lines))
+
+        if recent_awareness:
+            awareness_text = "\n".join(
+                f"- [{item.get('date', '')}] {item.get('observation', '')}".strip()
+                for item in recent_awareness
+            )
+            sections.append(f"## 近期观察\n{awareness_text}")
+
+        if active_insights:
+            insights_text = "\n".join(
+                f"- {item.get('hypothesis', '')} (置信度: {float(item.get('confidence', 0.0)):.0%})"
+                for item in active_insights
+            )
+            sections.append(f"## 当前洞察\n{insights_text}")
 
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _as_str_list(raw_value: object) -> list[str]:
+        if not isinstance(raw_value, list):
+            return []
+        return [str(item) for item in raw_value]
+
+    @staticmethod
+    def _to_float(raw_value: object) -> float:
+        if isinstance(raw_value, bool):
+            return float(raw_value)
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        if isinstance(raw_value, str):
+            try:
+                return float(raw_value)
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    def _top_interests(self, raw_value: object) -> list[dict[str, object]]:
+        if not isinstance(raw_value, list):
+            return []
+        interests = [item for item in raw_value if isinstance(item, dict)]
+        return sorted(
+            interests,
+            key=lambda item: self._to_float(item.get("weight", 0.0)),
+            reverse=True,
+        )[:5]
+
+    @staticmethod
+    def _recent_awareness(raw_value: object) -> list[dict[str, object]]:
+        if not isinstance(raw_value, list):
+            return []
+        notes = [item for item in raw_value if isinstance(item, dict)]
+        return notes[:5]
+
+    def _active_insights(self, raw_value: object) -> list[dict[str, object]]:
+        if not isinstance(raw_value, list):
+            return []
+        insights = [item for item in raw_value if isinstance(item, dict)]
+        return sorted(
+            insights,
+            key=lambda item: self._to_float(item.get("confidence", 0.0)),
+            reverse=True,
+        )[:5]
 
     # --- Working Memory (session-only) ---
 

@@ -21,6 +21,7 @@ class FakeRegistry:
         self.response = response
         self.error = error
         self.calls: list[list[dict[str, str]]] = []
+        self.json_modes: list[bool] = []
 
     async def complete(
         self,
@@ -31,9 +32,18 @@ class FakeRegistry:
         json_mode: bool = False,
     ) -> LLMResponse:
         self.calls.append(messages)
+        self.json_modes.append(json_mode)
         if self.error is not None:
             raise self.error
         return self.response or LLMResponse(content="", provider="openai")
+
+
+class FakeMemoryManager:
+    def __init__(self, core_prompt: str) -> None:
+        self.core_prompt = core_prompt
+
+    def render_core_memory_prompt(self) -> str:
+        return self.core_prompt
 
 
 @pytest.mark.asyncio
@@ -92,3 +102,34 @@ async def test_llm_service_wraps_provider_failures(tmp_path: Path) -> None:
             user_message="我最近总在重复看同一类视频。",
             history=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_complete_with_core_memory_injects_core_memory() -> None:
+    registry = FakeRegistry(LLMResponse(content="ok", provider="openai"))
+    memory = FakeMemoryManager(core_prompt="## 用户画像\nportrait")
+    service = LLMService(registry=registry, memory=memory)  # type: ignore[arg-type]
+
+    await service.complete_with_core_memory(
+        system_instruction="你是内容评估助手。",
+        user_input="请评估这个视频。",
+    )
+
+    assert "## 用户画像" in registry.calls[0][0]["content"]
+    assert "你是内容评估助手。" in registry.calls[0][0]["content"]
+    assert registry.calls[0][1]["content"] == "请评估这个视频。"
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_task_enables_json_mode() -> None:
+    registry = FakeRegistry(LLMResponse(content='{"ok": true}', provider="openai"))
+    memory = FakeMemoryManager(core_prompt="## 用户画像\nportrait")
+    service = LLMService(registry=registry, memory=memory)  # type: ignore[arg-type]
+
+    await service.complete_structured_task(
+        system_instruction="输出 JSON。",
+        user_input="请返回结构化结果。",
+    )
+
+    assert registry.calls
+    assert registry.json_modes == [True]
