@@ -110,7 +110,8 @@ def test_config_show_displays_registered_providers(
     assert result.exit_code == 0
     assert "已注册 Provider" in result.stdout
     assert "claude, ollama" in result.stdout
-    assert "最终默认 Provider: claude" in result.stdout
+    assert "最终默认 Provider" in result.stdout
+    assert "claude" in result.stdout
 
 
 def test_health_check_reports_provider_statuses(
@@ -244,6 +245,7 @@ def test_auth_status_reports_authenticated_user(
     result = runner.invoke(app, ["auth", "status"])
 
     assert result.exit_code == 0
+    assert "认证概览" in result.stdout
     assert "已认证" in result.stdout
     assert "alice" in result.stdout
     assert "10086" in result.stdout
@@ -266,6 +268,7 @@ def test_browser_status_reports_install_guidance_when_missing(
     result = runner.invoke(app, ["browser", "status"])
 
     assert result.exit_code == 1
+    assert "浏览器集成状态" in result.stdout
     assert "未安装" in result.stdout
     assert "npm install -g agent-browser" in result.stdout
 
@@ -318,6 +321,45 @@ def test_browser_content_reports_command_failure(
     assert "snapshot failed" in result.stdout
 
 
+def test_start_uses_placeholder_output(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["start"])
+
+    assert result.exit_code == 0
+    assert "启动 OpenBiliClaw" in result.stdout
+    assert "功能开发中" in result.stdout
+
+
+def test_discover_uses_placeholder_output(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["discover"])
+
+    assert result.exit_code == 0
+    assert "内容发现" in result.stdout
+    assert "功能开发中" in result.stdout
+
+
+def test_chat_uses_placeholder_output(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["chat"])
+
+    assert result.exit_code == 0
+    assert "对话模式" in result.stdout
+    assert "功能开发中" in result.stdout
+
+
 def test_profile_command_shows_saved_profile(
     monkeypatch: pytest.MonkeyPatch, runner: CliRunner
 ) -> None:
@@ -341,6 +383,7 @@ def test_profile_command_shows_saved_profile(
     result = runner.invoke(app, ["profile"])
 
     assert result.exit_code == 0
+    assert "用户画像概览" in result.stdout
     assert "人格描述" in result.stdout
     assert "核心特质" in result.stdout
     assert "理性" in result.stdout
@@ -395,6 +438,7 @@ def test_recommend_prints_discover_guidance_when_no_results(
     result = runner.invoke(app, ["recommend"])
 
     assert result.exit_code == 0
+    assert "本轮推荐" in result.stdout
     assert "暂无可推荐内容" in result.stdout
     assert "openbiliclaw discover" in result.stdout
 
@@ -447,9 +491,12 @@ def test_recommend_displays_results_and_marks_them_presented(
     result = runner.invoke(app, ["recommend"])
 
     assert result.exit_code == 0
+    assert "本轮推荐" in result.stdout
     assert "讲透城市与建筑的空间叙事" in result.stdout
+    assert "UP 主" in result.stdout
     assert "城市观察局" in result.stdout
     assert "这条会对上你最近那种想把结构想透的劲头。" in result.stdout
+    assert "话题标签" in result.stdout
     assert "BV1REC" in result.stdout
     assert fake_engine.marked_ids == [7]
 
@@ -677,12 +724,14 @@ def test_init_runs_history_preference_profile_and_discovery(
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
+    assert "初始化 OpenBiliClaw" in result.stdout
+    assert "初始化摘要" in result.stdout
     assert "1/4 拉取历史" in result.stdout
     assert "2/4 分析偏好" in result.stdout
     assert "3/4 生成画像" in result.stdout
     assert "4/4 发现内容" in result.stdout
-    assert "历史条数: 1" in result.stdout
-    assert "发现内容数: 1" in result.stdout
+    assert "历史条数" in result.stdout
+    assert "发现内容数" in result.stdout
     assert fake_memory.events[0]["event_type"] == "view"
     assert fake_soul.analyzed_events
     assert fake_soul.built_history

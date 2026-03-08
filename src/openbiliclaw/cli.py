@@ -10,6 +10,8 @@ from typing import Any, cast
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 app = typer.Typer(
     name="openbiliclaw",
@@ -22,6 +24,65 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(browser_app, name="browser")
 console = Console()
 _APP_CONTEXT: dict[str, Any] = {}
+
+
+def _print_page_title(title: str, subtitle: str = "") -> None:
+    """Render a consistent page title."""
+    body = title if not subtitle else f"{title}\n[dim]{subtitle}[/dim]"
+    console.print(Panel.fit(body, border_style="cyan"))
+
+
+def _print_status_panel(kind: str, title: str, body: str) -> None:
+    """Render a status panel with consistent visual semantics."""
+    styles = {
+        "success": "green",
+        "warning": "yellow",
+        "error": "red",
+        "info": "cyan",
+        "stub": "blue",
+    }
+    console.print(Panel(body, title=title, border_style=styles.get(kind, "cyan")))
+
+
+def _print_key_value_table(title: str, rows: list[tuple[str, str]]) -> None:
+    """Render a key-value table for status-like commands."""
+    table = Table(title=title, show_header=False, box=None, pad_edge=False)
+    table.add_column("key", style="bold cyan", no_wrap=True)
+    table.add_column("value")
+    for key, value in rows:
+        table.add_row(key, value)
+    console.print(table)
+
+
+def _print_section_title(title: str) -> None:
+    """Render a consistent section title."""
+    console.print(f"[bold cyan]{title}[/bold cyan]")
+
+
+def _print_placeholder(feature: str, next_step: str = "") -> None:
+    """Render a consistent placeholder panel for unfinished commands."""
+    body = "功能开发中"
+    if next_step:
+        body = f"{body}\n[dim]下一步：{next_step}[/dim]"
+    _print_page_title(feature)
+    _print_status_panel("stub", "开发中", body)
+
+
+def _print_recommendation_card(item: Any, index: int) -> None:
+    """Render one recommendation in a card-like format."""
+    rows = [
+        ("标题", item.content.title or "（暂无）"),
+        ("UP 主", item.content.up_name or "（未知）"),
+    ]
+    if item.topic_label:
+        rows.append(("话题标签", item.topic_label))
+    rows.extend(
+        [
+            ("推荐理由", item.expression or "（暂无）"),
+            ("BV号", item.content.bvid or "（暂无）"),
+        ]
+    )
+    _print_key_value_table(f"推荐 {index}", rows)
 
 
 def _initialize_logging(log_level_override: str | None = None) -> None:
@@ -206,23 +267,31 @@ def _print_config_guidance(messages: list[str]) -> None:
 def _print_auth_status(status: Any) -> None:
     """Render auth status consistently."""
     state_label = "已认证" if status.authenticated else "未认证"
-    console.print("[bold]B站认证状态[/bold]")
-    console.print(f"  状态: {state_label}")
-    console.print(f"  Cookie 文件: {status.cookie_path}")
+    _print_page_title("认证概览", "B站认证状态")
+    rows = [
+        ("状态", state_label),
+        ("Cookie 文件", str(status.cookie_path)),
+    ]
     if status.username:
-        console.print(f"  用户名: {status.username}")
+        rows.append(("用户名", str(status.username)))
     if status.user_id:
-        console.print(f"  UID: {status.user_id}")
+        rows.append(("UID", str(status.user_id)))
     if status.message:
-        console.print(f"  说明: {status.message}")
+        rows.append(("说明", str(status.message)))
+    _print_key_value_table("认证信息", rows)
 
 
 def _print_browser_status(browser: Any) -> None:
     """Render browser installation status."""
     availability = "已安装" if browser.is_available else "未安装"
-    console.print("[bold]agent-browser 状态[/bold]")
-    console.print(f"  状态: {availability}")
-    console.print(f"  可执行文件: {browser.executable}")
+    _print_page_title("浏览器集成状态", "agent-browser 状态")
+    _print_key_value_table(
+        "浏览器信息",
+        [
+            ("状态", availability),
+            ("可执行文件", str(browser.executable)),
+        ],
+    )
 
 
 def _require_runtime_config() -> None:
@@ -250,8 +319,10 @@ def _require_runtime_config() -> None:
 def start() -> None:
     """启动 OpenBiliClaw Agent."""
     _require_runtime_config()
-    console.print("[bold green]🦀 OpenBiliClaw[/bold green] 正在启动...")
-    console.print("[dim]v0.1.0-dev — 项目处于早期开发阶段[/dim]")
+    _print_placeholder(
+        "启动 OpenBiliClaw",
+        "先执行 `openbiliclaw init` 完成初始化，后续再接通常驻 Agent。",
+    )
     # TODO: Initialize and start the agent orchestrator
 
 
@@ -270,25 +341,24 @@ def init() -> None:
     memory = _build_memory_manager()
     soul_engine = _build_soul_engine()
 
-    console.print("[bold]🚀 初始化 OpenBiliClaw[/bold]")
-    console.print("[bold cyan]1/4 拉取历史[/bold cyan]")
+    _print_page_title("初始化 OpenBiliClaw", "首次运行引导")
+    _print_section_title("1/4 拉取历史")
     history = asyncio.run(client.get_user_history(max_items=200))
     if not history:
-        console.print("[bold yellow]历史为空[/bold yellow]")
-        console.print("当前无法从 B 站历史中生成初始画像。")
+        _print_status_panel("warning", "历史为空", "当前无法从 B 站历史中生成初始画像。")
         raise typer.Exit(code=1)
 
     events = [_history_item_to_event(item) for item in history]
     for event in events:
         asyncio.run(memory.propagate_event(event))
 
-    console.print("[bold cyan]2/4 分析偏好[/bold cyan]")
+    _print_section_title("2/4 分析偏好")
     asyncio.run(soul_engine.analyze_events(events))
 
-    console.print("[bold cyan]3/4 生成画像[/bold cyan]")
+    _print_section_title("3/4 生成画像")
     profile_data = asyncio.run(soul_engine.build_initial_profile(history))
 
-    console.print("[bold cyan]4/4 发现内容[/bold cyan]")
+    _print_section_title("4/4 发现内容")
     discovered_count = 0
     discovery_error = False
     try:
@@ -297,18 +367,25 @@ def init() -> None:
         discovered_count = len(discovered)
     except Exception:
         discovery_error = True
-        console.print("[bold yellow]部分完成[/bold yellow]")
-        console.print("画像已生成，但 discover 阶段失败，可稍后手动执行 `openbiliclaw discover`。")
+        _print_status_panel(
+            "warning",
+            "部分完成",
+            "画像已生成，但 discover 阶段失败，可稍后手动执行 `openbiliclaw discover`。",
+        )
 
-    completion_text = (
-        "[bold green]初始化完成[/bold green]"
-        if not discovery_error
-        else "[bold yellow]初始化部分完成[/bold yellow]"
+    _print_status_panel(
+        "success" if not discovery_error else "warning",
+        "初始化完成" if not discovery_error else "初始化部分完成",
+        "初始化摘要",
     )
-    console.print(completion_text)
-    console.print(f"  历史条数: {len(history)}")
-    console.print("  画像已生成")
-    console.print(f"  发现内容数: {discovered_count}")
+    _print_key_value_table(
+        "初始化摘要",
+        [
+            ("历史条数", str(len(history))),
+            ("画像状态", "已生成"),
+            ("发现内容数", str(discovered_count)),
+        ],
+    )
 
 
 @app.command()
@@ -335,19 +412,18 @@ def recommend() -> None:
         )
     )
 
-    console.print("[bold]📬 推荐内容[/bold]")
+    _print_page_title("本轮推荐", "朋友式推荐列表")
     if not recommendations:
-        console.print("[dim]暂无可推荐内容，请先执行 `openbiliclaw discover`。[/dim]")
+        _print_status_panel(
+            "info",
+            "暂无可推荐内容",
+            "请先执行 `openbiliclaw discover`。",
+        )
         return
 
     presented_ids: list[int] = []
-    for item in recommendations:
-        console.print(f"[bold cyan]{item.content.title}[/bold cyan]")
-        console.print(f"  UP主: {item.content.up_name or '（未知）'}")
-        if item.topic_label:
-            console.print(f"  话题: {item.topic_label}")
-        console.print(f"  推荐理由: {item.expression}")
-        console.print(f"  BV号: {item.content.bvid}")
+    for index, item in enumerate(recommendations, start=1):
+        _print_recommendation_card(item, index)
         presented_ids.append(item.recommendation_id)
 
     recommendation_engine.mark_presented(presented_ids)
@@ -363,16 +439,14 @@ def feedback(
     _require_runtime_config()
     normalized_signal = signal.strip().lower()
     if normalized_signal not in {"like", "dislike"}:
-        console.print("[bold red]反馈类型无效[/bold red]")
-        console.print("  仅支持: like, dislike")
+        _print_status_panel("error", "反馈类型无效", "仅支持: like, dislike")
         raise typer.Exit(code=1)
 
     recommendation_engine = _build_recommendation_engine()
     memory = _build_memory_manager()
     recommendation = recommendation_engine.get_recommendation(recommendation_id)
     if recommendation is None:
-        console.print("[bold red]推荐不存在[/bold red]")
-        console.print(f"  recommendation_id={recommendation_id}")
+        _print_status_panel("error", "推荐不存在", f"recommendation_id={recommendation_id}")
         raise typer.Exit(code=1)
 
     asyncio.run(
@@ -397,11 +471,14 @@ def feedback(
         )
     )
 
-    console.print("[bold green]反馈已记录[/bold green]")
-    console.print(f"  推荐ID: {recommendation_id}")
-    console.print(f"  反馈: {normalized_signal}")
+    _print_status_panel("success", "反馈已记录", f"推荐ID {recommendation_id} 已更新。")
+    rows = [
+        ("推荐ID", str(recommendation_id)),
+        ("反馈", normalized_signal),
+    ]
     if note:
-        console.print(f"  备注: {note}")
+        rows.append(("备注", note))
+    _print_key_value_table("反馈详情", rows)
 
 
 @app.command()
@@ -417,18 +494,18 @@ def profile() -> None:
         console.print("请先执行 `openbiliclaw init` 拉取历史并生成初始画像。")
         raise typer.Exit(code=1) from exc
 
-    console.print("[bold]🧠 用户画像[/bold]")
-    console.print("[bold cyan]人格描述[/bold cyan]")
+    _print_page_title("用户画像概览", "当前稳定画像")
+    _print_section_title("人格描述")
     console.print(profile_data.personality_portrait or "（暂无）")
-    console.print("[bold cyan]核心特质[/bold cyan]")
+    _print_section_title("核心特质")
     traits_text = "、".join(profile_data.core_traits) if profile_data.core_traits else "（暂无）"
     console.print(f"  {traits_text}")
-    console.print("[bold cyan]价值观[/bold cyan]")
+    _print_section_title("价值观")
     values_text = "、".join(profile_data.values) if profile_data.values else "（暂无）"
     console.print(f"  {values_text}")
-    console.print("[bold cyan]当前阶段[/bold cyan]")
+    _print_section_title("当前阶段")
     console.print(f"  {profile_data.life_stage or '（暂无）'}")
-    console.print("[bold cyan]深层需求[/bold cyan]")
+    _print_section_title("深层需求")
     needs_text = "、".join(profile_data.deep_needs) if profile_data.deep_needs else "（暂无）"
     console.print(f"  {needs_text}")
 
@@ -437,8 +514,10 @@ def profile() -> None:
 def discover() -> None:
     """手动触发内容发现."""
     _require_runtime_config()
-    console.print("[bold]🔍 内容发现[/bold]")
-    console.print("[dim]功能开发中...[/dim]")
+    _print_placeholder(
+        "内容发现",
+        "当前可先执行 `openbiliclaw init` 自动触发一次发现流程。",
+    )
     # TODO: Trigger content discovery
 
 
@@ -446,8 +525,10 @@ def discover() -> None:
 def chat() -> None:
     """与 Agent 对话（苏格拉底式深度交流）."""
     _require_runtime_config()
-    console.print("[bold]💬 对话模式[/bold]")
-    console.print("[dim]功能开发中...[/dim]")
+    _print_placeholder(
+        "对话模式",
+        "当前可先执行 `openbiliclaw profile` 和 `openbiliclaw recommend` 查看画像与推荐。",
+    )
     # TODO: Interactive chat with the agent
 
 
@@ -458,23 +539,36 @@ def config_show() -> None:
     from openbiliclaw.llm import RegistryBuildError, summarize_registry
 
     cfg, diagnostics = load_config_with_diagnostics()
-    console.print("[bold]⚙️ 当前配置[/bold]")
-    console.print(f"  语言: {cfg.language}")
-    console.print(f"  LLM: {cfg.llm.default_provider}")
-    console.print(f"  B站认证: {cfg.bilibili.auth_method}")
-    console.print(f"  定时任务: {'开启' if cfg.scheduler.enabled else '关闭'}")
-    console.print(f"  数据目录: {cfg.data_path}")
+    _print_page_title("当前配置概览", "运行时配置")
+    rows = [
+        ("语言", cfg.language),
+        ("LLM", cfg.llm.default_provider),
+        ("B站认证", cfg.bilibili.auth_method),
+        ("定时任务", "开启" if cfg.scheduler.enabled else "关闭"),
+        ("数据目录", str(cfg.data_path)),
+    ]
     if diagnostics.config_path:
-        console.print(f"  配置文件: {diagnostics.config_path}")
+        rows.append(("配置文件", str(diagnostics.config_path)))
+    _print_key_value_table("配置项", rows)
 
     try:
         registry = _build_registry()
         summary = summarize_registry(cfg, registry)
-        console.print(f"  已注册 Provider: {', '.join(summary.registered_providers)}")
-        console.print(f"  最终默认 Provider: {summary.effective_default}")
+        _print_key_value_table(
+            "Provider 概览",
+            [
+                ("已注册 Provider", ", ".join(summary.registered_providers)),
+                ("最终默认 Provider", summary.effective_default),
+            ],
+        )
     except RegistryBuildError as exc:
-        console.print("  已注册 Provider: 无")
-        console.print(f"  Provider 状态: {exc}")
+        _print_key_value_table(
+            "Provider 概览",
+            [
+                ("已注册 Provider", "无"),
+                ("Provider 状态", str(exc)),
+            ],
+        )
 
     hints = diagnostics.messages + [
         f"{issue.field}: {issue.message}" for issue in diagnostics.issues
@@ -516,12 +610,11 @@ def health_check() -> None:
     try:
         registry = _build_registry()
     except RegistryBuildError as exc:
-        console.print("[bold red]Provider 健康检查失败[/bold red]")
-        console.print(f"  {exc}")
+        _print_status_panel("error", "Provider 健康检查失败", str(exc))
         raise typer.Exit(code=1) from exc
 
     results = asyncio.run(registry.health_check_all())
-    console.print("[bold]Provider 健康检查[/bold]")
+    _print_page_title("Provider 健康检查", "已注册 LLM Provider 状态")
     for name, result in results.items():
         status = "可用" if result.available else "不可用"
         default_label = " (default)" if result.is_default else ""
@@ -548,19 +641,17 @@ def browser_open(url: str) -> None:
 
     browser = _build_browser()
     if not browser.is_available:
-        console.print("[bold red]agent-browser 未安装[/bold red]")
-        console.print(f"  {browser.get_install_hint()}")
+        _print_status_panel("error", "agent-browser 未安装", browser.get_install_hint())
         raise typer.Exit(code=1)
 
     try:
         asyncio.run(browser.navigate(url))
     except BrowserCommandError as exc:
-        console.print("[bold red]浏览器操作失败[/bold red]")
-        console.print(f"  {exc}")
+        _print_status_panel("error", "浏览器操作失败", str(exc))
         raise typer.Exit(code=1) from exc
 
-    console.print("[bold green]浏览器已打开[/bold green]")
-    console.print(f"  {url}")
+    _print_page_title("浏览器已打开")
+    _print_key_value_table("目标地址", [("URL", url)])
 
 
 @browser_app.command("content")
@@ -570,19 +661,17 @@ def browser_content(url: str) -> None:
 
     browser = _build_browser()
     if not browser.is_available:
-        console.print("[bold red]agent-browser 未安装[/bold red]")
-        console.print(f"  {browser.get_install_hint()}")
+        _print_status_panel("error", "agent-browser 未安装", browser.get_install_hint())
         raise typer.Exit(code=1)
 
     try:
         content = asyncio.run(browser.get_page_content(url))
     except BrowserCommandError as exc:
-        console.print("[bold red]浏览器操作失败[/bold red]")
-        console.print(f"  {exc}")
+        _print_status_panel("error", "浏览器操作失败", str(exc))
         raise typer.Exit(code=1) from exc
 
-    console.print("[bold]页面内容[/bold]")
-    console.print(content)
+    _print_page_title("页面内容")
+    console.print(Panel(content, border_style="cyan"))
 
 
 if __name__ == "__main__":

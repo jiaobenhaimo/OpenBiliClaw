@@ -6,6 +6,15 @@
 
 ## M5: 内容发现引擎（进行中）
 
+## M7: CLI 体验 ✅
+
+### 7.2 输出格式 — `cli/m72-output-format`
+
+- `cli.py` 抽出统一 Rich 渲染 helper：页面标题、状态面板、键值表、占位态、推荐卡片
+- `init` / `profile` / `recommend` / `feedback` / `config-show` / `auth status` / `health-check` / `browser` 命令全部切到统一展示风格
+- `start` / `discover` / `chat` 的 stub 输出统一成“开发中”占位态，并附下一步提示
+- CLI 测试补充输出结构断言，覆盖画像分区、推荐卡片、初始化摘要和状态面板语义
+
 ### 5.6 发现引擎编排 — `discovery/m56-engine-orchestration`
 
 - `ContentDiscoveryEngine.discover()` 改为并发执行多个 discovery strategy，单个策略失败不会中断整体发现周期

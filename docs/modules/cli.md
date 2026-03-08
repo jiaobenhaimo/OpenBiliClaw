@@ -1,6 +1,12 @@
 # CLI 命令参考
 
 > 所有已实现的 `openbiliclaw` CLI 命令。
+>
+> 当前 CLI 已统一使用 Rich 输出：
+> - 页面标题采用统一标题面板
+> - 状态反馈统一为成功 / 警告 / 失败 / 开发中几类状态块
+> - 推荐列表使用卡片式展示
+> - 用户画像使用分区块展示
 
 ## 全局选项
 
@@ -35,9 +41,9 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 
 ```bash
 $ openbiliclaw config-show
-⚙️ 当前配置
-  已注册 Provider: openai, deepseek, ollama
-  最终默认 Provider: openai
+当前配置概览
+配置项
+Provider 概览
 ```
 
 ### `openbiliclaw health-check`
@@ -75,9 +81,9 @@ $ openbiliclaw auth login --cookie "SESSDATA=abc; bili_jct=xyz"
 
 ```bash
 $ openbiliclaw auth status
-B站认证状态
+认证概览
+认证信息
   状态: 已认证
-  Cookie 文件: data/bilibili_cookie.json
   用户名: alice
   UID: 10086
 ```
@@ -88,7 +94,8 @@ B站认证状态
 
 ```bash
 $ openbiliclaw browser status
-agent-browser 状态
+浏览器集成状态
+浏览器信息
   状态: 已安装
   可执行文件: /usr/local/bin/agent-browser
 ```
@@ -100,7 +107,8 @@ agent-browser 状态
 ```bash
 $ openbiliclaw browser open https://www.bilibili.com
 浏览器已打开
-  https://www.bilibili.com
+目标地址
+  URL: https://www.bilibili.com
 ```
 
 ### `openbiliclaw browser content <url>`
@@ -110,8 +118,9 @@ $ openbiliclaw browser open https://www.bilibili.com
 ```bash
 $ openbiliclaw browser content https://example.com
 页面内容
-  - heading "Example Domain" [ref=e1]
-  ...
+╭─ 页面内容 ─╮
+│ Example Domain ... │
+╰──────────────╯
 ```
 
 ### `openbiliclaw profile`
@@ -120,7 +129,7 @@ $ openbiliclaw browser content https://example.com
 
 ```bash
 $ openbiliclaw profile
-🧠 用户画像
+用户画像概览
 人格描述
 这是一个偏爱深度内容、会主动寻找原理解释、决策比较克制的人……
 
@@ -149,14 +158,15 @@ $ openbiliclaw profile
 
 ```bash
 $ openbiliclaw init
-🚀 初始化 OpenBiliClaw
+初始化 OpenBiliClaw
 1/4 拉取历史
 2/4 分析偏好
 3/4 生成画像
 4/4 发现内容
 初始化完成
+初始化摘要
   历史条数: 200
-  画像已生成
+  画像状态: 已生成
   发现内容数: 30
 ```
 
@@ -172,10 +182,11 @@ openbiliclaw discover
 
 ```bash
 $ openbiliclaw recommend
-📬 推荐内容
-讲透城市与建筑的空间叙事
-  UP主: 城市观察局
-  话题: 你最近那股想把结构想透的劲头
+本轮推荐
+推荐 1
+  标题: 讲透城市与建筑的空间叙事
+  UP 主: 城市观察局
+  话题标签: 你最近那股想把结构想透的劲头
   推荐理由: 这条会对上你最近那种想把结构想透的劲头，它不是快餐内容，而是会慢慢把结构给你铺开。
   BV号: BV1REC
 ```
@@ -193,10 +204,15 @@ openbiliclaw discover
 ```bash
 $ openbiliclaw feedback 7 dislike --note "太浅了"
 反馈已记录
+反馈详情
   推荐ID: 7
   反馈: dislike
   备注: 太浅了
 ```
+
+### Stub 命令的输出约定
+
+`start`、`discover`、`chat` 目前仍是 stub，但已经统一使用“开发中”占位态输出，避免与真实错误混淆，并会附带建议的下一步命令。
 
 这条命令会同时：
 
