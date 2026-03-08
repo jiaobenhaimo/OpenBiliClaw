@@ -11,12 +11,11 @@
 - **ContentDiscoveryEngine** — 发现策略编排器，负责注册、运行、去重和汇总
 - **DiscoveredContent** — 统一的候选内容数据结构
 - **SearchStrategy** — 基于画像生成搜索词并调用 B 站搜索的策略
+- **TrendingStrategy** — 从全站榜和相关分区榜中筛选高匹配热点内容
 
 后续会在这个模块继续补：
 
-- `TrendingStrategy`
 - `RelatedChainStrategy`
-- 内容匹配度评估
 - 多策略并行编排与缓存写入
 
 ## 已实现功能
@@ -24,10 +23,10 @@
 | 任务 | 状态 | 说明 |
 |------|------|------|
 | 5.1 搜索策略 | ✅ | LLM 生成搜索词 + B 站搜索 + `bvid` 去重 + `DiscoveredContent` 映射 |
-| 5.2 排行榜策略 | 🔲 | 未开始 |
+| 5.2 排行榜策略 | ✅ | 全站榜 + 相关分区榜 + LLM 评分筛选 |
 | 5.3 相关推荐链策略 | 🔲 | 未开始 |
-| 5.5 内容评估 | 🔲 | 未开始 |
-| 5.6 发现引擎编排 | 🔄 | 已有基础编排骨架，待补完整策略和排序 |
+| 5.5 内容评估 | 🔄 | `evaluate_content()` 已实现，待更多策略复用 |
+| 5.6 发现引擎编排 | 🔄 | 已能运行 Search/Trending，待补并行和缓存 |
 
 ## 公开 API
 
@@ -47,6 +46,9 @@ engine.register_strategy(
 
 results = await engine.discover(profile)
 assert results[0].source_strategy == "search"
+
+score = await engine.evaluate_content(results[0], profile)
+assert 0.0 <= score <= 1.0
 ```
 
 ### SearchStrategy
@@ -70,6 +72,28 @@ items = await strategy.discover(profile, limit=20)
 - LLM 返回坏 JSON 或空结果时，回退到本地兴趣标签 query
 - 对多个 query 的搜索结果按 `bvid` 去重
 - 将结果映射为 `DiscoveredContent`
+
+### TrendingStrategy
+
+```python
+from openbiliclaw.discovery.strategies.strategies import TrendingStrategy
+
+strategy = TrendingStrategy(
+    bilibili_client=bilibili_client,
+    llm_service=service,
+    score_threshold=0.65,
+    max_related_rids=4,
+)
+
+items = await strategy.discover(profile, limit=20)
+```
+
+行为说明：
+
+- 固定拉取 `rid=0` 全站榜
+- 再通过 LLM 选择 3 到 5 个相关分区榜
+- 对每条榜单内容执行 LLM 相关性评估
+- 只保留高于阈值的结果
 
 ### DiscoveredContent
 
@@ -101,5 +125,6 @@ item = DiscoveredContent(
 1. **策略显式注入依赖**：`SearchStrategy` 不自己构建 LLM 或 API client，便于测试和后续编排
 2. **query 生成走结构化任务**：统一通过 `LLMService` 注入 core memory，避免各策略手拼画像上下文
 3. **坏 JSON 有本地 fallback**：保证搜索策略在 LLM 不稳定时仍可运行
-4. **先跑通发现，不提前评分**：`5.1` 不引入内容匹配度评估，留给 `5.5`
-5. **引擎层只做编排**：`ContentDiscoveryEngine` 当前只负责注册、运行、去重和汇总，不负责依赖创建
+4. **排行榜分区先做轻量选择**：固定 `rid=0`，其余分区由 LLM 结构化选择并保留默认 fallback
+5. **评分入口集中在引擎层**：`ContentDiscoveryEngine.evaluate_content()` 统一负责把 `score/reason` 写回 `DiscoveredContent`
+6. **引擎层仍不负责依赖创建**：`ContentDiscoveryEngine` 接收外部注入的 `llm_service`，策略继续显式注入 client/service

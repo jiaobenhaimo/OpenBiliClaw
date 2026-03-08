@@ -6,6 +6,14 @@
 
 ## M5: 内容发现引擎（进行中）
 
+### 5.2 排行榜策略 — `discovery/m52-trending-strategy`
+
+- `TrendingStrategy` 从空壳升级为可运行策略：拉取全站榜 `rid=0` 和相关分区榜，并按 `bvid` 去重
+- 新增结构化分区选择 prompt，统一通过 `LLMService.complete_structured_task()` 选择额外 `rid`
+- `ContentDiscoveryEngine.evaluate_content()` 现已实现：用 LLM 输出 `score/reason` 并写回 `DiscoveredContent`
+- `TrendingStrategy` 对每条榜单内容执行相关性评估，只保留高于阈值的结果
+- 新增 discovery 层测试，覆盖分区选择、阈值过滤、单榜单失败不中断和内容评估写回
+
 ### 5.1 搜索策略 — `discovery/m51-search-strategy`
 
 - `SearchStrategy` 从空壳升级为可运行策略：基于画像生成搜索词、调用 B 站搜索并返回 `DiscoveredContent`

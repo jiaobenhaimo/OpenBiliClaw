@@ -269,3 +269,79 @@ def build_search_queries_prompt(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def build_trending_rids_prompt(
+    *,
+    profile_summary: dict[str, object],
+) -> list[dict[str, str]]:
+    """Build a structured prompt for selecting relevant Bilibili ranking rids."""
+    system_prompt = """
+<task>
+你要从用户画像中推断最值得关注的 B 站排行榜分区 rid。
+</task>
+
+<rules>
+1. 输出必须是严格 JSON，不要附带解释。
+2. 只返回 3 到 5 个最相关的分区 rid，不包含 0。
+3. 如果不确定，优先选择知识、科技、影视、纪录片相关分区。
+</rules>
+
+<output_schema>
+{
+  "rids": [36, 188, 181, 119]
+}
+</output_schema>
+""".strip()
+    user_prompt = "\n\n".join(
+        [
+            "<profile_summary>",
+            json.dumps(profile_summary, ensure_ascii=False, indent=2),
+            "</profile_summary>",
+        ]
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_content_evaluation_prompt(
+    *,
+    profile_summary: dict[str, object],
+    content_summary: dict[str, object],
+) -> list[dict[str, str]]:
+    """Build a structured prompt for content relevance evaluation."""
+    system_prompt = """
+<task>
+你要评估一个 B 站内容与这个用户画像的匹配度。
+</task>
+
+<rules>
+1. 输出必须是严格 JSON，不要附带解释。
+2. score 范围必须在 0 到 1 之间。
+3. reason 只写一句中文，解释为什么这个人会喜欢或不喜欢这个内容。
+4. 不要只说“因为热门”或“因为看过类似的”，要结合用户画像。
+</rules>
+
+<output_schema>
+{
+  "score": 0.78,
+  "reason": "这个视频的讲解深度和表达方式更贴近你长期偏好的高信息密度内容。"
+}
+</output_schema>
+""".strip()
+    user_prompt = "\n\n".join(
+        [
+            "<profile_summary>",
+            json.dumps(profile_summary, ensure_ascii=False, indent=2),
+            "</profile_summary>",
+            "<content_summary>",
+            json.dumps(content_summary, ensure_ascii=False, indent=2),
+            "</content_summary>",
+        ]
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]

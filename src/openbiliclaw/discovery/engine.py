@@ -6,15 +6,28 @@ that matches the user's soul profile.
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from openbiliclaw.soul.profile import SoulProfile
 
 logger = logging.getLogger(__name__)
+
+
+class SupportsStructuredTask(Protocol):
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> object: ...
 
 
 @dataclass
@@ -73,8 +86,9 @@ class ContentDiscoveryEngine:
     - Explore: cross-domain surprise discovery
     """
 
-    def __init__(self) -> None:
+    def __init__(self, llm_service: SupportsStructuredTask | None = None) -> None:
         self._strategies: list[DiscoveryStrategy] = []
+        self._llm_service = llm_service
 
     def register_strategy(self, strategy: DiscoveryStrategy) -> None:
         """Register a discovery strategy."""
@@ -135,5 +149,61 @@ class ContentDiscoveryEngine:
         Returns:
             Relevance score (0.0 - 1.0).
         """
-        # TODO: LLM-based evaluation against soul profile
-        return 0.0
+        if self._llm_service is None:
+            return 0.0
+
+        from openbiliclaw.llm.prompts import build_content_evaluation_prompt
+
+        messages = build_content_evaluation_prompt(
+            profile_summary={
+                "personality_portrait": profile.personality_portrait,
+                "core_traits": profile.core_traits[:5],
+                "deep_needs": profile.deep_needs[:5],
+                "interests": [
+                    {
+                        "name": item.name,
+                        "category": item.category,
+                        "weight": item.weight,
+                    }
+                    for item in profile.preferences.interests[:10]
+                ],
+            },
+            content_summary={
+                "title": content.title,
+                "up_name": content.up_name,
+                "description": content.description,
+                "duration": content.duration,
+                "view_count": content.view_count,
+                "source_strategy": content.source_strategy,
+            },
+        )
+        try:
+            response = await self._llm_service.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+            payload = json.loads(str(getattr(response, "content", "")).strip())
+            if not isinstance(payload, dict):
+                return 0.0
+            score = self._clamp_score(payload.get("score", 0.0))
+            reason = str(payload.get("reason", "")).strip()
+        except Exception:
+            logger.exception("Failed to evaluate discovered content: %s", content.bvid)
+            return 0.0
+
+        content.relevance_score = score
+        content.relevance_reason = reason
+        return score
+
+    @staticmethod
+    def _clamp_score(raw_value: object) -> float:
+        if isinstance(raw_value, bool | int | float):
+            value = float(raw_value)
+        elif isinstance(raw_value, str):
+            try:
+                value = float(raw_value)
+            except ValueError:
+                value = 0.0
+        else:
+            value = 0.0
+        return max(0.0, min(1.0, round(value, 4)))

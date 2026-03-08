@@ -8,7 +8,11 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from openbiliclaw.discovery.engine import DiscoveredContent, DiscoveryStrategy
+from openbiliclaw.discovery.engine import (
+    ContentDiscoveryEngine,
+    DiscoveredContent,
+    DiscoveryStrategy,
+)
 
 if TYPE_CHECKING:
     from openbiliclaw.soul.profile import SoulProfile
@@ -38,6 +42,10 @@ class SupportsSearchClient(Protocol):
         page_size: int = 20,
         order: str = "totalrank",
     ) -> list[dict[str, object]]: ...
+
+
+class SupportsRankingClient(Protocol):
+    async def get_ranking(self, rid: int = 0) -> list[dict[str, object]]: ...
 
 
 @dataclass
@@ -236,8 +244,15 @@ class SearchStrategy(DiscoveryStrategy):
         return 0
 
 
+@dataclass
 class TrendingStrategy(DiscoveryStrategy):
     """Discover content from trending/ranking pages."""
+
+    bilibili_client: SupportsRankingClient
+    llm_service: SupportsStructuredTask
+    score_threshold: float = 0.65
+    max_related_rids: int = 4
+    default_rids: tuple[int, ...] = (36, 188, 181, 119)
 
     @property
     def name(self) -> str:
@@ -255,9 +270,98 @@ class TrendingStrategy(DiscoveryStrategy):
         Returns:
             Discovered content list.
         """
-        # TODO: Fetch trending/ranking from relevant categories
-        # TODO: Filter by soul-based relevance
-        return []
+        evaluator = ContentDiscoveryEngine(llm_service=self.llm_service)
+        rids = await self._select_rids(profile)
+        results: list[DiscoveredContent] = []
+        seen_bvids: set[str] = set()
+
+        for rid in rids:
+            try:
+                ranking_items = await self.bilibili_client.get_ranking(rid)
+            except Exception:
+                logger.exception("Trending ranking request failed: rid=%s", rid)
+                continue
+
+            for item in ranking_items:
+                content = self._map_ranking_item(item)
+                if content is None or content.bvid in seen_bvids:
+                    continue
+                seen_bvids.add(content.bvid)
+                score = await evaluator.evaluate_content(content, profile)
+                if score < self.score_threshold:
+                    continue
+                results.append(content)
+                if len(results) >= limit:
+                    return results
+
+        return results
+
+    async def _select_rids(self, profile: SoulProfile) -> list[int]:
+        from openbiliclaw.llm.prompts import build_trending_rids_prompt
+
+        messages = build_trending_rids_prompt(
+            profile_summary=SearchStrategy._profile_summary(profile)
+        )
+        try:
+            response = await self.llm_service.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+            parsed = json.loads(str(getattr(response, "content", "")).strip())
+            if isinstance(parsed, dict) and isinstance(parsed.get("rids"), list):
+                selected = [
+                    SearchStrategy._to_int(item)
+                    for item in parsed["rids"]
+                    if SearchStrategy._to_int(item) > 0
+                ]
+                selected = self._dedupe_ints(selected)[: self.max_related_rids]
+                return [0, *selected]
+        except Exception:
+            logger.exception("Trending rid selection failed; using defaults.")
+        return [0, *list(self.default_rids[: self.max_related_rids])]
+
+    def _map_ranking_item(self, item: dict[str, object]) -> DiscoveredContent | None:
+        bvid = str(item.get("bvid", "")).strip()
+        if not bvid:
+            return None
+        owner = item.get("owner")
+        up_name = str(item.get("author", "")).strip()
+        up_mid = SearchStrategy._to_int(item.get("mid", 0))
+        if isinstance(owner, dict):
+            up_name = str(owner.get("name", up_name)).strip()
+            up_mid = SearchStrategy._to_int(owner.get("mid", up_mid))
+        stat = item.get("stat")
+        view_count = SearchStrategy._to_int(item.get("play", 0))
+        like_count = SearchStrategy._to_int(item.get("like", 0))
+        if isinstance(stat, dict):
+            view_count = SearchStrategy._to_int(stat.get("view", view_count))
+            like_count = SearchStrategy._to_int(stat.get("like", like_count))
+
+        return DiscoveredContent(
+            bvid=bvid,
+            title=SearchStrategy._clean_text(str(item.get("title", ""))),
+            up_name=SearchStrategy._clean_text(up_name),
+            up_mid=up_mid,
+            cover_url=str(item.get("pic", "")),
+            duration=SearchStrategy._parse_duration(item.get("duration", 0)),
+            view_count=view_count,
+            like_count=like_count,
+            description=SearchStrategy._clean_text(
+                str(item.get("description", item.get("desc", "")))
+            ),
+            source_strategy=self.name,
+        )
+
+    @staticmethod
+    def _dedupe_ints(values: list[int]) -> list[int]:
+        seen: set[int] = set()
+        ordered: list[int] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            ordered.append(value)
+        return ordered
 
 
 class RelatedChainStrategy(DiscoveryStrategy):

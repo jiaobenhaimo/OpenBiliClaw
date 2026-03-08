@@ -8,6 +8,8 @@ from openbiliclaw.discovery.engine import ContentDiscoveryEngine
 from openbiliclaw.soul.profile import SoulProfile
 
 from .test_search_strategy import FakeBilibiliClient, FakeLLMService, _build_profile
+from .test_trending_strategy import FakeLLMService as FakeTrendingLLMService
+from .test_trending_strategy import FakeRankingClient
 
 
 @pytest.mark.asyncio
@@ -49,3 +51,36 @@ async def test_discovery_engine_handles_empty_strategy_results() -> None:
     results = await engine.discover(SoulProfile())
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_runs_registered_trending_strategy() -> None:
+    from openbiliclaw.discovery.engine import ContentDiscoveryEngine
+    from openbiliclaw.discovery.strategies.strategies import TrendingStrategy
+
+    engine = ContentDiscoveryEngine(
+        llm_service=FakeTrendingLLMService(
+            [
+                '{"rids": [36]}',
+                '{"score": 0.83, "reason": "符合你的深度内容偏好。"}',
+            ]
+        )
+    )
+    engine.register_strategy(
+        TrendingStrategy(
+            bilibili_client=FakeRankingClient(
+                {
+                    0: [{"bvid": "BV1A", "title": "全站榜", "author": "UP1", "mid": 1}],
+                    36: [],
+                }
+            ),
+            llm_service=engine._llm_service,
+            score_threshold=0.65,
+        )
+    )
+
+    results = await engine.discover(_build_profile())
+
+    assert len(results) == 1
+    assert results[0].bvid == "BV1A"
+    assert results[0].source_strategy == "trending"
