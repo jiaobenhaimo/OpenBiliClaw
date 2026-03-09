@@ -6,6 +6,12 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 运行时 Cookie 回退修复 — `main`
+
+- 修复 `auth login` 与运行时命令脱节的问题：`init`、浏览器集成和本地服务现在会优先使用显式配置 cookie，留空时自动回退到 `data/bilibili_cookie.json`
+- 用户完成一次 `auth login` 后，不再需要把同一份 cookie 重复抄进 `config.toml`
+- 新增认证测试，锁定显式 cookie 优先级和已保存 cookie 回退行为
+
 ### Popup 画像 / 聊天页签增强 — `extension/m84-popup-tabs`
 
 - popup 新增 `推荐 / 我的画像 / 和阿B聊聊` 三个 tab，推荐不再是唯一入口

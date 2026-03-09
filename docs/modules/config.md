@@ -70,6 +70,10 @@ cp config.example.toml config.toml
 | `executable` | string | `""` | agent-browser 路径（留空使用全局安装） |
 | `headed` | bool | `false` | 是否显示浏览器窗口（调试用） |
 
+> 运行时行为：
+> 如果 `bilibili.cookie` 留空，CLI 命令和本地 API 服务会自动回退到 `auth login` 保存的 `data/bilibili_cookie.json`。
+> 只有在你想显式覆盖本地登录态时，才需要把 cookie 直接写进 `config.toml`。
+
 ### `[scheduler]`
 
 | 键 | 类型 | 默认值 | 说明 |

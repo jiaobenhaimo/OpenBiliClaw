@@ -161,3 +161,15 @@ class AuthManager:
         from .api import BilibiliAPIClient
 
         return BilibiliAPIClient(cookie=cookie)
+
+
+def resolve_runtime_cookie(*, data_dir: Path, configured_cookie: str) -> str:
+    """Resolve the cookie used by runtime commands.
+
+    Commands should prefer an explicitly configured cookie, but transparently
+    fall back to the cookie previously saved by `auth login`.
+    """
+    normalized_cookie = configured_cookie.strip()
+    if normalized_cookie:
+        return normalized_cookie
+    return AuthManager(data_dir).load_cookie().strip()

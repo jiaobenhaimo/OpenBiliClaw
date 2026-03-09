@@ -14,7 +14,7 @@
 
 | 任务 | 状态 | 说明 |
 |------|------|------|
-| 3.1 Cookie 认证 | ✅ | set / load / validate / clear + CLI auth 命令 |
+| 3.1 Cookie 认证 | ✅ | set / load / validate / clear + CLI auth 命令 + 运行时 cookie 回退 |
 | 3.2 核心 API | ✅ | 10+ API 方法 + 限流 + 统一错误处理 |
 | 3.3 agent-browser 集成 | ✅ | navigate / get_page_content + CLI browser 命令 |
 
@@ -34,6 +34,19 @@ status = await manager.validate_cookie("SESSDATA=abc")
 
 status = await manager.get_status()  # 加载本地 cookie 并验证
 manager.clear_cookie()               # 删除 cookie 文件
+```
+
+### 运行时 Cookie 解析
+
+```python
+from openbiliclaw.bilibili.auth import resolve_runtime_cookie
+
+cookie = resolve_runtime_cookie(
+    data_dir=Path("data"),
+    configured_cookie="",
+)
+# 优先使用 config.toml 中的显式 cookie；
+# 若为空，则自动回退到 auth login 保存的 data/bilibili_cookie.json
 ```
 
 ### BilibiliAPIClient
@@ -114,3 +127,4 @@ headed = false     # 调试时设为 true
 2. **统一请求助手 `_get_json()`**：收敛 HTTP 错误映射 + code≠0 检查 + 限流
 3. **轻量限流**：per-client 最小间隔 0.2s，不做全局令牌桶
 4. **Protocol DI**：`AuthManager` 通过 `api_client_factory` 注入 API 客户端，测试友好
+5. **运行时优先级**：命令和本地服务优先使用显式配置的 cookie；若未配置，则自动回退到 `auth login` 已保存的 cookie，避免首次登录后还要重复把 cookie 写进 `config.toml`

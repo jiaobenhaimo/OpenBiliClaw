@@ -127,6 +127,7 @@ def _build_auth_manager() -> Any:
 
 def _build_browser() -> Any:
     """Build the configured Bilibili browser integration."""
+    from openbiliclaw.bilibili.auth import resolve_runtime_cookie
     from openbiliclaw.bilibili.browser import BilibiliBrowser
     from openbiliclaw.config import load_config
 
@@ -134,17 +135,26 @@ def _build_browser() -> Any:
     return BilibiliBrowser(
         executable=config.bilibili.browser_executable,
         headed=config.bilibili.browser_headed,
-        cookie=config.bilibili.cookie,
+        cookie=resolve_runtime_cookie(
+            data_dir=config.data_path,
+            configured_cookie=config.bilibili.cookie,
+        ),
     )
 
 
 def _build_bilibili_client() -> Any:
     """Build the configured Bilibili API client."""
     from openbiliclaw.bilibili.api import BilibiliAPIClient
+    from openbiliclaw.bilibili.auth import resolve_runtime_cookie
     from openbiliclaw.config import load_config
 
     config = load_config()
-    return BilibiliAPIClient(cookie=config.bilibili.cookie)
+    return BilibiliAPIClient(
+        cookie=resolve_runtime_cookie(
+            data_dir=config.data_path,
+            configured_cookie=config.bilibili.cookie,
+        )
+    )
 
 
 def _build_soul_engine() -> Any:

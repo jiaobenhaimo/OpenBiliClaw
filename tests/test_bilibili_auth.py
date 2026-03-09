@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 import pytest
 
 from openbiliclaw.bilibili.api import BilibiliAPIError, NavInfo
-from openbiliclaw.bilibili.auth import AuthManager
+from openbiliclaw.bilibili.auth import AuthManager, resolve_runtime_cookie
 
 
 class FakeNavClient:
@@ -88,3 +88,23 @@ async def test_get_status_reports_missing_cookie(tmp_path: Path) -> None:
     assert status.has_cookie is False
     assert status.authenticated is False
     assert "未配置" in status.message
+
+
+def test_resolve_runtime_cookie_prefers_config_value(tmp_path: Path) -> None:
+    manager = AuthManager(tmp_path)
+    manager.set_cookie("SESSDATA=saved_cookie")
+
+    assert (
+        resolve_runtime_cookie(data_dir=tmp_path, configured_cookie="SESSDATA=config_cookie")
+        == "SESSDATA=config_cookie"
+    )
+
+
+def test_resolve_runtime_cookie_falls_back_to_saved_cookie(tmp_path: Path) -> None:
+    manager = AuthManager(tmp_path)
+    manager.set_cookie("SESSDATA=saved_cookie")
+
+    assert (
+        resolve_runtime_cookie(data_dir=tmp_path, configured_cookie="")
+        == "SESSDATA=saved_cookie"
+    )
