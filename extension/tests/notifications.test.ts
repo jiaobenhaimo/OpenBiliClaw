@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildExtensionUiUrl,
   buildChromeNotificationOptions,
   buildCognitionNotificationId,
   buildNotificationId,
   buildProfileNotificationUrl,
+  openExtensionUi,
   parseNotificationBvid,
   parseCognitionUpdateId,
 } from "../src/background/notifications.ts";
@@ -57,4 +59,69 @@ test("buildProfileNotificationUrl opens profile tab in extension page", () => {
     buildProfileNotificationUrl(),
     "chrome-extension://__EXTENSION_ID__/popup/popup.html?tab=profile",
   );
+});
+
+test("buildExtensionUiUrl opens recommend tab by default", () => {
+  assert.equal(
+    buildExtensionUiUrl(),
+    "chrome-extension://__EXTENSION_ID__/popup/popup.html?tab=recommend",
+  );
+});
+
+test("openExtensionUi prefers chrome.sidePanel when available", async () => {
+  const calls: Array<{ type: string; value: unknown }> = [];
+  const chromeLike = {
+    runtime: {
+      getURL(path: string) {
+        return `chrome-extension://__EXTENSION_ID__/${path}`;
+      },
+    },
+    sidePanel: {
+      async open(options: { windowId: number }) {
+        calls.push({ type: "sidePanel", value: options });
+      },
+    },
+    tabs: {
+      async create(options: { url: string }) {
+        calls.push({ type: "tab", value: options });
+      },
+    },
+  };
+
+  const result = await openExtensionUi(chromeLike, {
+    windowId: 42,
+    tab: "profile",
+  });
+
+  assert.equal(result, "sidePanel");
+  assert.deepEqual(calls, [{ type: "sidePanel", value: { windowId: 42 } }]);
+});
+
+test("openExtensionUi falls back to extension tab when sidePanel is unavailable", async () => {
+  const calls: Array<{ type: string; value: unknown }> = [];
+  const chromeLike = {
+    runtime: {
+      getURL(path: string) {
+        return `chrome-extension://__EXTENSION_ID__/${path}`;
+      },
+    },
+    tabs: {
+      async create(options: { url: string }) {
+        calls.push({ type: "tab", value: options });
+      },
+    },
+  };
+
+  const result = await openExtensionUi(chromeLike, {
+    windowId: 42,
+    tab: "chat",
+  });
+
+  assert.equal(result, "tab");
+  assert.deepEqual(calls, [
+    {
+      type: "tab",
+      value: { url: "chrome-extension://__EXTENSION_ID__/popup/popup.html?tab=chat" },
+    },
+  ]);
 });

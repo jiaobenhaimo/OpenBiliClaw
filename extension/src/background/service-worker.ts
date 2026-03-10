@@ -7,10 +7,10 @@
 
 import { enqueueBufferedEvent, shouldFlushImmediately } from "./buffer.js";
 import {
+  openExtensionUi,
   buildChromeNotificationOptions,
   buildCognitionNotificationId,
   buildNotificationId,
-  buildProfileNotificationUrl,
   parseNotificationBvid,
   parseCognitionUpdateId,
 } from "./notifications.js";
@@ -128,6 +128,13 @@ chrome.runtime.onStartup.addListener(() => {
   ensureFlushAlarm();
 });
 
+chrome.action.onClicked.addListener((tab) => {
+  void openExtensionUi(chrome, {
+    windowId: tab.windowId,
+    tab: "recommend",
+  });
+});
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action !== "BEHAVIOR_EVENT") return;
 
@@ -151,7 +158,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.notifications.onClicked.addListener((notificationId) => {
   const bvid = parseNotificationBvid(notificationId);
   if (bvid) {
-    void chrome.tabs.create({ url: `https://www.bilibili.com/video/${bvid}` });
+    void openExtensionUi(chrome, { tab: "recommend" });
     void chrome.notifications.clear(notificationId);
     return;
   }
@@ -159,7 +166,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   if (!cognitionId) {
     return;
   }
-  void chrome.tabs.create({ url: buildProfileNotificationUrl() });
+  void openExtensionUi(chrome, { tab: "profile" });
   void chrome.notifications.clear(notificationId);
 });
 

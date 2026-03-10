@@ -1,6 +1,14 @@
 export const NOTIFICATION_PREFIX = "openbiliclaw-recommendation:";
 export const COGNITION_NOTIFICATION_PREFIX = "openbiliclaw-cognition:";
 
+type ExtensionUiTab = "recommend" | "profile" | "chat";
+
+type ExtensionUiChrome = {
+  runtime?: { getURL(path: string): string };
+  sidePanel?: { open(options: { windowId: number }): Promise<unknown> | unknown };
+  tabs?: { create(options: { url: string }): Promise<unknown> | unknown };
+};
+
 export type PendingNotification = {
   recommendation_id: number;
   bvid: string;
@@ -58,12 +66,32 @@ export function buildChromeNotificationOptions(
 }
 
 export function buildProfileNotificationUrl(): string {
+  return buildExtensionUiUrl("profile");
+}
+
+export function buildExtensionUiUrl(tab: ExtensionUiTab = "recommend"): string {
+  const path = `popup/popup.html?tab=${tab}`;
   if (
     typeof chrome !== "undefined" &&
     chrome.runtime &&
     typeof chrome.runtime.getURL === "function"
   ) {
-    return chrome.runtime.getURL("popup/popup.html?tab=profile");
+    return chrome.runtime.getURL(path);
   }
-  return "chrome-extension://__EXTENSION_ID__/popup/popup.html?tab=profile";
+  return `chrome-extension://__EXTENSION_ID__/${path}`;
+}
+
+export async function openExtensionUi(
+  chromeApi: ExtensionUiChrome,
+  {
+    windowId,
+    tab = "recommend",
+  }: { windowId?: number; tab?: ExtensionUiTab } = {},
+): Promise<"sidePanel" | "tab"> {
+  if (typeof windowId === "number" && chromeApi.sidePanel?.open) {
+    await chromeApi.sidePanel.open({ windowId });
+    return "sidePanel";
+  }
+  await chromeApi.tabs?.create({ url: buildExtensionUiUrl(tab) });
+  return "tab";
 }
