@@ -231,8 +231,8 @@ def create_app(
 
     @app.post("/api/recommendations/refresh", response_model=RecommendationRefreshResponse)
     async def refresh_recommendations() -> RecommendationRefreshResponse:
-        refresh_if_needed = getattr(runtime_controller, "refresh_if_needed", None)
-        if not callable(refresh_if_needed):
+        force_refresh = getattr(runtime_controller, "force_refresh", None)
+        if not callable(force_refresh):
             return RecommendationRefreshResponse(
                 ok=True,
                 refreshed=False,
@@ -241,7 +241,7 @@ def create_app(
                 recommendation_count=0,
             )
 
-        result = await refresh_if_needed()
+        result = await force_refresh()
         return RecommendationRefreshResponse(
             ok=True,
             refreshed=bool(result.get("refreshed", False)),

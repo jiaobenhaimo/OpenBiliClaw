@@ -117,20 +117,27 @@ class ContinuousRefreshController:
         if not strategies:
             return {"refreshed": False, "strategies": [], "reason": "below_threshold"}
 
-        discovered = await self.discovery_engine.discover(profile, strategies=strategies, limit=30)
-        await self.recommendation_engine.generate_recommendations(discovered, profile, limit=10)
+        return await self._run_refresh(
+            state=state,
+            profile=profile,
+            strategies=strategies,
+            reason="triggered",
+        )
 
-        now = self._now().isoformat()
-        latest_event_id = self.database.get_latest_event_id()
-        if "search" in strategies or "related_chain" in strategies:
-            state["last_event_refresh_at"] = now
-            state["last_processed_event_id"] = latest_event_id
-        if "trending" in strategies:
-            state["last_trending_refresh_at"] = now
-        if "explore" in strategies:
-            state["last_explore_refresh_at"] = now
-        self.memory_manager.save_discovery_runtime_state(state)
-        return {"refreshed": True, "strategies": strategies, "reason": "triggered"}
+    async def force_refresh(self) -> dict[str, object]:
+        """Run a full refresh immediately, bypassing runtime thresholds."""
+        state = self.memory_manager.load_discovery_runtime_state()
+        if not self._is_initialized():
+            return {"refreshed": False, "strategies": [], "reason": "not_initialized"}
+
+        profile = await self.soul_engine.get_profile()
+        strategies = ["search", "related_chain", "trending", "explore"]
+        return await self._run_refresh(
+            state=state,
+            profile=profile,
+            strategies=strategies,
+            reason="manual",
+        )
 
     def get_pending_notification(self) -> dict[str, object] | None:
         """Return one recommendation candidate for browser notification."""
@@ -208,6 +215,38 @@ class ContinuousRefreshController:
     async def refresh_after_init(self) -> dict[str, object]:
         """Allow callers to trigger a refresh immediately after initialization."""
         return await self.refresh_if_needed()
+
+    async def _run_refresh(
+        self,
+        *,
+        state: dict[str, object],
+        profile: Any,
+        strategies: list[str],
+        reason: str,
+    ) -> dict[str, object]:
+        discovered = await self.discovery_engine.discover(profile, strategies=strategies, limit=30)
+        recommendations = await self.recommendation_engine.generate_recommendations(
+            discovered,
+            profile,
+            limit=10,
+        )
+
+        now = self._now().isoformat()
+        latest_event_id = self.database.get_latest_event_id()
+        if "search" in strategies or "related_chain" in strategies:
+            state["last_event_refresh_at"] = now
+            state["last_processed_event_id"] = latest_event_id
+        if "trending" in strategies:
+            state["last_trending_refresh_at"] = now
+        if "explore" in strategies:
+            state["last_explore_refresh_at"] = now
+        self.memory_manager.save_discovery_runtime_state(state)
+        return {
+            "refreshed": True,
+            "strategies": strategies,
+            "reason": reason,
+            "recommendation_count": len(recommendations),
+        }
 
     def _is_initialized(self) -> bool:
         try:

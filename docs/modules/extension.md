@@ -80,7 +80,7 @@ popup 当前已具备：
 
 - 后端连接状态检查
 - 从 `/api/recommendations` 拉取推荐列表
-- 推荐 tab 支持“立即刷新”，会调用 `/api/recommendations/refresh` 触发一次完整补货
+- 推荐 tab 支持“立即刷新”，会调用 `/api/recommendations/refresh` 强制触发一次完整补货，不再受自动刷新阈值限制
 - 亮色 popup 视觉系统：顶部 hero + inline 状态徽标、胶囊 tab、统一卡片体系，整体更贴近 B 站内容产品气质
 - 推荐 tab：展示标题、UP 主、`topic_label`、朋友式推荐文案，并通过“打开视频”明确跳转到对应 B 站视频页
 - 修复 popup 卡片误跳转：`喜欢` / `不喜欢` / `写一句` / 输入框 / 发送按钮不再冒泡触发视频打开
