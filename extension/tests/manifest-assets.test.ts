@@ -7,7 +7,12 @@ test("manifest icon assets exist", () => {
   const root = process.cwd();
   const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")) as {
     icons?: Record<string, string>;
-    action?: { default_icon?: Record<string, string> };
+    action?: {
+      default_icon?: Record<string, string>;
+      default_popup?: string;
+    };
+    permissions?: string[];
+    side_panel?: { default_path?: string };
   };
 
   const iconPaths = new Set<string>([
@@ -23,4 +28,17 @@ test("manifest icon assets exist", () => {
       `missing icon asset: ${relativePath}`,
     );
   }
+});
+
+test("manifest uses side panel instead of popup", () => {
+  const root = process.cwd();
+  const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")) as {
+    action?: { default_popup?: string };
+    permissions?: string[];
+    side_panel?: { default_path?: string };
+  };
+
+  assert.equal(manifest.permissions?.includes("sidePanel"), true);
+  assert.equal(manifest.side_panel?.default_path, "popup/popup.html");
+  assert.equal("default_popup" in (manifest.action ?? {}), false);
 });
