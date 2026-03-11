@@ -440,7 +440,8 @@ class Database:
             SELECT
                 r.*,
                 c.title AS title,
-                c.up_name AS up_name
+                c.up_name AS up_name,
+                c.cover_url AS cover_url
             FROM recommendations AS r
             LEFT JOIN content_cache AS c ON c.bvid = r.bvid
             ORDER BY created_at DESC, id DESC

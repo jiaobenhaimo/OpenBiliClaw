@@ -33,3 +33,14 @@ test("popup page is structured for side panel browsing", () => {
   assert.doesNotMatch(bodyBlock, /width:\s*392px;/);
   assert.doesNotMatch(bodyBlock, /height:\s*560px;/);
 });
+
+test("recommendation card layout reserves a media cover slot", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const previewBlock = popupHtml.match(/\.recommendation-preview\s*\{[\s\S]*?\}/)?.[0] ?? "";
+  const coverBlock = popupHtml.match(/\.recommendation-cover\s*\{[\s\S]*?\}/)?.[0] ?? "";
+  const coverImageBlock = popupHtml.match(/\.recommendation-cover img\s*\{[\s\S]*?\}/)?.[0] ?? "";
+
+  assert.match(previewBlock, /grid-template-columns:\s*108px\s+minmax\(0,\s*1fr\);/);
+  assert.match(coverBlock, /aspect-ratio:\s*16\s*\/\s*10;/);
+  assert.match(coverImageBlock, /object-fit:\s*cover;/);
+});

@@ -86,6 +86,7 @@ class TestBackendAPI:
                         "bvid": "BV1REC",
                         "title": "讲透城市与建筑",
                         "up_name": "城市观察局",
+                        "cover_url": "https://i0.hdslb.com/bfs/archive/cover.jpg",
                         "expression": "这条很对你最近的状态。",
                         "topic": "你最近那股想把结构想透的劲头",
                         "presented": 1,
@@ -102,6 +103,7 @@ class TestBackendAPI:
         assert len(data["items"]) == 1
         assert data["items"][0]["id"] == 7
         assert data["items"][0]["title"] == "讲透城市与建筑"
+        assert data["items"][0]["cover_url"] == "https://i0.hdslb.com/bfs/archive/cover.jpg"
 
     def test_runtime_status_endpoint_returns_runtime_summary(self) -> None:
         from fastapi.testclient import TestClient
@@ -274,6 +276,7 @@ class TestBackendAPI:
                             bvid="BV1NEW",
                             title="新的一批",
                             up_name="UPA",
+                            cover_url="https://i0.hdslb.com/bfs/archive/new-cover.jpg",
                         ),
                         recommendation_id=11,
                         expression="先给你捞一条新的。",
@@ -301,6 +304,7 @@ class TestBackendAPI:
                     "bvid": "BV1NEW",
                     "title": "新的一批",
                     "up_name": "UPA",
+                    "cover_url": "https://i0.hdslb.com/bfs/archive/new-cover.jpg",
                     "expression": "先给你捞一条新的。",
                     "topic_label": "刚补进来的新东西",
                     "presented": False,

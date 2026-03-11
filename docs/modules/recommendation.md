@@ -93,6 +93,15 @@ Recommendation(
 - `presented`
 - `feedback`
 
+其中 `content` 当前稳定可读字段包括：
+
+- `bvid`
+- `title`
+- `up_name`
+- `cover_url`
+- `relevance_score`
+- `relevance_reason`
+
 ### Recommendation Feedback
 
 当前推荐记录会持久化以下反馈字段：

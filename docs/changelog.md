@@ -13,6 +13,12 @@
 - popup 推荐 tab 会展示“当前池子里还有多少条可换 / 刚补进多少条新的 / 最近主要在补什么”
 - discovery pool 查询现在会排除已经进入 `recommendations` 的内容，减少“换一批还是老面孔”的情况
 
+### 推荐卡片封面展示 — `extension/m108-cover-cards`
+
+- `/api/recommendations` 与 `/api/recommendations/reshuffle` 现在都会返回 `cover_url`
+- popup 推荐卡片升级为“封面 + 文本信息 + 操作区”结构，换一批时可以直接先看封面再决定点不点
+- 封面缺失或加载失败时会回退到占位态，不影响换一批、打开视频和反馈流程
+
 ### 插件侧边栏模式 — `extension-sidepanel`
 
 - 扩展入口从 `action.default_popup` 切到 `side_panel.default_path`，点击扩展图标时会优先打开侧边栏

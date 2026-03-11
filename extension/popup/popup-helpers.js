@@ -39,6 +39,7 @@ export function normalizeRecommendation(item) {
     bvid: normalizeText(item?.bvid),
     title: normalizeText(item?.title) || DEFAULT_TITLE,
     up_name: normalizeText(item?.up_name) || DEFAULT_UP_NAME,
+    cover_url: normalizeText(item?.cover_url),
     expression: normalizeText(item?.expression) || relevanceReason || DEFAULT_EXPRESSION,
     topic_label: normalizeText(item?.topic_label),
     presented: Boolean(item?.presented),

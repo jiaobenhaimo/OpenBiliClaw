@@ -303,6 +303,28 @@ function renderRecommendations(items) {
       void openRecommendation(item.bvid);
     });
 
+    const cover = document.createElement("div");
+    cover.className = "recommendation-cover";
+    if (item.cover_url) {
+      const image = document.createElement("img");
+      image.src = item.cover_url;
+      image.alt = `${item.title} 的封面`;
+      image.loading = "lazy";
+      image.referrerPolicy = "no-referrer";
+      image.addEventListener("error", () => {
+        cover.replaceChildren();
+        cover.classList.add("is-fallback");
+        cover.textContent = "封面加载慢了一下";
+      });
+      cover.append(image);
+    } else {
+      cover.classList.add("is-fallback");
+      cover.textContent = "先看标题也行";
+    }
+
+    const content = document.createElement("div");
+    content.className = "recommendation-content";
+
     const top = document.createElement("div");
     top.className = "recommendation-top";
 
@@ -328,7 +350,8 @@ function renderRecommendations(items) {
     expression.className = "recommendation-expression";
     expression.textContent = item.expression;
 
-    preview.append(top, title, expression, meta);
+    content.append(top, title, expression, meta);
+    preview.append(cover, content);
 
     const feedbackStatus = document.createElement("p");
     feedbackStatus.className = "feedback-status";

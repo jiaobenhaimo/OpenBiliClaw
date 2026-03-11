@@ -36,6 +36,7 @@ class RecommendationOut(BaseModel):
     bvid: str
     title: str = ""
     up_name: str = ""
+    cover_url: str = ""
     expression: str = ""
     topic_label: str = ""
     presented: bool = False

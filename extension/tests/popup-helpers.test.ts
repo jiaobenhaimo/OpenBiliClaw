@@ -27,6 +27,7 @@ test("normalizeRecommendation fills stable fallback fields", () => {
     bvid: "BV1popup",
     title: "",
     up_name: "",
+    cover_url: " https://i0.hdslb.com/bfs/archive/popup-cover.jpg ",
     expression: "",
     topic_label: "",
     presented: 0,
@@ -34,9 +35,21 @@ test("normalizeRecommendation fills stable fallback fields", () => {
 
   assert.equal(item.title, "这条标题还没对上号");
   assert.equal(item.up_name, "这位 UP 还没认出来");
+  assert.equal(item.cover_url, "https://i0.hdslb.com/bfs/archive/popup-cover.jpg");
   assert.equal(item.expression, "这条已经进了你的推荐区，点开看看。");
   assert.equal(item.topic_label, "");
   assert.equal(item.presented, false);
+});
+
+test("normalizeRecommendation keeps cover empty when missing", () => {
+  const item = normalizeRecommendation({
+    id: 9,
+    bvid: "BV1nocover",
+    title: "没有封面也要能展示",
+    up_name: "阿B",
+  });
+
+  assert.equal(item.cover_url, "");
 });
 
 test("normalizeRecommendation falls back to relevance_reason before generic expression", () => {
