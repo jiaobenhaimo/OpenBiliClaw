@@ -25,6 +25,7 @@
 | 体验优化：动态“老B友”语气 | ✅ | 推荐文案不再固定套模板，而是根据画像、偏好和近期反馈动态调整信息密度、温度、梗感与直给程度 |
 | M106 候选池即时换一批 | ✅ | `content_cache` 现已作为 discovery pool 使用，popup 可秒级从池子里换一批新推荐 |
 | M107 候选池容量与状态展示 | ✅ | runtime 会按 `pool_target_count` 持续补货，popup 会展示可换数量、最近补货数量和补货方向 |
+| M117 同批多样性约束 | ✅ | 同一批推荐不再只按分数直取前 N，而会对重复 topic 做限流，让一批里更容易同时出现不同方向 |
 
 ## 公开 API
 
@@ -66,6 +67,7 @@ items = await engine.reshuffle_recommendations(
 - 直接从 `content_cache` discovery pool 里挑选 `fresh` 候选，不等待新一轮 discover 完成
 - 过滤掉已展示、已明确反馈和已降级的候选
 - 优先按 `candidate_tier`、`relevance_score` 和最近评分时间排序
+- 同一批会对重复 `tags/topic` 做软限流，尽量避免连续塞进太多同类内容
 - 如果候选还没有朋友式 `expression`，会优先使用入池时生成的 `relevance_reason`
 - 命中候选后会立即写入 `recommendations` 表，并把对应池子项标记为 `shown`
 - runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，保证 popup “换一批”尽量随时有货
@@ -211,3 +213,4 @@ Recommendation(
 8. **推荐语气跟着用户变**：表达风格不只看内容匹配度，还会根据画像和近期反馈动态调节“老B友”程度，尽量减少机械解释感
 9. **缓存候选不能退化成只看播放量**：一旦从 `content_cache` 回读候选，也必须恢复 `relevance_score`、`candidate_tier` 和时间字段，保持与实时发现同一排序标准
 10. **候选池先可展示，再做文案增强**：`discover` 入池时就要带 `relevance_reason`，popup “换一批”先秒级从池子里出片，`expression` 只是增强层，不再阻塞展示
+11. **同批推荐需要显式做多样性约束**：高分不是唯一目标，排序后仍要对重复 topic/tag 做软限流，避免一批里全是同一类内容

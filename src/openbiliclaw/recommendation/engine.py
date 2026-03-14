@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
@@ -98,7 +99,7 @@ class RecommendationEngine:
             if discovered is not None
             else self._load_unrecommended_content(limit=max(limit * 3, 20))
         )
-        ranked = sorted(candidates, key=self._ranking_key)[:limit]
+        ranked = self._select_diversified_batch(candidates, limit=limit)
 
         recommendations = [
             Recommendation(
@@ -139,7 +140,7 @@ class RecommendationEngine:
         expression generation and falls back to pool relevance reasons.
         """
         candidates = self._load_pool_candidates(limit=max(limit * 3, 20))
-        ranked = sorted(candidates, key=self._ranking_key)[:limit]
+        ranked = self._select_diversified_batch(candidates, limit=limit)
         recommendations: list[Recommendation] = []
         shown_bvids: list[str] = []
 
@@ -312,6 +313,66 @@ class RecommendationEngine:
             return f"你最近那股偏{profile.core_traits[0]}的状态"
         return "想先丢给你的一条"
 
+    @classmethod
+    def _select_diversified_batch(
+        cls,
+        candidates: list[DiscoveredContent],
+        *,
+        limit: int,
+    ) -> list[DiscoveredContent]:
+        ranked = sorted(candidates, key=cls._ranking_key)
+        if limit <= 1 or len(ranked) <= 1:
+            return ranked[:limit]
+
+        per_topic_cap = max(1, limit // 2)
+        selected: list[DiscoveredContent] = []
+        deferred: list[DiscoveredContent] = []
+        topic_counts: dict[str, int] = {}
+
+        for item in ranked:
+            tokens = cls._diversity_tokens(item)
+            if tokens and any(topic_counts.get(token, 0) >= per_topic_cap for token in tokens):
+                deferred.append(item)
+                continue
+            selected.append(item)
+            for token in tokens:
+                topic_counts[token] = topic_counts.get(token, 0) + 1
+            if len(selected) >= limit:
+                return selected
+
+        for item in deferred:
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+        return selected[:limit]
+
+    @staticmethod
+    def _diversity_tokens(item: DiscoveredContent) -> set[str]:
+        tokens = {
+            RecommendationEngine._normalize_topic_token(tag)
+            for tag in item.tags
+            if RecommendationEngine._normalize_topic_token(tag)
+        }
+        if tokens:
+            return tokens
+
+        fallback_fields = [item.source_strategy, item.up_name]
+        title = item.title
+        fallback_fields.extend(re.findall(r"[A-Za-z0-9]{2,}", title))
+        return {
+            RecommendationEngine._normalize_topic_token(value)
+            for value in fallback_fields
+            if RecommendationEngine._normalize_topic_token(value)
+        }
+
+    @staticmethod
+    def _normalize_topic_token(value: str) -> str:
+        text = value.strip().lower()
+        if not text:
+            return ""
+        compact = re.sub(r"\s+", "", text)
+        return compact[:24]
+
     def _load_unrecommended_content(self, *, limit: int) -> list[DiscoveredContent]:
         from openbiliclaw.discovery.engine import DiscoveredContent
 
@@ -327,6 +388,7 @@ class RecommendationEngine:
                 cover_url=str(row.get("cover_url", "")),
                 view_count=int(row.get("view_count", 0) or 0),
                 like_count=int(row.get("like_count", 0) or 0),
+                tags=self._parse_tags(row.get("tags", "[]")),
                 source_strategy=str(row.get("source", "")),
                 relevance_score=float(row.get("relevance_score", 0.0) or 0.0),
                 relevance_reason=str(row.get("relevance_reason", "")),
@@ -352,6 +414,7 @@ class RecommendationEngine:
                 cover_url=str(row.get("cover_url", "")),
                 view_count=int(row.get("view_count", 0) or 0),
                 like_count=int(row.get("like_count", 0) or 0),
+                tags=self._parse_tags(row.get("tags", "[]")),
                 source_strategy=str(row.get("source", "")),
                 relevance_score=float(row.get("relevance_score", 0.0) or 0.0),
                 relevance_reason=str(row.get("relevance_reason", "")),
@@ -361,3 +424,17 @@ class RecommendationEngine:
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _parse_tags(value: object) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if not isinstance(value, str) or not value.strip():
+            return []
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [str(item).strip() for item in payload if str(item).strip()]
