@@ -76,6 +76,29 @@ export function buildFeedbackPayload(recommendationId, feedbackType, note = "") 
   };
 }
 
+export function normalizeCognitionUpdateCard(item) {
+  if (typeof item === "string") {
+    return {
+      summary: normalizeText(item),
+      impact: "",
+      reasoning: "",
+      evidence: "",
+      source: "",
+      created_at: "",
+      expandable: false,
+    };
+  }
+  return {
+    summary: normalizeText(item?.summary),
+    impact: normalizeText(item?.impact),
+    reasoning: normalizeText(item?.reasoning),
+    evidence: normalizeText(item?.evidence),
+    source: normalizeText(item?.source),
+    created_at: normalizeText(item?.created_at),
+    expandable: true,
+  };
+}
+
 export function normalizeProfileSummary(summary) {
   return {
     initialized: Boolean(summary?.initialized),
@@ -90,7 +113,9 @@ export function normalizeProfileSummary(summary) {
       ? summary.top_interests.map(normalizeText).filter(Boolean)
       : [],
     recent_cognition_updates: Array.isArray(summary?.recent_cognition_updates)
-      ? summary.recent_cognition_updates.map(normalizeText).filter(Boolean)
+      ? summary.recent_cognition_updates
+          .map(normalizeCognitionUpdateCard)
+          .filter((item) => item.summary)
       : [],
   };
 }

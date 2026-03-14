@@ -8,6 +8,7 @@ import {
   getCommentSubmitUiState,
   getConnectionBadgeState,
   getHintBannerState,
+  normalizeCognitionUpdateCard,
   getRealtimePoolStatusSummary,
   getPoolStatusSummary,
   getPopupState,
@@ -395,7 +396,16 @@ test("normalizeProfileSummary fills stable fallback fields", () => {
       core_traits: ["理性", "好奇"],
       deep_needs: ["理解世界"],
       top_interests: ["国际新闻", "商业案例"],
-      recent_cognition_updates: ["  阿B 记住了你会吃深拆这一路。  "],
+      recent_cognition_updates: [
+        {
+          summary: "  阿B 记住了你会吃深拆这一路。  ",
+          impact: "  画像里这条兴趣会更靠前。 ",
+          reasoning: "  最近重复出现，不像一次随手点开。 ",
+          evidence: "  最近连续点开深拆视频。 ",
+          source: " chat ",
+          created_at: " 2026-03-14T22:30:00 ",
+        },
+      ],
     }),
     {
       initialized: true,
@@ -403,7 +413,48 @@ test("normalizeProfileSummary fills stable fallback fields", () => {
       core_traits: ["理性", "好奇"],
       deep_needs: ["理解世界"],
       top_interests: ["国际新闻", "商业案例"],
-      recent_cognition_updates: ["阿B 记住了你会吃深拆这一路。"],
+      recent_cognition_updates: [
+        {
+          summary: "阿B 记住了你会吃深拆这一路。",
+          impact: "画像里这条兴趣会更靠前。",
+          reasoning: "最近重复出现，不像一次随手点开。",
+          evidence: "最近连续点开深拆视频。",
+          source: "chat",
+          created_at: "2026-03-14T22:30:00",
+          expandable: true,
+        },
+      ],
+    },
+  );
+});
+
+test("normalizeCognitionUpdateCard falls back cleanly for legacy summary-only items", () => {
+  assert.deepEqual(normalizeCognitionUpdateCard("  阿B 又对上了一点。  "), {
+    summary: "阿B 又对上了一点。",
+    impact: "",
+    reasoning: "",
+    evidence: "",
+    source: "",
+    created_at: "",
+    expandable: false,
+  });
+
+  assert.deepEqual(
+    normalizeCognitionUpdateCard({
+      summary: "  阿B 现在更确定你会吃地缘深拆这一口。 ",
+      impact: " ",
+      reasoning: "",
+      evidence: " 最近连续点开相关内容。 ",
+      source: " feedback ",
+    }),
+    {
+      summary: "阿B 现在更确定你会吃地缘深拆这一口。",
+      impact: "",
+      reasoning: "",
+      evidence: "最近连续点开相关内容。",
+      source: "feedback",
+      created_at: "",
+      expandable: true,
     },
   );
 });
