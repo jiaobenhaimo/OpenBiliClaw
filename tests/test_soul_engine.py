@@ -301,6 +301,9 @@ def test_record_immediate_feedback_cognition_adds_comment_update(tmp_path: Path)
     assert "讲透城市与建筑" in str(updates[0]["evidence"])
     assert "这个方向对，但希望更深入一点。" in str(updates[0]["evidence"])
     assert updates[0]["source"] == "feedback"
+    assert updates[0]["context_line"] == "来自：《讲透城市与建筑》"
+    assert updates[0]["source_label"] == "推荐反馈"
+    assert updates[0]["expand_hint"] == "expandable"
 
 
 def test_record_immediate_feedback_cognition_adds_dislike_update(tmp_path: Path) -> None:
@@ -322,6 +325,9 @@ def test_record_immediate_feedback_cognition_adds_dislike_update(tmp_path: Path)
     assert "明确负反馈" in str(updates[0]["reasoning"])
     assert "太浅了" in str(updates[0]["evidence"])
     assert updates[0]["source"] == "feedback"
+    assert updates[0]["context_line"] == "来自：《宏大叙事热榜内容》"
+    assert updates[0]["source_label"] == "推荐反馈"
+    assert updates[0]["expand_hint"] == "expandable"
 
 
 def test_record_immediate_feedback_cognition_skips_like(tmp_path: Path) -> None:
@@ -466,6 +472,9 @@ async def test_learn_from_dialogue_records_immediate_cognition_for_strong_single
     assert "我最近更想知道国际新闻到底是怎么一步步走成现在这样的。" in str(
         cognition_updates[0]["evidence"]
     )
+    assert cognition_updates[0]["context_line"] == "来自最近这轮聊天：想把国际新闻背后的因果链看明白"
+    assert cognition_updates[0]["source_label"] == "聊天"
+    assert cognition_updates[0]["expand_hint"] == "expandable"
 
 
 @pytest.mark.asyncio
@@ -544,6 +553,9 @@ async def test_learn_from_dialogue_records_immediate_cognition_for_interest_cand
     assert len(cognition_updates) == 1
     assert cognition_updates[0]["kind"] == "interest_added"
     assert "网络流行文化和梗的传播" in str(cognition_updates[0]["summary"])
+    assert cognition_updates[0]["context_line"] == "来自最近这轮聊天：网络流行文化和梗的传播"
+    assert cognition_updates[0]["source_label"] == "聊天"
+    assert cognition_updates[0]["expand_hint"] == "expandable"
 
 
 @pytest.mark.asyncio
@@ -639,6 +651,10 @@ async def test_learn_from_dialogue_rebuilds_profile_after_candidate_reaches_thre
     kinds = {str(item["kind"]) for item in cognition_updates}
     assert "interest_added" in kinds
     assert any("国际时事" in str(item["summary"]) for item in cognition_updates)
+    interest_update = next(item for item in cognition_updates if str(item["kind"]) == "interest_added")
+    assert interest_update["context_line"] == "基于最近主题：国际时事"
+    assert interest_update["source_label"] == "聊天"
+    assert interest_update["expand_hint"] == "expandable"
 
 
 @pytest.mark.asyncio
@@ -714,7 +730,36 @@ async def test_process_feedback_batch_rebuilds_profile_when_preference_changes_s
     kinds = {str(item["kind"]) for item in cognition_updates}
     assert "dislike_added" in kinds
     assert "profile_shift" in kinds
+    dislike_update = next(item for item in cognition_updates if str(item["kind"]) == "dislike_added")
+    assert dislike_update["context_line"] == "基于最近主题：标题党"
+    assert dislike_update["source_label"] == "推荐反馈"
+    assert dislike_update["expand_hint"] == "expandable"
     profile_shift = next(item for item in cognition_updates if str(item["kind"]) == "profile_shift")
     assert "画像里" in str(profile_shift["impact"])
     assert "重复出现" in str(profile_shift["reasoning"])
     assert "纪录片" in str(profile_shift["evidence"])
+    assert profile_shift["context_line"] == "基于最近主题：纪录片 / 建筑 / 标题党"
+    assert profile_shift["source_label"] == "聚合观察"
+    assert profile_shift["expand_hint"] == "expandable"
+
+
+def test_build_cognition_updates_falls_back_to_generic_context_when_signals_are_too_thin(
+    tmp_path: Path,
+) -> None:
+    memory = MemoryManager(tmp_path)
+    memory.initialize()
+    engine = SoulEngine(llm=FakeRegistry("{}"), memory=memory)
+
+    updates = engine._build_cognition_updates(
+        existing_preference={},
+        updated_preference={},
+        previous_profile={},
+        current_profile={"personality_portrait": "我对你又对上了一点。"},
+        source="profile_refresh",
+    )
+
+    assert len(updates) == 1
+    assert updates[0]["kind"] == "profile_shift"
+    assert updates[0]["context_line"] == "基于最近几条相关内容"
+    assert updates[0]["source_label"] == "聚合观察"
+    assert updates[0]["expand_hint"] == "expandable"

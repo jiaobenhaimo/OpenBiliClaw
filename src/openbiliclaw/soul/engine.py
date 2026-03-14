@@ -37,6 +37,12 @@ from .profile_builder import ProfileBuilder
 
 logger = logging.getLogger(__name__)
 
+SOURCE_LABELS = {
+    "feedback": "推荐反馈",
+    "chat": "聊天",
+    "profile_refresh": "聚合观察",
+}
+
 
 class SoulProfileNotInitializedError(Exception):
     """Raised when the soul layer has not been initialized yet."""
@@ -355,15 +361,18 @@ class SoulEngine:
         impact = ""
         reasoning = ""
         evidence = ""
+        context_line = ""
         if normalized_feedback == "comment" and note.strip():
             kind = "profile_shift"
             title_text = title.strip()
             if title_text:
                 summary = f"阿B 刚记下了你对《{title_text}》的评论。"
                 evidence = f"你评论《{title_text}》时说：{note.strip()}"
+                context_line = f"来自：《{title_text}》"
             else:
                 summary = f"阿B 刚记下了：{note.strip()}"
                 evidence = note.strip()
+                context_line = "来自：这次推荐反馈"
             impact = "画像里对这类方向的偏好会更明确，后面会更容易继续往深一点补。"
             reasoning = "这属于单条明确反馈，先记作方向修正，不直接重写整张画像。"
         elif normalized_feedback == "dislike":
@@ -380,6 +389,7 @@ class SoulEngine:
                 impact = "画像里的避雷方向会更明确，后面会更主动绕开这类内容。"
                 reasoning = "这是一次明确负反馈，先把这个方向记成近期避雷。"
                 evidence = note_text or title.strip()
+                context_line = self._build_feedback_context_line(title)
         else:
             return
 
@@ -402,9 +412,16 @@ class SoulEngine:
                 "impact": impact,
                 "reasoning": reasoning,
                 "evidence": evidence,
+                "context_line": context_line or "基于最近几条相关内容",
                 "confidence": 0.82 if kind == "dislike_added" else 0.84,
                 "created_at": datetime.now().isoformat(),
                 "source": "feedback",
+                "source_label": self._build_source_label("feedback"),
+                "expand_hint": self._build_expand_hint(
+                    impact=impact,
+                    reasoning=reasoning,
+                    evidence=evidence,
+                ),
                 "notified": False,
             },
         )
@@ -420,7 +437,7 @@ class SoulEngine:
         for candidate in candidates:
             if not self._candidate_ready_for_immediate_dialogue_cognition(candidate):
                 continue
-            summary, kind, impact, reasoning, evidence = self._build_immediate_dialogue_cognition(
+            summary, kind, impact, reasoning, evidence, context_line = self._build_immediate_dialogue_cognition(
                 candidate
             )
             if not summary:
@@ -440,9 +457,16 @@ class SoulEngine:
                     "impact": impact,
                     "reasoning": reasoning,
                     "evidence": evidence,
+                    "context_line": context_line,
                     "confidence": round(self._to_float(candidate.get("confidence", 0.0)), 4),
                     "created_at": datetime.now().isoformat(),
                     "source": "chat",
+                    "source_label": self._build_source_label("chat"),
+                    "expand_hint": self._build_expand_hint(
+                        impact=impact,
+                        reasoning=reasoning,
+                        evidence=evidence,
+                    ),
                     "notified": False,
                 },
             )
@@ -590,12 +614,13 @@ class SoulEngine:
     def _build_immediate_dialogue_cognition(
         self,
         candidate: dict[str, object],
-    ) -> tuple[str, str, str, str, str]:
+    ) -> tuple[str, str, str, str, str, str]:
         kind = str(candidate.get("kind", "")).strip()
         content = str(candidate.get("content", "")).strip()
         evidence = str(candidate.get("evidence", "")).strip() or content
+        context_line = self._build_dialogue_context_line(content)
         if not content:
-            return "", "", "", "", ""
+            return "", "", "", "", "", ""
         if kind == "goal":
             return (
                 f"阿B 刚记下了：你最近在意的是“{content}”。",
@@ -603,6 +628,7 @@ class SoulEngine:
                 "画像里这类目标感会更靠前，后面更容易往因果链和结构解释上贴。",
                 "因为你在聊天里主动提到这个目标，这是一次高置信即时信号。",
                 evidence,
+                context_line,
             )
         if kind == "dislike":
             return (
@@ -611,6 +637,7 @@ class SoulEngine:
                 "画像里的避雷方向会更靠前，推荐时会更主动避开这类内容。",
                 "因为你在聊天里明确表达了排斥，这比普通停留信号更直接。",
                 evidence,
+                context_line,
             )
         if kind == "interest":
             return (
@@ -619,6 +646,7 @@ class SoulEngine:
                 "画像里这类兴趣会更靠前，后面更容易继续补同方向内容。",
                 "因为你在聊天里主动提到这个方向，已经不只是被动刷到。",
                 evidence,
+                context_line,
             )
         if kind == "value":
             return (
@@ -627,8 +655,9 @@ class SoulEngine:
                 "画像里的价值取向会更靠前，后面会更偏向同类表达方式。",
                 "因为你在聊天里主动提到这类判断标准，这是一次高置信即时信号。",
                 evidence,
+                context_line,
             )
-        return "", "", "", "", ""
+        return "", "", "", "", "", ""
 
     def _record_cognition_updates(
         self,
@@ -682,12 +711,15 @@ class SoulEngine:
                     "id": f"cognition-{uuid4()}",
                     "kind": "interest_added",
                     "summary": f"阿B 现在更确定你会吃“{name}”这一口。",
+                    "context_line": self._build_topic_context_line([name]),
                     "impact": f"画像里“{name}”这条兴趣会更靠前，后面补货会更主动覆盖这个方向。",
                     "reasoning": "这不是一次偶发波动，更像是最近重复出现后的稳定兴趣强化。",
                     "evidence": f"最近聚合到的新主题里，“{name}”已经达到高权重。",
                     "confidence": round(weight, 4),
                     "created_at": now,
                     "source": source,
+                    "source_label": self._build_source_label(source),
+                    "expand_hint": "expandable",
                     "notified": False,
                 }
             )
@@ -705,12 +737,15 @@ class SoulEngine:
                     "id": f"cognition-{uuid4()}",
                     "kind": "dislike_added",
                     "summary": f"阿B 记住了：像“{topic}”这种内容你大概率会划走。",
+                    "context_line": self._build_topic_context_line([topic]),
                     "impact": f"画像里对“{topic}”这类内容的避雷会更明确。",
                     "reasoning": "这不是一次情绪化表达，而是最近反馈里重复浮出来的排斥方向。",
                     "evidence": f"最近聚合到的负反馈里，多次指向“{topic}”这个方向。",
                     "confidence": 0.86,
                     "created_at": now,
                     "source": source,
+                    "source_label": self._build_source_label(source),
+                    "expand_hint": "expandable",
                     "notified": False,
                 }
             )
@@ -725,12 +760,15 @@ class SoulEngine:
                     "id": f"cognition-{uuid4()}",
                     "kind": "profile_shift",
                     "summary": summary,
+                    "context_line": self._build_profile_shift_context_line(updated_preference),
                     "impact": "画像里的人格描述和关注重心已经发生可见调整。",
                     "reasoning": "这不是单次波动，而是最近重复出现后的稳定变化。",
                     "evidence": self._build_profile_shift_evidence(updated_preference),
                     "confidence": 0.9,
                     "created_at": now,
                     "source": "profile_refresh",
+                    "source_label": self._build_source_label("profile_refresh"),
+                    "expand_hint": "expandable",
                     "notified": False,
                 }
             )
@@ -750,6 +788,43 @@ class SoulEngine:
         if interests:
             return f"最近重复出现的主题包括：{' / '.join(interests)}。"
         return "最近重复出现的信号已经足够多，开始推动画像整体调整。"
+
+    @staticmethod
+    def _build_source_label(source: str) -> str:
+        return SOURCE_LABELS.get(source.strip(), "")
+
+    @staticmethod
+    def _build_expand_hint(*, impact: str, reasoning: str, evidence: str) -> str:
+        return "expandable" if any((impact.strip(), reasoning.strip(), evidence.strip())) else "summary_only"
+
+    @staticmethod
+    def _build_feedback_context_line(title: str) -> str:
+        title_text = title.strip()
+        if title_text:
+            return f"来自：《{title_text}》"
+        return "来自：这次推荐反馈"
+
+    @staticmethod
+    def _build_dialogue_context_line(content: str) -> str:
+        if content.strip():
+            return f"来自最近这轮聊天：{content.strip()}"
+        return "来自最近这轮聊天"
+
+    @staticmethod
+    def _build_topic_context_line(topics: list[str]) -> str:
+        normalized = [topic.strip() for topic in topics if topic.strip()]
+        if normalized:
+            return f"基于最近主题：{' / '.join(normalized[:3])}"
+        return "基于最近几条相关内容"
+
+    def _build_profile_shift_context_line(self, preference: dict[str, Any]) -> str:
+        interests = [
+            str(item.get("name", "")).strip()
+            for item in self._as_dict_list(preference.get("interests", []))
+            if str(item.get("name", "")).strip()
+        ]
+        dislikes = self._as_str_list(preference.get("disliked_topics", []))
+        return self._build_topic_context_line([*interests[:2], *dislikes[:1]])
 
     @staticmethod
     def _deserialize_event(event: dict[str, Any]) -> dict[str, Any]:

@@ -339,10 +339,10 @@ function renderCognitionCards(container, items, fallback) {
   for (const [index, item] of items.entries()) {
     const card = document.createElement("article");
     const isExpanded = state.expandedCognitionIndex === index && item.expandable;
-    card.className = `cognition-card${isExpanded ? " is-expanded" : ""}`;
+    card.className = `cognition-card${isExpanded ? " is-expanded" : ""}${item.expandable ? " is-expandable" : " is-summary-only"}`;
 
     const summaryButton = document.createElement(item.expandable ? "button" : "div");
-    summaryButton.className = "cognition-toggle";
+    summaryButton.className = `cognition-toggle${item.expandable ? "" : " is-static"}`;
     if (summaryButton instanceof HTMLButtonElement) {
       summaryButton.type = "button";
       summaryButton.setAttribute("aria-expanded", String(isExpanded));
@@ -362,11 +362,26 @@ function renderCognitionCards(container, items, fallback) {
     summaryText.className = "cognition-summary";
     summaryText.textContent = item.summary;
 
-    const meta = document.createElement("span");
-    meta.className = "cognition-meta";
-    meta.textContent = item.source || "画像观察";
+    const contextLine = document.createElement("p");
+    contextLine.className = "cognition-context";
+    contextLine.textContent = item.contextLine;
 
-    header.append(summaryText, meta);
+    const meta = document.createElement("div");
+    meta.className = "cognition-meta";
+    const source = document.createElement("span");
+    source.className = "cognition-source";
+    source.textContent = item.sourceLabel;
+
+    const stateLabel = document.createElement("span");
+    stateLabel.className = "cognition-state";
+    stateLabel.textContent = isExpanded ? "收起" : item.expandLabel;
+
+    if (item.sourceLabel) {
+      meta.append(source);
+    }
+    meta.append(stateLabel);
+
+    header.append(summaryText, contextLine, meta);
     summaryButton.append(header);
     card.append(summaryButton);
 

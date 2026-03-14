@@ -160,10 +160,13 @@ class CognitionUpdateSummary(BaseModel):
     """Structured cognition card shown in the popup profile tab."""
 
     summary: str
+    context_line: str = ""
     impact: str = ""
     reasoning: str = ""
     evidence: str = ""
     source: str = ""
+    source_label: str = ""
+    expand_hint: str = "summary_only"
     created_at: str = ""
 
 

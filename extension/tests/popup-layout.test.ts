@@ -68,3 +68,16 @@ test("footer activity card keeps two lines and expandable history area", () => {
   assert.match(successBlock, /background:/);
   assert.match(errorBlock, /background:/);
 });
+
+test("profile cognition cards reserve separate rows for context and explicit state", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const cardBlock = popupHtml.match(/\.cognition-card\s*\{[\s\S]*?\}/)?.[0] ?? "";
+  const headerBlock = popupHtml.match(/\.cognition-header\s*\{[\s\S]*?\}/)?.[0] ?? "";
+  const metaBlock = popupHtml.match(/\.cognition-meta\s*\{[\s\S]*?\}/)?.[0] ?? "";
+  const markup = popupHtml.match(/<div id="profileRecentMemory" class="cognition-list"><\/div>[\s\S]*?id="profileRecentMemoryMore"/)?.[0] ?? "";
+
+  assert.match(cardBlock, /border-radius:\s*18px;/);
+  assert.match(headerBlock, /gap:\s*8px;/);
+  assert.match(metaBlock, /font-size:\s*11px;/);
+  assert.match(markup, /id="profileRecentMemory"/);
+});

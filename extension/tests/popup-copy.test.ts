@@ -21,8 +21,13 @@ test("popup copy uses a more native bilibili-style voice in key entry points", (
   assert.match(popupJs, /这对画像的影响/);
   assert.match(popupJs, /为什么这么判断/);
   assert.match(popupJs, /这次依据/);
+  assert.match(popupJs, /item\.contextLine/);
+  assert.match(popupJs, /item\.expandLabel/);
+  assert.match(popupJs, /isExpanded \? "收起" : item\.expandLabel/);
+  assert.match(popupHelpers, /仅结论/);
   assert.match(popupHelpers, /正在往下翻阿B 最近记下的变化。/);
   assert.match(popupHelpers, /这段历史还没拉下来，可以再试一次。/);
   assert.match(popupHelpers, /已经看到最近这段时间的变化了。/);
+  assert.doesNotMatch(popupJs, /item\.source \|\| "画像观察"/);
   assert.doesNotMatch(popupHtml, /对个暗号|来，唠一句/);
 });

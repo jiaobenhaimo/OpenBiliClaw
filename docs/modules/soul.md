@@ -36,7 +36,7 @@
 | SoulEngine.learn_from_dialogue() | ✅ | 聊天落 `dialogue` 事件、累计 insight candidate；单条 `interest/value/goal/dislike` 聊天信号到中高置信度时会先写入轻量 cognition update，达阈值后再驱动偏好/画像更新 |
 | 账户同步事件分析 | ✅ | 后台低频同步导入的 `view/favorite/follow` 事件会复用 `analyze_events()` 进入偏好与画像链 |
 | ToneProfile | ✅ | 从 `SoulProfile`、偏好摘要和近期反馈推断 `density/warmth/playfulness/directness`，统一驱动推荐、画像和聊天语气 |
-| Cognition updates | ✅ | 在反馈刷新和聊天学习后生成 `interest_added / dislike_added / profile_shift` 结构化 cognition card，包含 `summary / impact / reasoning / evidence / source / created_at`，供插件提醒与画像页展开展示 |
+| Cognition updates | ✅ | 在反馈刷新和聊天学习后生成 `interest_added / dislike_added / profile_shift` 结构化 cognition card，包含 `summary / context_line / source_label / expand_hint / impact / reasoning / evidence / source / created_at`，供插件提醒与画像页展开展示；即时反馈和聊天会尽量指出具体内容或本轮聊天，聚合判断则保守回退到“基于最近几条相关内容” |
 
 ## 公开 API
 
@@ -79,10 +79,13 @@ updates = memory_manager.load_cognition_updates()
 #   {
 #     "kind": "interest_added",
 #     "summary": "阿B 刚记下了你对《这视频讲透了中东局势》的评论。",
+#     "context_line": "来自：《这视频讲透了中东局势》",
 #     "impact": "画像里“喜欢高信息密度、有人文关怀的内容”这条偏好会更明确。",
 #     "reasoning": "这次反馈不只是喜欢/不喜欢，而是主动说清了你在意的内容气质。",
 #     "evidence": "你评论《这视频讲透了中东局势》时说：这个很好看，有创意，我很喜欢，还有一些不油腻的人文关怀",
 #     "source": "feedback",
+#     "source_label": "推荐反馈",
+#     "expand_hint": "expandable",
 #     "created_at": "2026-03-15T10:30:00",
 #     "notified": False,
 #     ...
@@ -224,15 +227,17 @@ tone = build_tone_profile(
 4. **历史格式转换**：`agent` → `assistant` 角色映射，适配 OpenAI 消息格式
 5. **画像生成独立为 `ProfileBuilder`**：避免把 prompt/JSON 校验逻辑塞进 `SoulEngine`
 6. **认知变化解释由 soul 层生成**：`impact / reasoning / evidence` 都在后端认知链路里一次性产出，前端只负责展示，不在 UI 层脑补推理
-7. **评论型认知必须带内容上下文**：用户对“这条内容”的评论如果不带标题，认知卡片会失去可读性，因此即时反馈路径优先把标题写进 `summary` 和 `evidence`
-6. **灵魂层失败不覆盖旧画像**：坏 JSON、空响应、缺字段时直接报错，已有 `soul.json` 保留
-7. **觉察层保守去重**：同日 observation 标准化后相同则跳过，避免流水账堆积
-8. **洞察层按假设文本合并**：相同 hypothesis 合并 evidence，confidence 取较高值
-9. **验证状态只由代码更新**：LLM 只生成 hypothesis/evidence/confidence，`validated` 不信任模型输出
-10. **反馈达到阈值后再学习**：默认累计 3 条新反馈才触发偏好重分析，避免单次噪声反馈频繁扰动画像
-11. **画像重建走显著变化阈值**：只有高权重兴趣明显变化或新增 `disliked_topics` 时才重建 `SoulProfile`
-12. **聊天信号受控生效**：聊天先落 `dialogue` 事件和 `insight_candidates.json`，只有高置信度且重复出现的候选才会进入偏好更新
-13. **语气不单独持久化**：`ToneProfile` 是从画像、偏好和近期反馈实时推断出的派生层，避免把易调参的表达风格绑死在 `soul.json`
-14. **“老B友”是基础人格，不是固定模板**：聊天、推荐和画像总结共用同一套语气维度，但会随着用户画像和近期反馈在信息密度、温度、梗感和直给程度上细调
-15. **认知变化只在关键时刻生成**：只有新增高权重兴趣、明确避雷方向或画像明显转向时，才会形成 `cognition update`，避免把普通波动都做成提醒
-16. **账户同步只补事件，不单独改画像**：history / favorites / following 统一先转成事件，再复用现有偏好分析与画像更新链，避免出现第二套理解逻辑
+7. **默认态上下文也由 soul 层负责**：`context_line / source_label / expand_hint` 由后端统一生成，保证“这是对哪条内容或哪组信号的判断”与详情口径一致
+8. **评论型认知必须带内容上下文**：用户对“这条内容”的评论如果不带标题，认知卡片会失去可读性，因此即时反馈路径优先把标题写进 `summary`、`context_line` 和 `evidence`
+9. **聚合判断宁可保守也不伪造对象**：拿不到可信标题时，回退为“基于最近几条相关内容”，避免看起来丰富但实际不准
+10. **灵魂层失败不覆盖旧画像**：坏 JSON、空响应、缺字段时直接报错，已有 `soul.json` 保留
+11. **觉察层保守去重**：同日 observation 标准化后相同则跳过，避免流水账堆积
+12. **洞察层按假设文本合并**：相同 hypothesis 合并 evidence，confidence 取较高值
+13. **验证状态只由代码更新**：LLM 只生成 hypothesis/evidence/confidence，`validated` 不信任模型输出
+14. **反馈达到阈值后再学习**：默认累计 3 条新反馈才触发偏好重分析，避免单次噪声反馈频繁扰动画像
+15. **画像重建走显著变化阈值**：只有高权重兴趣明显变化或新增 `disliked_topics` 时才重建 `SoulProfile`
+16. **聊天信号受控生效**：聊天先落 `dialogue` 事件和 `insight_candidates.json`，只有高置信度且重复出现的候选才会进入偏好更新
+17. **语气不单独持久化**：`ToneProfile` 是从画像、偏好和近期反馈实时推断出的派生层，避免把易调参的表达风格绑死在 `soul.json`
+18. **“老B友”是基础人格，不是固定模板**：聊天、推荐和画像总结共用同一套语气维度，但会随着用户画像和近期反馈在信息密度、温度、梗感和直给程度上细调
+19. **认知变化只在关键时刻生成**：只有新增高权重兴趣、明确避雷方向或画像明显转向时，才会形成 `cognition update`，避免把普通波动都做成提醒
+20. **账户同步只补事件，不单独改画像**：history / favorites / following 统一先转成事件，再复用现有偏好分析与画像更新链，避免出现第二套理解逻辑

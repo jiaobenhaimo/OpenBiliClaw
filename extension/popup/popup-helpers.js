@@ -77,13 +77,18 @@ export function buildFeedbackPayload(recommendationId, feedbackType, note = "") 
 }
 
 export function normalizeCognitionUpdateCard(item) {
+  const fallbackContextLine = "基于最近几条相关内容";
   if (typeof item === "string") {
     return {
       summary: normalizeText(item),
+      contextLine: fallbackContextLine,
       impact: "",
       reasoning: "",
       evidence: "",
       source: "",
+      sourceLabel: "",
+      expandHint: "summary_only",
+      expandLabel: "仅结论",
       created_at: "",
       expandable: false,
     };
@@ -91,14 +96,25 @@ export function normalizeCognitionUpdateCard(item) {
   const impact = normalizeText(item?.impact);
   const reasoning = normalizeText(item?.reasoning);
   const evidence = normalizeText(item?.evidence);
+  const expandHint = (() => {
+    const explicitHint = normalizeText(item?.expand_hint);
+    if (explicitHint === "expandable" || explicitHint === "summary_only") {
+      return explicitHint;
+    }
+    return impact || reasoning || evidence ? "expandable" : "summary_only";
+  })();
   return {
     summary: normalizeText(item?.summary),
+    contextLine: normalizeText(item?.context_line) || fallbackContextLine,
     impact,
     reasoning,
     evidence,
     source: normalizeText(item?.source),
+    sourceLabel: normalizeText(item?.source_label),
+    expandHint,
+    expandLabel: expandHint === "expandable" ? "展开" : "仅结论",
     created_at: normalizeText(item?.created_at),
-    expandable: Boolean(impact || reasoning || evidence),
+    expandable: expandHint === "expandable",
   };
 }
 
@@ -138,10 +154,14 @@ function normalizeCognitionHistoryItems(items) {
       if (item?.summary && Object.hasOwn(item, "expandable")) {
         return {
           summary: normalizeText(item.summary),
+          contextLine: normalizeText(item.contextLine),
           impact: normalizeText(item.impact),
           reasoning: normalizeText(item.reasoning),
           evidence: normalizeText(item.evidence),
           source: normalizeText(item.source),
+          sourceLabel: normalizeText(item.sourceLabel),
+          expandHint: normalizeText(item.expandHint) || "summary_only",
+          expandLabel: normalizeText(item.expandLabel) || "仅结论",
           created_at: normalizeText(item.created_at),
           expandable: Boolean(item.expandable),
         };

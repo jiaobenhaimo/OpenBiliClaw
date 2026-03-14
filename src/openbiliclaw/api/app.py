@@ -36,6 +36,34 @@ from openbiliclaw.api.models import (
     RuntimeStatusResponse,
 )
 
+SOURCE_LABELS = {
+    "feedback": "推荐反馈",
+    "chat": "聊天",
+    "profile_refresh": "聚合观察",
+}
+
+
+def _normalize_cognition_update(item: dict[str, object]) -> dict[str, str]:
+    impact = str(item.get("impact", "")).strip()
+    reasoning = str(item.get("reasoning", "")).strip()
+    evidence = str(item.get("evidence", "")).strip()
+    source = str(item.get("source", "")).strip()
+    source_label = str(item.get("source_label", "")).strip() or SOURCE_LABELS.get(source, "")
+    expand_hint = str(item.get("expand_hint", "")).strip()
+    if expand_hint not in {"expandable", "summary_only"}:
+        expand_hint = "expandable" if any((impact, reasoning, evidence)) else "summary_only"
+    return {
+        "summary": str(item.get("summary", "")).strip(),
+        "context_line": str(item.get("context_line", "")).strip() or "基于最近几条相关内容",
+        "impact": impact,
+        "reasoning": reasoning,
+        "evidence": evidence,
+        "source": source,
+        "source_label": source_label,
+        "expand_hint": expand_hint,
+        "created_at": str(item.get("created_at", "")).strip(),
+    }
+
 
 def create_app(
     *,
@@ -245,14 +273,7 @@ def create_app(
             has_more_cognition_updates = end < len(raw_updates)
             next_cognition_cursor = str(end) if has_more_cognition_updates else ""
             cognition_updates = [
-                CognitionUpdateSummary(
-                    summary=str(item.get("summary", "")).strip(),
-                    impact=str(item.get("impact", "")).strip(),
-                    reasoning=str(item.get("reasoning", "")).strip(),
-                    evidence=str(item.get("evidence", "")).strip(),
-                    source=str(item.get("source", "")).strip(),
-                    created_at=str(item.get("created_at", "")).strip(),
-                )
+                _normalize_cognition_update(item)
                 for item in sliced_updates
             ]
         return ProfileSummaryResponse(
