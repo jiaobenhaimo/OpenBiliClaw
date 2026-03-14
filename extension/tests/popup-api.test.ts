@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { fetchActivityFeed, reshuffleRecommendations } from "../popup/popup-api.js";
+import {
+  fetchActivityFeed,
+  fetchProfileSummary,
+  reshuffleRecommendations,
+} from "../popup/popup-api.js";
 
 test("reshuffleRecommendations posts to reshuffle endpoint", async () => {
   const calls = [];
@@ -75,4 +79,28 @@ test("fetchActivityFeed loads popup activity summaries", async () => {
     headline: "阿B 刚记下了你最近更吃深拆",
     items: [],
   });
+});
+
+test("fetchProfileSummary forwards limit and cursor for cognition history pagination", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        return {
+          initialized: true,
+          recent_cognition_updates: [],
+          has_more_cognition_updates: false,
+          next_cognition_cursor: "",
+        };
+      },
+    };
+  };
+
+  await fetchProfileSummary({ limit: 3, cursor: "6" });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://127.0.0.1:8420/api/profile-summary?limit=3&cursor=6");
+  assert.equal(calls[0].options.method, "GET");
 });

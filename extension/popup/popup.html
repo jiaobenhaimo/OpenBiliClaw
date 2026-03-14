@@ -810,6 +810,34 @@
       color: var(--text-secondary);
     }
 
+    .cognition-history-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .cognition-history-status {
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text-muted);
+    }
+
+    .cognition-history-more {
+      align-self: flex-start;
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: rgba(58, 123, 213, 0.1);
+      color: var(--brand-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .cognition-history-more:disabled {
+      opacity: 0.55;
+    }
+
     .empty-state {
       padding: 28px 20px;
       text-align: center;
@@ -1226,6 +1254,12 @@
           <div class="profile-group">
             <h3>阿B 最近新记住了什么</h3>
             <div id="profileRecentMemory" class="cognition-list"></div>
+            <div class="cognition-history-footer">
+              <p id="profileRecentMemoryStatus" class="cognition-history-status" hidden></p>
+              <button id="profileRecentMemoryMore" class="cognition-history-more" type="button" hidden>
+                加载更多
+              </button>
+            </div>
           </div>
         </div>
       </section>

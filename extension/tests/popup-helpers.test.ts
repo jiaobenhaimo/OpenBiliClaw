@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import {
   getActivityCardState,
   buildFeedbackPayload,
+  buildNextCognitionHistoryState,
   buildVideoUrl,
   getCommentSubmitUiState,
+  getCognitionHistoryUiState,
   getConnectionBadgeState,
   getHintBannerState,
   getNextExpandedCognitionIndex,
@@ -407,6 +409,8 @@ test("normalizeProfileSummary fills stable fallback fields", () => {
           created_at: " 2026-03-14T22:30:00 ",
         },
       ],
+      has_more_cognition_updates: true,
+      next_cognition_cursor: " 3 ",
     }),
     {
       initialized: true,
@@ -425,6 +429,8 @@ test("normalizeProfileSummary fills stable fallback fields", () => {
           expandable: true,
         },
       ],
+      has_more_cognition_updates: true,
+      next_cognition_cursor: "3",
     },
   );
 });
@@ -482,6 +488,124 @@ test("normalizeProfileSummary keeps the newer low-roleplay fallback copy", () =>
       deep_needs: [],
       top_interests: [],
       recent_cognition_updates: [],
+      has_more_cognition_updates: false,
+      next_cognition_cursor: "",
+    },
+  );
+});
+
+test("buildNextCognitionHistoryState appends the next page and keeps pagination metadata", () => {
+  const firstPage = normalizeProfileSummary({
+    initialized: true,
+    recent_cognition_updates: [
+      {
+        summary: "第一页第一条",
+        source: "feedback",
+      },
+      {
+        summary: "第一页第二条",
+        source: "chat",
+      },
+    ],
+    has_more_cognition_updates: true,
+    next_cognition_cursor: "2",
+  });
+
+  const secondPage = normalizeProfileSummary({
+    initialized: true,
+    recent_cognition_updates: [
+      {
+        summary: "第二页第一条",
+        impact: "画像继续变化",
+      },
+    ],
+    has_more_cognition_updates: false,
+    next_cognition_cursor: "",
+  });
+
+  assert.deepEqual(buildNextCognitionHistoryState(firstPage, secondPage), {
+    items: [
+      {
+        summary: "第一页第一条",
+        impact: "",
+        reasoning: "",
+        evidence: "",
+        source: "feedback",
+        created_at: "",
+        expandable: false,
+      },
+      {
+        summary: "第一页第二条",
+        impact: "",
+        reasoning: "",
+        evidence: "",
+        source: "chat",
+        created_at: "",
+        expandable: false,
+      },
+      {
+        summary: "第二页第一条",
+        impact: "画像继续变化",
+        reasoning: "",
+        evidence: "",
+        source: "",
+        created_at: "",
+        expandable: true,
+      },
+    ],
+    hasMore: false,
+    nextCursor: "",
+    loadingMore: false,
+    loadMoreError: "",
+  });
+});
+
+test("getCognitionHistoryUiState exposes loading, retry and completion copy", () => {
+  assert.deepEqual(
+    getCognitionHistoryUiState({
+      items: [{ summary: "第一条", expandable: false }],
+      hasMore: true,
+      nextCursor: "1",
+      loadingMore: true,
+      loadMoreError: "",
+    }),
+    {
+      canLoadMore: false,
+      loadingLabel: "正在加载更多变化…",
+      actionLabel: "加载更多",
+      statusMessage: "正在往下翻阿B 最近记下的变化。",
+    },
+  );
+
+  assert.deepEqual(
+    getCognitionHistoryUiState({
+      items: [{ summary: "第一条", expandable: false }],
+      hasMore: true,
+      nextCursor: "1",
+      loadingMore: false,
+      loadMoreError: "网络断了",
+    }),
+    {
+      canLoadMore: true,
+      loadingLabel: "",
+      actionLabel: "重试加载",
+      statusMessage: "这段历史还没拉下来，可以再试一次。",
+    },
+  );
+
+  assert.deepEqual(
+    getCognitionHistoryUiState({
+      items: [{ summary: "第一条", expandable: false }],
+      hasMore: false,
+      nextCursor: "",
+      loadingMore: false,
+      loadMoreError: "",
+    }),
+    {
+      canLoadMore: false,
+      loadingLabel: "",
+      actionLabel: "加载更多",
+      statusMessage: "已经看到最近这段时间的变化了。",
     },
   );
 });

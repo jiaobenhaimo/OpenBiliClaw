@@ -124,6 +124,83 @@ export function normalizeProfileSummary(summary) {
           .map(normalizeCognitionUpdateCard)
           .filter((item) => item.summary)
       : [],
+    has_more_cognition_updates: Boolean(summary?.has_more_cognition_updates),
+    next_cognition_cursor: normalizeText(summary?.next_cognition_cursor),
+  };
+}
+
+function normalizeCognitionHistoryItems(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .map((item) => {
+      if (item?.summary && Object.hasOwn(item, "expandable")) {
+        return {
+          summary: normalizeText(item.summary),
+          impact: normalizeText(item.impact),
+          reasoning: normalizeText(item.reasoning),
+          evidence: normalizeText(item.evidence),
+          source: normalizeText(item.source),
+          created_at: normalizeText(item.created_at),
+          expandable: Boolean(item.expandable),
+        };
+      }
+      return normalizeCognitionUpdateCard(item);
+    })
+    .filter((item) => item.summary);
+}
+
+export function buildNextCognitionHistoryState(currentState, nextSummaryPage) {
+  const existingItems = normalizeCognitionHistoryItems(
+    Array.isArray(currentState?.items)
+      ? currentState.items
+      : currentState?.recent_cognition_updates,
+  );
+  const nextItems = normalizeCognitionHistoryItems(nextSummaryPage?.recent_cognition_updates);
+
+  return {
+    items: [...existingItems, ...nextItems],
+    hasMore: Boolean(nextSummaryPage?.has_more_cognition_updates),
+    nextCursor: normalizeText(nextSummaryPage?.next_cognition_cursor),
+    loadingMore: false,
+    loadMoreError: "",
+  };
+}
+
+export function getCognitionHistoryUiState(historyState) {
+  if (historyState?.loadingMore) {
+    return {
+      canLoadMore: false,
+      loadingLabel: "正在加载更多变化…",
+      actionLabel: "加载更多",
+      statusMessage: "正在往下翻阿B 最近记下的变化。",
+    };
+  }
+
+  if (normalizeText(historyState?.loadMoreError)) {
+    return {
+      canLoadMore: true,
+      loadingLabel: "",
+      actionLabel: "重试加载",
+      statusMessage: "这段历史还没拉下来，可以再试一次。",
+    };
+  }
+
+  if (!historyState?.hasMore) {
+    return {
+      canLoadMore: false,
+      loadingLabel: "",
+      actionLabel: "加载更多",
+      statusMessage: "已经看到最近这段时间的变化了。",
+    };
+  }
+
+  return {
+    canLoadMore: true,
+    loadingLabel: "",
+    actionLabel: "加载更多",
+    statusMessage: "",
   };
 }
 

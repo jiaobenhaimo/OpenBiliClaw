@@ -1,8 +1,10 @@
 import {
   getActivityCardState,
   buildFeedbackPayload,
+  buildNextCognitionHistoryState,
   buildVideoUrl,
   getCommentSubmitUiState,
+  getCognitionHistoryUiState,
   getConnectionBadgeState,
   getNextExpandedCognitionIndex,
   getHintBannerState,
@@ -35,6 +37,13 @@ const state = {
   recommendations: [],
   profile: null,
   profileLoaded: false,
+  profileCognitionHistory: {
+    items: [],
+    hasMore: false,
+    nextCursor: "",
+    loadingMore: false,
+    loadMoreError: "",
+  },
   expandedCognitionIndex: null,
   runtimeStatus: null,
   runtimeEvent: null,
@@ -76,6 +85,8 @@ const elements = {
   profileNeeds: document.getElementById("profileNeeds"),
   profileInterests: document.getElementById("profileInterests"),
   profileRecentMemory: document.getElementById("profileRecentMemory"),
+  profileRecentMemoryStatus: document.getElementById("profileRecentMemoryStatus"),
+  profileRecentMemoryMore: document.getElementById("profileRecentMemoryMore"),
   chatMessages: document.getElementById("chatMessages"),
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
@@ -392,6 +403,32 @@ function renderCognitionCards(container, items, fallback) {
   }
 }
 
+function renderCognitionHistoryControls(historyState) {
+  if (
+    !(elements.profileRecentMemoryStatus instanceof HTMLElement) ||
+    !(elements.profileRecentMemoryMore instanceof HTMLButtonElement)
+  ) {
+    return;
+  }
+
+  const uiState = getCognitionHistoryUiState(historyState);
+  const hasItems = Array.isArray(historyState?.items) && historyState.items.length > 0;
+
+  elements.profileRecentMemoryStatus.hidden = !uiState.statusMessage || !hasItems;
+  elements.profileRecentMemoryStatus.textContent = uiState.loadingLabel || uiState.statusMessage;
+
+  elements.profileRecentMemoryMore.hidden = !hasItems || (!historyState?.hasMore && !historyState?.loadMoreError);
+  elements.profileRecentMemoryMore.disabled = !uiState.canLoadMore;
+  elements.profileRecentMemoryMore.textContent = uiState.actionLabel;
+}
+
+function getProfileCognitionItems(summary) {
+  if (Array.isArray(state.profileCognitionHistory.items) && state.profileCognitionHistory.items.length > 0) {
+    return state.profileCognitionHistory.items;
+  }
+  return Array.isArray(summary?.recent_cognition_updates) ? summary.recent_cognition_updates : [];
+}
+
 function renderProfileSummary(summary) {
   if (
     !(elements.profileEmpty instanceof HTMLElement) ||
@@ -408,6 +445,13 @@ function renderProfileSummary(summary) {
     elements.profileEmpty.hidden = false;
     elements.profileEmptyTitle.textContent = "画像还没攒起来";
     elements.profileEmptyText.textContent = "先跑一遍 openbiliclaw init，再回来看看。";
+    renderCognitionHistoryControls({
+      items: [],
+      hasMore: false,
+      nextCursor: "",
+      loadingMore: false,
+      loadMoreError: "",
+    });
     return;
   }
 
@@ -419,9 +463,10 @@ function renderProfileSummary(summary) {
   renderChipList(elements.profileInterests, summary.top_interests, "再刷一阵，这里会更准");
   renderCognitionCards(
     elements.profileRecentMemory,
-    summary.recent_cognition_updates,
+    getProfileCognitionItems(summary),
     "阿B 还在继续观察，过一阵这里会更具体。",
   );
+  renderCognitionHistoryControls(state.profileCognitionHistory);
 }
 
 function appendChatMessage(role, content) {
@@ -704,15 +749,91 @@ async function loadProfileSummary({ force = false } = {}) {
   }
 
   try {
-    const summary = await fetchProfileSummary();
+    const summary = normalizeProfileSummary(await fetchProfileSummary({ limit: 3 }));
     state.profile = normalizeProfileSummary(summary);
+    state.profileCognitionHistory = buildNextCognitionHistoryState(null, summary);
     state.expandedCognitionIndex = null;
   } catch {
     state.profile = normalizeProfileSummary({ initialized: false });
+    state.profileCognitionHistory = {
+      items: [],
+      hasMore: false,
+      nextCursor: "",
+      loadingMore: false,
+      loadMoreError: "",
+    };
     state.expandedCognitionIndex = null;
   }
   state.profileLoaded = true;
   renderProfileSummary(state.profile);
+  maybeLoadMoreCognitionHistory();
+}
+
+async function loadMoreCognitionHistory() {
+  if (
+    !state.online ||
+    !state.profileLoaded ||
+    state.profile == null ||
+    state.profileCognitionHistory.loadingMore ||
+    !state.profileCognitionHistory.hasMore ||
+    !state.profileCognitionHistory.nextCursor
+  ) {
+    return;
+  }
+
+  state.profileCognitionHistory = {
+    ...state.profileCognitionHistory,
+    loadingMore: true,
+    loadMoreError: "",
+  };
+  renderProfileSummary(state.profile);
+
+  try {
+    const nextPage = normalizeProfileSummary(
+      await fetchProfileSummary({
+        limit: 3,
+        cursor: state.profileCognitionHistory.nextCursor,
+      }),
+    );
+    state.profile = {
+      ...state.profile,
+      initialized: nextPage.initialized,
+      personality_portrait: nextPage.personality_portrait,
+      core_traits: nextPage.core_traits,
+      deep_needs: nextPage.deep_needs,
+      top_interests: nextPage.top_interests,
+    };
+    state.profileCognitionHistory = buildNextCognitionHistoryState(
+      state.profileCognitionHistory,
+      nextPage,
+    );
+  } catch {
+    state.profileCognitionHistory = {
+      ...state.profileCognitionHistory,
+      loadingMore: false,
+      loadMoreError: "retry",
+    };
+  }
+
+  renderProfileSummary(state.profile);
+  maybeLoadMoreCognitionHistory();
+}
+
+function maybeLoadMoreCognitionHistory() {
+  if (
+    state.activeTab !== "profile" ||
+    !(elements.viewProfile instanceof HTMLElement) ||
+    elements.viewProfile.hidden ||
+    !state.profileCognitionHistory.hasMore ||
+    state.profileCognitionHistory.loadingMore
+  ) {
+    return;
+  }
+
+  const remaining = elements.viewProfile.scrollHeight - elements.viewProfile.scrollTop - elements.viewProfile.clientHeight;
+  if (remaining <= 96) {
+    void loadMoreCognitionHistory();
+  }
 }
 
 async function refreshProfileSummaryAfterInteraction() {
@@ -818,6 +939,20 @@ function bindTabs() {
   }
 }
 
+function bindProfileHistoryLoading() {
+  if (elements.viewProfile instanceof HTMLElement) {
+    elements.viewProfile.addEventListener("scroll", () => {
+      maybeLoadMoreCognitionHistory();
+    });
+  }
+
+  if (elements.profileRecentMemoryMore instanceof HTMLButtonElement) {
+    elements.profileRecentMemoryMore.addEventListener("click", () => {
+      void loadMoreCognitionHistory();
+    });
+  }
+}
+
 function bindRefreshButton() {
   if (!(elements.refreshRecommendationsButton instanceof HTMLButtonElement)) {
     return;
@@ -882,6 +1017,7 @@ function bindChat() {
 async function initializePopup() {
   const requestedTab = new URLSearchParams(window.location.search).get("tab");
   bindTabs();
+  bindProfileHistoryLoading();
   bindRefreshButton();
   bindActivityToggle();
   bindChat();

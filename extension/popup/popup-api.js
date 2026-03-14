@@ -52,8 +52,16 @@ export async function acknowledgeNotificationSent(bvid) {
   });
 }
 
-export async function fetchProfileSummary() {
-  return requestJson("/profile-summary", { method: "GET" });
+export async function fetchProfileSummary({ limit, cursor } = {}) {
+  const params = new URLSearchParams();
+  if (typeof limit === "number" && Number.isFinite(limit)) {
+    params.set("limit", String(limit));
+  }
+  if (typeof cursor === "string" && cursor.trim()) {
+    params.set("cursor", cursor.trim());
+  }
+  const query = params.toString();
+  return requestJson(`/profile-summary${query ? `?${query}` : ""}`, { method: "GET" });
 }
 
 export async function submitFeedback(payload) {
