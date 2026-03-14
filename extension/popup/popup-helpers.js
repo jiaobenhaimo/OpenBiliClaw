@@ -187,6 +187,36 @@ export function validateCommentInput(note) {
   };
 }
 
+export function getCommentSubmitUiState(state) {
+  const normalized = normalizeText(state) || "idle";
+  if (normalized === "submitting") {
+    return {
+      buttonLabel: "发送中...",
+      disabled: true,
+      statusMessage: "正在发出去，记一下你的这句。",
+    };
+  }
+  if (normalized === "success") {
+    return {
+      buttonLabel: "已发出",
+      disabled: true,
+      statusMessage: "刚刚发出去了，会影响后面的推荐。",
+    };
+  }
+  if (normalized === "error") {
+    return {
+      buttonLabel: "发出去",
+      disabled: false,
+      statusMessage: "这句还没发出去，可以再试一次。",
+    };
+  }
+  return {
+    buttonLabel: "发出去",
+    disabled: false,
+    statusMessage: "",
+  };
+}
+
 export function getPopupState({ online, items = [], error = null, runtimeStatus = null }) {
   if (!online) {
     return {

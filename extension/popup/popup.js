@@ -1,6 +1,7 @@
 import {
   buildFeedbackPayload,
   buildVideoUrl,
+  getCommentSubmitUiState,
   getConnectionBadgeState,
   getHintBannerState,
   getRealtimePoolStatusSummary,
@@ -299,6 +300,31 @@ function createCommentComposer(item, statusLine) {
   input.rows = 3;
   input.placeholder = "写一句你为什么想看，或者为什么不想看";
 
+  let hideTimer = null;
+
+  function clearHideTimer() {
+    if (hideTimer !== null) {
+      window.clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function applySubmitUiState(stateName) {
+    const uiState = getCommentSubmitUiState(stateName);
+    submit.textContent = uiState.buttonLabel;
+    submit.disabled = uiState.disabled;
+    input.disabled = stateName === "submitting";
+    if (stateName !== "idle") {
+      setFeedbackStatus(statusLine, uiState.statusMessage);
+    }
+  }
+
+  function resetComposerUi() {
+    clearHideTimer();
+    applySubmitUiState("idle");
+    input.disabled = false;
+  }
+
   const submit = createActionButton("发出去", "action-button action-primary", async () => {
     const validation = validateCommentInput(input.value);
     if (!validation.valid) {
@@ -306,20 +332,28 @@ function createCommentComposer(item, statusLine) {
       input.focus();
       return;
     }
+    resetComposerUi();
+    applySubmitUiState("submitting");
     try {
       await submitFeedback(buildFeedbackPayload(item.id, "comment", input.value));
+      applySubmitUiState("success");
       setHint("这句记下了。", "success");
-      setFeedbackStatus(statusLine, "记下了，这句会影响后面的推荐。");
-      wrapper.hidden = true;
       input.value = "";
+      clearHideTimer();
+      hideTimer = window.setTimeout(() => {
+        wrapper.hidden = true;
+        resetComposerUi();
+      }, 600);
       void refreshProfileSummaryAfterInteraction();
     } catch {
+      applySubmitUiState("error");
       setHint("这句没发出去，先看看本地后端是不是开着。", "error");
     }
   });
 
+  resetComposerUi();
   wrapper.append(input, submit);
-  return { wrapper, input };
+  return { wrapper, input, resetComposerUi };
 }
 
 function renderRecommendations(items) {
@@ -423,6 +457,7 @@ function renderRecommendations(items) {
       createActionButton("说说原因", "action-button action-secondary", () => {
         composer.wrapper.hidden = !composer.wrapper.hidden;
         if (!composer.wrapper.hidden) {
+          composer.resetComposerUi();
           composer.input.focus();
         }
       }),

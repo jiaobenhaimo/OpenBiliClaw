@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildFeedbackPayload,
   buildVideoUrl,
+  getCommentSubmitUiState,
   getConnectionBadgeState,
   getHintBannerState,
   getRealtimePoolStatusSummary,
@@ -281,6 +282,32 @@ test("buildFeedbackPayload trims comment note", () => {
     recommendation_id: 9,
     feedback_type: "comment",
     note: "方向不错，但我想看更深一点。",
+  });
+});
+
+test("getCommentSubmitUiState exposes idle submitting success and error states", () => {
+  assert.deepEqual(getCommentSubmitUiState("idle"), {
+    buttonLabel: "发出去",
+    disabled: false,
+    statusMessage: "",
+  });
+
+  assert.deepEqual(getCommentSubmitUiState("submitting"), {
+    buttonLabel: "发送中...",
+    disabled: true,
+    statusMessage: "正在发出去，记一下你的这句。",
+  });
+
+  assert.deepEqual(getCommentSubmitUiState("success"), {
+    buttonLabel: "已发出",
+    disabled: true,
+    statusMessage: "刚刚发出去了，会影响后面的推荐。",
+  });
+
+  assert.deepEqual(getCommentSubmitUiState("error"), {
+    buttonLabel: "发出去",
+    disabled: false,
+    statusMessage: "这句还没发出去，可以再试一次。",
   });
 });
 
