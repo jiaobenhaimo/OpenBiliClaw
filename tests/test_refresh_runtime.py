@@ -283,6 +283,43 @@ async def test_refresh_controller_requests_discovery_with_backfill_limit() -> No
     assert discovery.calls[0][2] == 18
 
 
+async def test_refresh_controller_caps_single_discovery_backfill_request() -> None:
+    discovery = _FakeDiscoveryEngine()
+    now = datetime.now().isoformat()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(
+            {
+                "last_event_refresh_at": "",
+                "last_trending_refresh_at": now,
+                "last_explore_refresh_at": now,
+                "last_processed_event_id": 0,
+                "last_notification_at": "",
+            }
+        ),
+        database=_FakeDatabase(
+            [
+                {"id": 1, "event_type": "view"},
+                {"id": 2, "event_type": "search"},
+                {"id": 3, "event_type": "view"},
+                {"id": 4, "event_type": "favorite"},
+                {"id": 5, "event_type": "comment"},
+                {"id": 6, "event_type": "feedback"},
+            ],
+            pool_count=0,
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=discovery,
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=300,
+        trending_refresh_hours=999,
+        explore_refresh_hours=999,
+    )
+
+    await controller.refresh_if_needed()
+
+    assert discovery.calls[0][2] == 60
+
+
 async def test_refresh_controller_replenishes_until_pool_reaches_target() -> None:
     class GrowingDiscovery(_FakeDiscoveryEngine):
         def __init__(self, database: _FakeDatabase) -> None:

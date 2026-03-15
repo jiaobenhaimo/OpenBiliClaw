@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
+_MAX_DISCOVERY_BACKFILL_PER_REFRESH = 60
+
 
 class SupportsRuntimeState(Protocol):
     def load_discovery_runtime_state(self) -> dict[str, object]: ...
@@ -324,7 +326,10 @@ class ContinuousRefreshController:
             discovered = await self.discovery_engine.discover(
                 profile,
                 strategies=strategies,
-                limit=max(self.discovery_limit, self.pool_target_count - current_pool_count),
+                limit=min(
+                    _MAX_DISCOVERY_BACKFILL_PER_REFRESH,
+                    max(self.discovery_limit, self.pool_target_count - current_pool_count),
+                ),
             )
             all_discovered.extend(discovered)
             flattened_strategies.extend(strategies)

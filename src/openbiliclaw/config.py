@@ -17,6 +17,8 @@ _CONFIG_FILENAMES = ["config.toml", "config.local.toml"]
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _PROJECT_ROOT_ENV = "OPENBILICLAW_PROJECT_ROOT"
 _SUPPORTED_AUTH_METHODS = {"cookie", "qrcode", "none"}
+_MIN_POOL_TARGET_COUNT = 1
+_MAX_POOL_TARGET_COUNT = 300
 _REMOTE_PROVIDER_FIELDS = {
     "openai": "llm.openai.api_key",
     "claude": "llm.claude.api_key",
@@ -315,6 +317,17 @@ def _collect_config_issues(config: Config) -> list[ConfigIssue]:
                 message=(
                     f"默认 provider `{provider_name}` 缺少 `api_key`，"
                     "请在 config.toml 中填写。"
+                ),
+            )
+        )
+
+    if not (_MIN_POOL_TARGET_COUNT <= config.scheduler.pool_target_count <= _MAX_POOL_TARGET_COUNT):
+        issues.append(
+            ConfigIssue(
+                field="scheduler.pool_target_count",
+                message=(
+                    "`scheduler.pool_target_count` 必须在 "
+                    f"{_MIN_POOL_TARGET_COUNT}..{_MAX_POOL_TARGET_COUNT} 之间。"
                 ),
             )
         )

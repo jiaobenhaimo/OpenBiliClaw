@@ -12,6 +12,7 @@ from openbiliclaw.config import (
     ConfigIssue,
     LLMConfig,
     LLMProviderConfig,
+    SchedulerConfig,
     _build_config,
     load_config,
     load_config_with_diagnostics,
@@ -285,6 +286,24 @@ def test_validate_runtime_config_rejects_invalid_auth_method() -> None:
     config = Config(bilibili=BilibiliConfig(auth_method="invalid"))
 
     with pytest.raises(ConfigError, match="bilibili.auth_method"):
+        validate_runtime_config(config)
+
+
+def test_validate_runtime_config_rejects_pool_target_count_above_cap() -> None:
+    config = Config(
+        llm=LLMConfig(
+            default_provider="ollama",
+            ollama=LLMProviderConfig(model="llama3", base_url="http://localhost:11434"),
+        ),
+        scheduler=SchedulerConfig(
+            enabled=True,
+            discovery_cron="0 */4 * * *",
+            pool_target_count=301,
+            account_sync_interval_hours=6,
+        )
+    )
+
+    with pytest.raises(ConfigError, match="scheduler.pool_target_count"):
         validate_runtime_config(config)
 
 
