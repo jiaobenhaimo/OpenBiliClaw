@@ -13,7 +13,7 @@
 - 统一初始化依赖
 - 把 adapter operation 包装成可注册的 skill descriptor
 
-如果你需要给 OpenClaw 或新维护者一份最短安装与初始化说明，直接看：
+如果你需要给 OpenClaw 或新维护者一份完整的部署、初始化和日常使用说明，直接看：
 
 - [OpenClaw 接入最短指南](../openclaw-quickstart.md)
 
@@ -107,6 +107,7 @@ CLI bridge 返回稳定 JSON：
 
 `SKILL.md` 现在同时包含：
 
+- Docker 优先 / 本地兜底的部署决策
 - 项目安装前置步骤
 - 首次 `openbiliclaw init` 初始化要求
 - `doctor` 自检命令

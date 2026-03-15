@@ -8,9 +8,29 @@ user-invocable: true
 
 Use this skill when you are inside the OpenBiliClaw workspace and need current OpenBiliClaw state or want to push feedback back into the learning loop.
 
-## Environment Bootstrap
+## Deployment Choice
 
-If the workspace is not ready yet, bootstrap it before calling the adapter:
+Choose deployment by target machine capability:
+
+1. Docker available: prefer Docker
+2. No Docker: use local Python deployment
+
+## Bootstrap
+
+### Docker-first
+
+Run:
+
+```bash
+docker compose up -d --build
+docker exec -it openbiliclaw-backend openbiliclaw init
+```
+
+Keep the repository checkout available so OpenClaw can discover this workspace skill.
+
+### Local fallback
+
+If Docker is unavailable, bootstrap locally:
 
 ```bash
 python -m venv .venv
@@ -49,6 +69,16 @@ Supported commands:
 - `recommend --limit 5`
 - `recommend --limit 5 --refresh-if-needed`
 - `submit-feedback --recommendation-id 7 --feedback-type like --note "很对胃口"`
+
+## Daily Loop
+
+Use this order for routine work:
+
+1. `get-profile`
+2. `recommend --limit <n>`
+3. `submit-feedback`
+4. `runtime-status`
+5. `sync-account` when long-term signals need refreshing
 
 ## Working Rules
 
