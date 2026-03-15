@@ -12,13 +12,38 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from openbiliclaw.soul.profile import SoulProfile
     from openbiliclaw.storage.database import Database
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+
+@dataclass
+class DiscoveryConcurrencyController:
+    """Shared bounded concurrency for external discovery dependencies."""
+
+    bilibili_request_concurrency: int = 2
+    llm_evaluation_concurrency: int = 2
+
+    def __post_init__(self) -> None:
+        self._bilibili_semaphore = asyncio.Semaphore(max(1, self.bilibili_request_concurrency))
+        self._llm_semaphore = asyncio.Semaphore(max(1, self.llm_evaluation_concurrency))
+
+    async def run_bilibili(self, awaitable: Awaitable[_T]) -> _T:
+        """Run one Bilibili-facing awaitable within the request limit."""
+        async with self._bilibili_semaphore:
+            return await awaitable
+
+    async def run_llm(self, awaitable: Awaitable[_T]) -> _T:
+        """Run one LLM-facing awaitable within the evaluation limit."""
+        async with self._llm_semaphore:
+            return await awaitable
 
 
 class SupportsStructuredTask(Protocol):
@@ -103,12 +128,14 @@ class ContentDiscoveryEngine:
         llm_service: SupportsStructuredTask | None = None,
         database: Database | None = None,
         *,
+        concurrency: DiscoveryConcurrencyController | None = None,
         target_primary_count: int = 12,
         backfill_target_count: int = 18,
     ) -> None:
         self._strategies: list[DiscoveryStrategy] = []
         self._llm_service = llm_service
         self._database = database
+        self._concurrency = concurrency
         self._target_primary_count = max(1, target_primary_count)
         self._backfill_target_count = max(self._target_primary_count, backfill_target_count)
 
@@ -211,10 +238,14 @@ class ContentDiscoveryEngine:
             },
         )
         try:
-            response = await self._llm_service.complete_structured_task(
+            llm_call = self._llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
             )
+            if self._concurrency is not None:
+                response = await self._concurrency.run_llm(llm_call)
+            else:
+                response = await llm_call
             payload = json.loads(str(getattr(response, "content", "")).strip())
             if not isinstance(payload, dict):
                 return 0.0
@@ -386,14 +417,20 @@ class ContentDiscoveryEngine:
         deferred: list[DiscoveredContent] = []
         seen_topics: set[str] = set()
         style_counts: dict[str, int] = {}
+        source_counts: dict[str, int] = {}
         per_style_cap = max(1, limit // 3)
+        per_source_cap = max(1, limit // 2)
         for item in results:
             topic_key = ContentDiscoveryEngine._topic_bucket(item)
             style_key = ContentDiscoveryEngine._style_bucket(item)
+            source_key = ContentDiscoveryEngine._normalize_topic_token(item.source_strategy)
             if topic_key and topic_key in seen_topics:
                 deferred.append(item)
                 continue
             if style_key and style_counts.get(style_key, 0) >= per_style_cap:
+                deferred.append(item)
+                continue
+            if source_key and source_counts.get(source_key, 0) >= per_source_cap:
                 deferred.append(item)
                 continue
             selected.append(item)
@@ -401,13 +438,27 @@ class ContentDiscoveryEngine:
                 seen_topics.add(topic_key)
             if style_key:
                 style_counts[style_key] = style_counts.get(style_key, 0) + 1
+            if source_key:
+                source_counts[source_key] = source_counts.get(source_key, 0) + 1
             if len(selected) >= limit:
                 return selected[:limit]
 
+        remaining: list[DiscoveredContent] = []
         for item in deferred:
+            topic_key = ContentDiscoveryEngine._topic_bucket(item)
+            if topic_key and topic_key in seen_topics:
+                remaining.append(item)
+                continue
             selected.append(item)
+            if topic_key:
+                seen_topics.add(topic_key)
             if len(selected) >= limit:
                 break
+        if len(selected) < limit:
+            for item in remaining:
+                selected.append(item)
+                if len(selected) >= limit:
+                    break
         return selected[:limit]
 
     @staticmethod
@@ -440,8 +491,23 @@ class ContentDiscoveryEngine:
         text = " ".join([title, description, reason]).lower()
         game_tokens = ("攻略", "机制", "强度", "实机", "联机", "mod", "杀戮尖塔", "爬塔")
         news_tokens = ("突发", "最新", "局势", "锐评", "发布", "快讯", "回应", "自焚")
-        guide_tokens = ("教程", "入门", "购买前", "怎么做", "建议", "指南", "统计")
-        story_tokens = ("纪录片", "故事", "电影", "小说史", "讲了一个怎样", "短片")
+        guide_tokens = (
+            "教程",
+            "入门",
+            "购买前",
+            "怎么做",
+            "建议",
+            "指南",
+            "统计",
+            "课程",
+            "导论",
+            "从零开始",
+            "原理图解",
+            "数学原理",
+            "透彻理解",
+            "一小时从",
+        )
+        story_tokens = ("纪录片", "纪录", "故事", "电影", "小说史", "讲了一个怎样", "短片")
         visual_tokens = ("空镜", "混剪", "素材", "视觉", "智慧城市")
         deep_tokens = (
             "讲透",

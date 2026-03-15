@@ -499,6 +499,85 @@ async def test_reshuffle_recommendations_spreads_styles_before_backfill() -> Non
 
 
 @pytest.mark.asyncio
+async def test_reshuffle_recommendations_limits_single_source_dominance() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        db.cache_content(
+            "BVEXP1",
+            title="探索候选 1",
+            up_name="探索频道",
+            source="explore",
+            relevance_score=0.96,
+            relevance_reason="探索内容 1",
+            style_key="story_doc",
+            topic_key="探索:1",
+        )
+        db.cache_content(
+            "BVEXP2",
+            title="探索候选 2",
+            up_name="探索频道",
+            source="explore",
+            relevance_score=0.95,
+            relevance_reason="探索内容 2",
+            style_key="deep_dive",
+            topic_key="探索:2",
+        )
+        db.cache_content(
+            "BVEXP3",
+            title="探索候选 3",
+            up_name="探索频道",
+            source="explore",
+            relevance_score=0.94,
+            relevance_reason="探索内容 3",
+            style_key="light_chat",
+            topic_key="探索:3",
+        )
+        db.cache_content(
+            "BVEXP4",
+            title="探索候选 4",
+            up_name="探索频道",
+            source="explore",
+            relevance_score=0.93,
+            relevance_reason="探索内容 4",
+            style_key="practical_guide",
+            topic_key="探索:4",
+        )
+        db.cache_content(
+            "BVSEARCH1",
+            title="搜索候选",
+            up_name="搜索频道",
+            source="search",
+            relevance_score=0.91,
+            relevance_reason="搜索命中的内容。",
+            style_key="practical_guide",
+            topic_key="搜索:1",
+        )
+        db.cache_content(
+            "BVTREND1",
+            title="热榜候选",
+            up_name="热榜频道",
+            source="trending",
+            relevance_score=0.9,
+            relevance_reason="热榜命中的内容。",
+            style_key="news_brief",
+            topic_key="热榜:1",
+        )
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendations = await engine.reshuffle_recommendations(
+            profile=_build_profile(),
+            limit=4,
+        )
+
+        picked_sources = [item.content.source_strategy for item in recommendations]
+
+        assert picked_sources.count("explore") <= 2
+        assert "search" in picked_sources
+        assert "trending" in picked_sources
+
+
+@pytest.mark.asyncio
 async def test_reshuffle_recommendations_backfills_to_requested_limit_when_style_is_dominant(
 ) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:

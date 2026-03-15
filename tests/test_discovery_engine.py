@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from openbiliclaw.discovery.engine import ContentDiscoveryEngine, DiscoveredContent
+from openbiliclaw.discovery.engine import (
+    ContentDiscoveryEngine,
+    DiscoveredContent,
+    DiscoveryConcurrencyController,
+)
 from openbiliclaw.soul.profile import SoulProfile
 from openbiliclaw.storage.database import Database
 
@@ -29,6 +34,33 @@ from .test_related_chain_strategy import (
 from .test_search_strategy import FakeBilibiliClient, FakeLLMService, _build_profile
 from .test_trending_strategy import FakeLLMService as FakeTrendingLLMService
 from .test_trending_strategy import FakeRankingClient
+
+
+@dataclass
+class _SlowResponse:
+    content: str
+
+
+class _SlowLLMService:
+    def __init__(self, delay: float = 0.01) -> None:
+        self.delay = delay
+        self.active_calls = 0
+        self.max_active_calls = 0
+
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        history: list[dict[str, str]] | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> object:
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        await asyncio.sleep(self.delay)
+        self.active_calls -= 1
+        return _SlowResponse('{"score": 0.88, "reason": "still relevant"}')
 
 
 @pytest.mark.asyncio
@@ -359,7 +391,92 @@ async def test_discovery_engine_compresses_repeated_topic_keys_in_pool() -> None
 
     results = await engine.discover(_build_profile(), limit=3)
 
-    assert [item.bvid for item in results] == ["BV1INTA", "BV1AI", "BV1DOC"]
+    assert results[0].bvid == "BV1INTA"
+    assert {item.bvid for item in results} == {"BV1INTA", "BV1AI", "BV1DOC"}
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_limits_explore_dominance_in_pool() -> None:
+    class _UnlimitedStrategy(_RecordingStrategy):
+        async def discover(
+            self, profile: SoulProfile, limit: int = 20
+        ) -> list[DiscoveredContent]:
+            self._started.append(self._name)
+            return list(self._result)
+
+    engine = ContentDiscoveryEngine()
+    engine.register_strategy(
+        _UnlimitedStrategy(
+            "search",
+            [
+                DiscoveredContent(
+                    bvid="BV1SEARCH",
+                    title="搜索补进",
+                    relevance_score=0.9,
+                    source_strategy="search",
+                    topic_key="搜索:1",
+                    style_key="practical_guide",
+                ),
+                DiscoveredContent(
+                    bvid="BV1TREND",
+                    title="热榜补进",
+                    relevance_score=0.89,
+                    source_strategy="trending",
+                    topic_key="热榜:1",
+                    style_key="news_brief",
+                ),
+                DiscoveredContent(
+                    bvid="BV1EXP1",
+                    title="探索一",
+                    relevance_score=0.96,
+                    source_strategy="explore",
+                    topic_key="探索:1",
+                    style_key="story_doc",
+                ),
+                DiscoveredContent(
+                    bvid="BV1EXP2",
+                    title="探索二",
+                    relevance_score=0.95,
+                    source_strategy="explore",
+                    topic_key="探索:2",
+                    style_key="deep_dive",
+                ),
+                DiscoveredContent(
+                    bvid="BV1EXP3",
+                    title="探索三",
+                    relevance_score=0.94,
+                    source_strategy="explore",
+                    topic_key="探索:3",
+                    style_key="light_chat",
+                ),
+            ],
+        )
+    )
+
+    results = await engine.discover(_build_profile(), limit=4)
+
+    picked_sources = [item.source_strategy for item in results]
+
+    assert picked_sources.count("explore") <= 2
+    assert "search" in picked_sources
+    assert "trending" in picked_sources
+
+
+def test_infer_style_key_classifies_hard_courses_and_documentaries() -> None:
+    assert (
+        ContentDiscoveryEngine.infer_style_key(
+            title="【强化学习的数学原理】课程：从零开始到透彻理解",
+            source_strategy="explore",
+        )
+        == "practical_guide"
+    )
+    assert (
+        ContentDiscoveryEngine.infer_style_key(
+            title="精密加工的磨床纪录片",
+            source_strategy="explore",
+        )
+        == "story_doc"
+    )
 
 
 @pytest.mark.asyncio
@@ -515,3 +632,30 @@ async def test_discovery_engine_skips_backfill_when_primary_results_enough() -> 
     assert backfill_started == []
     assert len(results) == 12
     assert all(item.candidate_tier == "primary" for item in results)
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_limits_llm_evaluation_concurrency() -> None:
+    llm_service = _SlowLLMService(delay=0.02)
+    engine = ContentDiscoveryEngine(
+        llm_service=llm_service,
+        concurrency=DiscoveryConcurrencyController(
+            bilibili_request_concurrency=2,
+            llm_evaluation_concurrency=2,
+        ),
+    )
+
+    items = [
+        DiscoveredContent(
+            bvid=f"BV{i}",
+            title=f"title-{i}",
+            up_name=f"up-{i}",
+            description="desc",
+            source_strategy="test",
+        )
+        for i in range(4)
+    ]
+
+    await asyncio.gather(*(engine.evaluate_content(item, _build_profile()) for item in items))
+
+    assert llm_service.max_active_calls == 2
