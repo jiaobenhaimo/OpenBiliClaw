@@ -2,24 +2,49 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from openbiliclaw.discovery.engine import (
     ContentDiscoveryEngine,
     DiscoveredContent,
+    DiscoveryConcurrencyController,
     DiscoveryStrategy,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from openbiliclaw.soul.profile import SoulProfile
 
 from openbiliclaw.llm.prompts import build_explore_domains_prompt, build_search_queries_prompt
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+
+async def _gather_bounded(
+    awaitables: list[Awaitable[_T]],
+    *,
+    runner: Callable[[Awaitable[_T]], Awaitable[_T]] | None = None,
+) -> list[object]:
+    """Gather awaitables, optionally routing them through a bounded runner."""
+    if runner is None:
+        return cast(
+            "list[object]",
+            await asyncio.gather(*awaitables, return_exceptions=True),
+        )
+    return cast(
+        "list[object]",
+        await asyncio.gather(
+            *(runner(awaitable) for awaitable in awaitables),
+            return_exceptions=True,
+        ),
+    )
 
 
 class SupportsStructuredTask(Protocol):
@@ -61,9 +86,7 @@ class SupportsMemoryManager(Protocol):
 
 
 class SupportsSeedStrategy(Protocol):
-    async def discover(
-        self, profile: SoulProfile, limit: int = 20
-    ) -> list[DiscoveredContent]: ...
+    async def discover(self, profile: SoulProfile, limit: int = 20) -> list[DiscoveredContent]: ...
 
 
 class SupportsRelatedClient(Protocol):
@@ -84,6 +107,7 @@ class SearchStrategy(DiscoveryStrategy):
 
     llm_service: SupportsStructuredTask
     bilibili_client: SupportsSearchClient
+    concurrency: DiscoveryConcurrencyController | None = None
     queries_per_run: int = 8
     page_size: int = 10
     max_pages: int = 1
@@ -92,9 +116,7 @@ class SearchStrategy(DiscoveryStrategy):
     def name(self) -> str:
         return "search"
 
-    async def discover(
-        self, profile: SoulProfile, limit: int = 20
-    ) -> list[DiscoveredContent]:
+    async def discover(self, profile: SoulProfile, limit: int = 20) -> list[DiscoveredContent]:
         """Generate search queries based on user soul and execute them.
 
         Strategy:
@@ -113,32 +135,44 @@ class SearchStrategy(DiscoveryStrategy):
         queries = await self._generate_queries(profile)
         results: list[DiscoveredContent] = []
         seen_bvids: set[str] = set()
+        request_plan = [
+            (query_index, query, page)
+            for query_index, query in enumerate(queries)
+            for page in range(1, self.max_pages + 1)
+        ]
+        runner = self.concurrency.run_bilibili if self.concurrency is not None else None
+        gathered = await _gather_bounded(
+            [
+                self.bilibili_client.search(
+                    query,
+                    page=page,
+                    page_size=self.page_size,
+                )
+                for _, query, page in request_plan
+            ],
+            runner=runner,
+        )
 
-        for query_index, query in enumerate(queries):
-            for page in range(1, self.max_pages + 1):
-                try:
-                    search_results = await self.bilibili_client.search(
-                        query,
-                        page=page,
-                        page_size=self.page_size,
-                    )
-                except Exception:
-                    logger.exception("Search query failed: %s", query)
-                    break
-
-                for item_index, item in enumerate(search_results):
-                    content = self._map_search_result(
-                        item,
-                        query=query,
-                        query_index=query_index,
-                        item_index=item_index + (page - 1) * self.page_size,
-                    )
-                    if content is None or content.bvid in seen_bvids:
-                        continue
-                    seen_bvids.add(content.bvid)
-                    results.append(content)
-                    if len(results) >= limit:
-                        return results
+        for (query_index, query, page), outcome in zip(request_plan, gathered, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.exception("Search query failed: %s", query, exc_info=outcome)
+                continue
+            if not isinstance(outcome, list):
+                continue
+            search_results = outcome
+            for item_index, item in enumerate(search_results):
+                content = self._map_search_result(
+                    item,
+                    query=query,
+                    query_index=query_index,
+                    item_index=item_index + (page - 1) * self.page_size,
+                )
+                if content is None or content.bvid in seen_bvids:
+                    continue
+                seen_bvids.add(content.bvid)
+                results.append(content)
+                if len(results) >= limit:
+                    return results
 
         return results
 
@@ -302,6 +336,7 @@ class TrendingStrategy(DiscoveryStrategy):
 
     bilibili_client: SupportsRankingClient
     llm_service: SupportsStructuredTask
+    concurrency: DiscoveryConcurrencyController | None = None
     score_threshold: float = 0.65
     max_related_rids: int = 4
     default_rids: tuple[int, ...] = (36, 188, 181, 119)
@@ -318,9 +353,7 @@ class TrendingStrategy(DiscoveryStrategy):
             score_threshold=max(0.58, round(self.score_threshold - 0.07, 2)),
         )
 
-    async def discover(
-        self, profile: SoulProfile, limit: int = 20
-    ) -> list[DiscoveredContent]:
+    async def discover(self, profile: SoulProfile, limit: int = 20) -> list[DiscoveredContent]:
         """Scan trending and ranking content, filter by soul relevance.
 
         Args:
@@ -330,29 +363,42 @@ class TrendingStrategy(DiscoveryStrategy):
         Returns:
             Discovered content list.
         """
-        evaluator = ContentDiscoveryEngine(llm_service=self.llm_service)
+        evaluator = ContentDiscoveryEngine(
+            llm_service=self.llm_service,
+            concurrency=self.concurrency,
+        )
         rids = await self._select_rids(profile)
-        results: list[DiscoveredContent] = []
+        runner = self.concurrency.run_bilibili if self.concurrency is not None else None
+        ranking_outcomes = await _gather_bounded(
+            [self.bilibili_client.get_ranking(rid) for rid in rids],
+            runner=runner,
+        )
+        candidates: list[DiscoveredContent] = []
         seen_bvids: set[str] = set()
 
-        for rid in rids:
-            try:
-                ranking_items = await self.bilibili_client.get_ranking(rid)
-            except Exception:
-                logger.exception("Trending ranking request failed: rid=%s", rid)
+        for rid, outcome in zip(rids, ranking_outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.exception("Trending ranking request failed: rid=%s", rid, exc_info=outcome)
                 continue
-
-            for item in ranking_items:
+            if not isinstance(outcome, list):
+                continue
+            for item in outcome:
                 content = self._map_ranking_item(item)
                 if content is None or content.bvid in seen_bvids:
                     continue
                 seen_bvids.add(content.bvid)
-                score = await evaluator.evaluate_content(content, profile)
-                if score < self.score_threshold:
-                    continue
-                results.append(content)
-                if len(results) >= limit:
-                    return results
+                candidates.append(content)
+
+        scores = await asyncio.gather(
+            *(evaluator.evaluate_content(content, profile) for content in candidates)
+        )
+        results: list[DiscoveredContent] = []
+        for content, score in zip(candidates, scores, strict=True):
+            if score < self.score_threshold:
+                continue
+            results.append(content)
+            if len(results) >= limit:
+                return results
 
         return results
 
@@ -440,6 +486,7 @@ class RelatedChainStrategy(DiscoveryStrategy):
     memory_manager: SupportsMemoryManager
     search_strategy: SupportsSeedStrategy | None = None
     trending_strategy: SupportsSeedStrategy | None = None
+    concurrency: DiscoveryConcurrencyController | None = None
     score_threshold: float = 0.65
     max_seeds: int = 5
     related_per_seed: int = 8
@@ -458,9 +505,7 @@ class RelatedChainStrategy(DiscoveryStrategy):
             related_per_seed=max(self.related_per_seed, 10),
         )
 
-    async def discover(
-        self, profile: SoulProfile, limit: int = 20
-    ) -> list[DiscoveredContent]:
+    async def discover(self, profile: SoulProfile, limit: int = 20) -> list[DiscoveredContent]:
         """Start from known good content and explore related chains.
 
         Args:
@@ -470,7 +515,10 @@ class RelatedChainStrategy(DiscoveryStrategy):
         Returns:
             Discovered content list.
         """
-        evaluator = ContentDiscoveryEngine(llm_service=self.llm_service)
+        evaluator = ContentDiscoveryEngine(
+            llm_service=self.llm_service,
+            concurrency=self.concurrency,
+        )
         seed_descriptors = await self._select_seed_descriptors(profile)
         if not seed_descriptors:
             return []
@@ -494,12 +542,18 @@ class RelatedChainStrategy(DiscoveryStrategy):
                 logger.exception("Related videos request failed: %s", seed_bvid)
                 continue
 
+            batch_candidates: list[DiscoveredContent] = []
             for item in related_items[: self.related_per_seed]:
                 content = self._map_related_item(item, seed_topic_key=seed_topic_key)
                 if content is None or content.bvid in seen_bvids:
                     continue
                 seen_bvids.add(content.bvid)
-                score = await evaluator.evaluate_content(content, profile)
+                batch_candidates.append(content)
+
+            scores = await asyncio.gather(
+                *(evaluator.evaluate_content(content, profile) for content in batch_candidates)
+            )
+            for content, score in zip(batch_candidates, scores, strict=True):
                 bonus = self._seed_bonus(seed_index) + self._depth_bonus(depth)
                 content.relevance_score = min(1.0, round(score + bonus, 4))
                 if content.relevance_score < self.score_threshold:
@@ -682,6 +736,7 @@ class ExploreStrategy(DiscoveryStrategy):
 
     llm_service: SupportsStructuredTask
     bilibili_client: SupportsSearchClient
+    concurrency: DiscoveryConcurrencyController | None = None
     score_threshold: float = 0.65
     queries_per_domain: int = 2
     max_domains: int = 5
@@ -700,9 +755,7 @@ class ExploreStrategy(DiscoveryStrategy):
             max_domains=max(self.max_domains, 6),
         )
 
-    async def discover(
-        self, profile: SoulProfile, limit: int = 20
-    ) -> list[DiscoveredContent]:
+    async def discover(self, profile: SoulProfile, limit: int = 20) -> list[DiscoveredContent]:
         """Deliberately explore domains the user hasn't tried.
 
         Uses the soul profile's deep needs and latent interests
@@ -719,48 +772,70 @@ class ExploreStrategy(DiscoveryStrategy):
         if not domains:
             return []
 
-        evaluator = ContentDiscoveryEngine(llm_service=self.llm_service)
-        results: list[DiscoveredContent] = []
-        seen_bvids: set[str] = set()
-
+        evaluator = ContentDiscoveryEngine(
+            llm_service=self.llm_service,
+            concurrency=self.concurrency,
+        )
+        search_strategy = SearchStrategy(
+            llm_service=self.llm_service,
+            bilibili_client=self.bilibili_client,
+            concurrency=self.concurrency,
+        )
+        runner = self.concurrency.run_bilibili if self.concurrency is not None else None
+        request_plan: list[tuple[str, float]] = []
         for domain in domains:
             novelty_level = self._clamp_novelty(domain.get("novelty_level", 0.5))
             for query in self._clean_queries(domain.get("queries", [])):
-                try:
-                    search_results = await self.bilibili_client.search(
-                        query,
-                        page=1,
-                        page_size=10,
-                    )
-                except Exception:
-                    logger.exception("Explore query failed: %s", query)
-                    continue
+                request_plan.append((query, novelty_level))
 
-                for item_index, item in enumerate(search_results):
-                    content = SearchStrategy(
-                        llm_service=self.llm_service,
-                        bilibili_client=self.bilibili_client,
-                    )._map_search_result(
-                        item,
-                        query=query,
-                        query_index=0,
-                        item_index=item_index,
-                    )
-                    if content is None or content.bvid in seen_bvids:
-                        continue
-                    seen_bvids.add(content.bvid)
-                    content.source_strategy = self.name
-                    score = await evaluator.evaluate_content(content, profile)
-                    bonus = self._exploration_bonus(
-                        novelty_level=novelty_level,
-                        openness=profile.preferences.exploration_openness,
-                    )
-                    content.relevance_score = min(1.0, round(score * 0.75 + bonus * 0.25, 4))
-                    if content.relevance_score < self.score_threshold:
-                        continue
-                    results.append(content)
-                    if len(results) >= limit:
-                        return self._sort_results(results)
+        search_outcomes = await _gather_bounded(
+            [
+                self.bilibili_client.search(
+                    query,
+                    page=1,
+                    page_size=10,
+                )
+                for query, _ in request_plan
+            ],
+            runner=runner,
+        )
+
+        candidates: list[tuple[DiscoveredContent, float]] = []
+        seen_bvids: set[str] = set()
+        for (query, novelty_level), outcome in zip(request_plan, search_outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                logger.exception("Explore query failed: %s", query, exc_info=outcome)
+                continue
+            if not isinstance(outcome, list):
+                continue
+            for item_index, item in enumerate(outcome):
+                content = search_strategy._map_search_result(
+                    item,
+                    query=query,
+                    query_index=0,
+                    item_index=item_index,
+                )
+                if content is None or content.bvid in seen_bvids:
+                    continue
+                seen_bvids.add(content.bvid)
+                content.source_strategy = self.name
+                candidates.append((content, novelty_level))
+
+        scores = await asyncio.gather(
+            *(evaluator.evaluate_content(content, profile) for content, _ in candidates)
+        )
+        results: list[DiscoveredContent] = []
+        for (content, novelty_level), score in zip(candidates, scores, strict=True):
+            bonus = self._exploration_bonus(
+                novelty_level=novelty_level,
+                openness=profile.preferences.exploration_openness,
+            )
+            content.relevance_score = min(1.0, round(score * 0.75 + bonus * 0.25, 4))
+            if content.relevance_score < self.score_threshold:
+                continue
+            results.append(content)
+            if len(results) >= limit:
+                return self._sort_results(results)
 
         return self._sort_results(results)
 

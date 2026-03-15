@@ -22,6 +22,7 @@
 | 浏览器插件 | [modules/extension.md](modules/extension.md) | `extension/` | 🔄 M8 进行中（popup 已支持推荐/画像/聊天/通知，并完成亮色 UI 刷新） |
 | CLI 命令参考 | [modules/cli.md](modules/cli.md) | `src/openbiliclaw/cli.py` | ✅ 持续更新 |
 | 配置参考 | [modules/config.md](modules/config.md) | `config.example.toml` | ✅ 持续更新 |
+| 集成适配层 | [modules/integrations.md](modules/integrations.md) | `src/openbiliclaw/integrations/` | ✅ OpenClaw adapter 已接入 |
 
 ## 开发指南
 

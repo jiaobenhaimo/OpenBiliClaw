@@ -7,9 +7,10 @@
 OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 1. **用户交互层** — Chrome 浏览器插件（行为采集 + 推荐展示 + 对话交互）
-2. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
-3. **Bilibili 接入层** — API 优先 + agent-browser 浏览器操作
-4. **多层网状记忆存储** — Core / Episodic / Semantic / Working Memory
+2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API 等对外接入边界
+3. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
+4. **Bilibili 接入层** — API 优先 + agent-browser 浏览器操作
+5. **多层网状记忆存储** — Core / Episodic / Semantic / Working Memory
 
 详见 [项目 Spec](spec.md) 中的架构图。
 
@@ -19,6 +20,12 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - 任务调度和策略决策
 - 多步推理和自省优化
 - Skill 注册、发现和调度
+
+### Integrations (`integrations/`)
+- 对外系统接入边界
+- adapter bootstrap、DTO 裁剪和异常翻译
+- 将现有 runtime / engine 能力暴露为 OpenClaw 可调用 skill
+- 提供 JSON CLI bridge，供仓库内真实 OpenClaw skill pack 调用
 
 ### User Soul Engine (`soul/`)
 - 行为数据分析和画像构建
@@ -67,3 +74,14 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
    `openbiliclaw start` 会在启动前检查数据库完整性；若健康且超过默认 24 小时未备份，会先生成一份冷备到 `data/backups/`。
 
 数据库修复不在启动路径里自动执行，高风险恢复统一通过 `openbiliclaw db-repair` 触发。
+
+## 对外集成约束
+
+当前 OpenClaw 接入遵循两条边界：
+
+1. **外部集成只通过 adapter 调用内核**
+   OpenClaw 不直接访问 SQLite、memory JSON 或内部 engine 组合细节。
+2. **skill 只是协议包装，不是业务主链**
+   学习、推荐、反馈回流仍由 `runtime/`、`soul/`、`recommendation/` 等模块负责，`integrations/openclaw/skill.py` 只负责对外暴露稳定 handler。
+3. **真实 OpenClaw 技能发现走仓库根目录 `skills/`**
+   当前仓库通过 `skills/openbiliclaw-adapter/SKILL.md` 提供真实 workspace skill，再由 skill 内部调用 adapter CLI bridge。
