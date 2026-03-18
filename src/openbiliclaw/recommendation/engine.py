@@ -412,32 +412,51 @@ class RecommendationEngine:
         topic_counts: dict[str, int] = {}
         style_counts: dict[str, int] = {}
         source_counts: dict[str, int] = {}
-        seen_styles: set[str] = set()
+        seen_sources: set[str] = set()
         per_source_cap = cls._source_cap(limit)
+        unique_source_target = min(
+            limit,
+            len(
+                {
+                    cls._normalize_topic_token(item.source_strategy)
+                    for item in ranked
+                    if cls._normalize_topic_token(item.source_strategy)
+                }
+            ),
+        )
 
         for item in ranked:
             tokens = cls._diversity_tokens(item)
             style_token = cls._style_token(item)
             source_token = cls._normalize_topic_token(item.source_strategy)
+            prioritize_new_source = (
+                bool(source_token)
+                and source_token not in seen_sources
+                and len(seen_sources) < unique_source_target
+            )
             if tokens and any(topic_counts.get(token, 0) >= per_topic_cap for token in tokens):
                 deferred.append(item)
                 continue
-            if style_token and style_counts.get(style_token, 0) >= per_style_cap:
+            if (
+                not prioritize_new_source
+                and style_token
+                and style_counts.get(style_token, 0) >= per_style_cap
+            ):
                 deferred.append(item)
                 continue
             if source_token and source_counts.get(source_token, 0) >= per_source_cap:
                 deferred.append(item)
                 continue
-            if style_token and style_token in seen_styles and len(seen_styles) < min(limit, 4):
+            if not prioritize_new_source and source_token and source_token in seen_sources:
                 deferred.append(item)
                 continue
             selected.append(item)
             for token in tokens:
                 topic_counts[token] = topic_counts.get(token, 0) + 1
             if style_token:
-                seen_styles.add(style_token)
                 style_counts[style_token] = style_counts.get(style_token, 0) + 1
             if source_token:
+                seen_sources.add(source_token)
                 source_counts[source_token] = source_counts.get(source_token, 0) + 1
             if len(selected) >= limit:
                 return selected

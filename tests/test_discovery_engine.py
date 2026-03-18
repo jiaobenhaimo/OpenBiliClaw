@@ -63,6 +63,48 @@ class _SlowLLMService:
         return _SlowResponse('{"score": 0.88, "reason": "still relevant"}')
 
 
+async def _contend_llm_semaphore(
+    controller: DiscoveryConcurrencyController,
+    *,
+    delay: float = 0.01,
+) -> None:
+    async def _job() -> str:
+        await asyncio.sleep(delay)
+        return "ok"
+
+    await asyncio.gather(
+        controller.run_llm(_job()),
+        controller.run_llm(_job()),
+    )
+
+
+async def _contend_bilibili_semaphore(
+    controller: DiscoveryConcurrencyController,
+    *,
+    delay: float = 0.01,
+) -> None:
+    async def _job() -> str:
+        await asyncio.sleep(delay)
+        return "ok"
+
+    await asyncio.gather(
+        controller.run_bilibili(_job()),
+        controller.run_bilibili(_job()),
+    )
+
+
+def test_discovery_concurrency_controller_survives_multiple_event_loops() -> None:
+    controller = DiscoveryConcurrencyController(
+        bilibili_request_concurrency=1,
+        llm_evaluation_concurrency=1,
+    )
+
+    asyncio.run(_contend_llm_semaphore(controller))
+    asyncio.run(_contend_bilibili_semaphore(controller))
+    asyncio.run(_contend_llm_semaphore(controller))
+    asyncio.run(_contend_bilibili_semaphore(controller))
+
+
 @pytest.mark.asyncio
 async def test_discovery_engine_runs_registered_search_strategy() -> None:
     from openbiliclaw.discovery.strategies.strategies import SearchStrategy
@@ -594,6 +636,87 @@ def test_infer_style_key_classifies_hard_courses_and_documentaries() -> None:
         )
         == "story_doc"
     )
+    assert (
+        ContentDiscoveryEngine.infer_style_key(
+            title="CPU芯片经显微镜放大到纳米级别",
+            source_strategy="explore",
+        )
+        == "deep_dive"
+    )
+    assert (
+        ContentDiscoveryEngine.infer_style_key(
+            title="钛制造全过程，一般人没见过，工艺难度超乎你的想象",
+            source_strategy="explore",
+        )
+        == "story_doc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_keeps_non_explore_sources_when_style_repeats() -> None:
+    class _UnlimitedStrategy(_RecordingStrategy):
+        async def discover(
+            self, profile: SoulProfile, limit: int = 20
+        ) -> list[DiscoveredContent]:
+            self._started.append(self._name)
+            return list(self._result)
+
+    engine = ContentDiscoveryEngine()
+    engine.register_strategy(
+        _UnlimitedStrategy(
+            "mixed",
+            [
+                DiscoveredContent(
+                    bvid="BVEXP1",
+                    title="探索深挖 1",
+                    relevance_score=0.99,
+                    source_strategy="explore",
+                    topic_key="探索:1",
+                    style_key="deep_dive",
+                ),
+                DiscoveredContent(
+                    bvid="BVEXP2",
+                    title="探索深挖 2",
+                    relevance_score=0.98,
+                    source_strategy="explore",
+                    topic_key="探索:2",
+                    style_key="story_doc",
+                ),
+                DiscoveredContent(
+                    bvid="BVEXP3",
+                    title="探索深挖 3",
+                    relevance_score=0.97,
+                    source_strategy="explore",
+                    topic_key="探索:3",
+                    style_key="visual_showcase",
+                ),
+                DiscoveredContent(
+                    bvid="BVSEA1",
+                    title="搜索杂谈 1",
+                    relevance_score=0.96,
+                    source_strategy="search",
+                    topic_key="搜索:1",
+                    style_key="light_chat",
+                ),
+                DiscoveredContent(
+                    bvid="BVTR1",
+                    title="热榜杂谈 1",
+                    relevance_score=0.95,
+                    source_strategy="trending",
+                    topic_key="热榜:1",
+                    style_key="light_chat",
+                ),
+            ],
+        )
+    )
+
+    results = await engine.discover(_build_profile(), limit=3)
+
+    picked_sources = [item.source_strategy for item in results]
+
+    assert "search" in picked_sources
+    assert "trending" in picked_sources
+    assert picked_sources.count("explore") <= 1
 
 
 @pytest.mark.asyncio

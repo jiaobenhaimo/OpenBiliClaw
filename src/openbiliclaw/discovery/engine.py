@@ -30,18 +30,34 @@ class DiscoveryConcurrencyController:
 
     bilibili_request_concurrency: int = 2
     llm_evaluation_concurrency: int = 2
+    _loop: asyncio.AbstractEventLoop | None = field(init=False, default=None, repr=False)
+    _bilibili_semaphore: asyncio.Semaphore | None = field(
+        init=False, default=None, repr=False
+    )
+    _llm_semaphore: asyncio.Semaphore | None = field(init=False, default=None, repr=False)
 
-    def __post_init__(self) -> None:
-        self._bilibili_semaphore = asyncio.Semaphore(max(1, self.bilibili_request_concurrency))
+    def _ensure_loop_bound(self) -> None:
+        """Recreate semaphores when the controller is used from a new event loop."""
+        loop = asyncio.get_running_loop()
+        if self._loop is loop:
+            return
+        self._loop = loop
+        self._bilibili_semaphore = asyncio.Semaphore(
+            max(1, self.bilibili_request_concurrency)
+        )
         self._llm_semaphore = asyncio.Semaphore(max(1, self.llm_evaluation_concurrency))
 
     async def run_bilibili(self, awaitable: Awaitable[_T]) -> _T:
         """Run one Bilibili-facing awaitable within the request limit."""
+        self._ensure_loop_bound()
+        assert self._bilibili_semaphore is not None
         async with self._bilibili_semaphore:
             return await awaitable
 
     async def run_llm(self, awaitable: Awaitable[_T]) -> _T:
         """Run one LLM-facing awaitable within the evaluation limit."""
+        self._ensure_loop_bound()
+        assert self._llm_semaphore is not None
         async with self._llm_semaphore:
             return await awaitable
 
@@ -416,34 +432,53 @@ class ContentDiscoveryEngine:
         selected: list[DiscoveredContent] = []
         deferred: list[DiscoveredContent] = []
         seen_topics: set[str] = set()
-        seen_styles: set[str] = set()
+        seen_sources: set[str] = set()
         style_counts: dict[str, int] = {}
         source_counts: dict[str, int] = {}
         per_style_cap = ContentDiscoveryEngine._style_cap(limit)
         per_source_cap = ContentDiscoveryEngine._source_cap(limit)
+        unique_source_target = min(
+            limit,
+            len(
+                {
+                    ContentDiscoveryEngine._normalize_topic_token(item.source_strategy)
+                    for item in results
+                    if ContentDiscoveryEngine._normalize_topic_token(item.source_strategy)
+                }
+            ),
+        )
         for item in results:
             topic_key = ContentDiscoveryEngine._topic_bucket(item)
             style_key = ContentDiscoveryEngine._style_bucket(item)
             source_key = ContentDiscoveryEngine._normalize_topic_token(item.source_strategy)
+            prioritize_new_source = (
+                bool(source_key)
+                and source_key not in seen_sources
+                and len(seen_sources) < unique_source_target
+            )
             if topic_key and topic_key in seen_topics:
                 deferred.append(item)
                 continue
-            if style_key and style_counts.get(style_key, 0) >= per_style_cap:
+            if (
+                not prioritize_new_source
+                and style_key
+                and style_counts.get(style_key, 0) >= per_style_cap
+            ):
                 deferred.append(item)
                 continue
             if source_key and source_counts.get(source_key, 0) >= per_source_cap:
                 deferred.append(item)
                 continue
-            if style_key and style_key in seen_styles and len(seen_styles) < min(limit, 5):
+            if not prioritize_new_source and source_key and source_key in seen_sources:
                 deferred.append(item)
                 continue
             selected.append(item)
             if topic_key:
                 seen_topics.add(topic_key)
             if style_key:
-                seen_styles.add(style_key)
                 style_counts[style_key] = style_counts.get(style_key, 0) + 1
             if source_key:
+                seen_sources.add(source_key)
                 source_counts[source_key] = source_counts.get(source_key, 0) + 1
             if len(selected) >= limit:
                 return selected[:limit]
@@ -532,8 +567,20 @@ class ContentDiscoveryEngine:
             "透彻理解",
             "一小时从",
         )
-        story_tokens = ("纪录片", "纪录", "故事", "电影", "小说史", "讲了一个怎样", "短片")
-        visual_tokens = ("空镜", "混剪", "素材", "视觉", "智慧城市")
+        story_tokens = (
+            "纪录片",
+            "纪录",
+            "故事",
+            "电影",
+            "小说史",
+            "讲了一个怎样",
+            "短片",
+            "全过程",
+            "制造过程",
+            "工艺难度",
+            "设计面面观",
+        )
+        visual_tokens = ("空镜", "混剪", "素材", "视觉", "厨向mad")
         deep_tokens = (
             "讲透",
             "底层逻辑",
@@ -543,6 +590,17 @@ class ContentDiscoveryEngine:
             "大模型",
             "人工智能",
             "科幻",
+            "芯片",
+            "显微镜",
+            "纳米",
+            "定理",
+            "理论",
+            "原理",
+            "解析",
+            "哲学",
+            "控制论",
+            "混沌",
+            "自组织",
         )
         if any(token in text for token in game_tokens):
             return "game_strategy"

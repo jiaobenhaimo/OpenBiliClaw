@@ -618,6 +618,42 @@ async def test_reshuffle_recommendations_limits_single_source_dominance() -> Non
 
 
 @pytest.mark.asyncio
+async def test_reshuffle_keeps_new_sources_even_when_style_repeats() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        for bvid, title, source, score, style, topic in [
+            ("BVEXP1", "探索深挖 1", "explore", 0.99, "deep_dive", "探索:1"),
+            ("BVEXP2", "探索深挖 2", "explore", 0.98, "story_doc", "探索:2"),
+            ("BVEXP3", "探索深挖 3", "explore", 0.97, "visual_showcase", "探索:3"),
+            ("BVSEA1", "搜索杂谈 1", "search", 0.96, "light_chat", "搜索:1"),
+            ("BVTR1", "热榜杂谈 1", "trending", 0.95, "light_chat", "热榜:1"),
+        ]:
+            db.cache_content(
+                bvid,
+                title=title,
+                up_name="频道",
+                source=source,
+                relevance_score=score,
+                relevance_reason=f"{title} 的基础理由。",
+                style_key=style,
+                topic_key=topic,
+            )
+        engine = RecommendationEngine(llm=_DummyLLM(), database=db)
+
+        recommendations = await engine.reshuffle_recommendations(
+            profile=_build_profile(),
+            limit=3,
+        )
+
+        picked_sources = [item.content.source_strategy for item in recommendations]
+
+        assert "search" in picked_sources
+        assert "trending" in picked_sources
+        assert picked_sources.count("explore") <= 1
+
+
+@pytest.mark.asyncio
 async def test_reshuffle_recommendations_caps_source_and_style_for_larger_batches() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")
