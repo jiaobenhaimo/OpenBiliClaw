@@ -1421,10 +1421,10 @@ def test_init_runs_history_preference_profile_and_discovery(
     assert result.exit_code == 0
     assert "初始化 OpenBiliClaw" in result.stdout
     assert "初始化摘要" in result.stdout
-    assert "1/5" in result.stdout
-    assert "3/5" in result.stdout
-    assert "4/5" in result.stdout
-    assert "5/5" in result.stdout
+    assert "1/4" in result.stdout
+    assert "2/4" in result.stdout
+    assert "3/4" in result.stdout
+    assert "4/4" in result.stdout
     assert "浏览历史" in result.stdout
     assert "发现内容数" in result.stdout
     assert fake_memory.events[0]["event_type"] == "view"

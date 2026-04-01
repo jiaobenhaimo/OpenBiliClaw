@@ -642,47 +642,57 @@ def init() -> None:
     soul_engine = _build_soul_engine()
 
     _print_page_title("初始化 OpenBiliClaw", "首次运行引导")
-    _print_section_title("1/5 拉取浏览历史")
-    history = asyncio.run(client.get_user_history(max_items=500))
+
+    # Fetch all data sources in a single event loop to avoid httpx session closure
+    async def _fetch_all_data() -> (
+        tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]
+    ):
+        hist = await client.get_user_history(max_items=500)
+
+        favs: list[dict[str, Any]] = []
+        try:
+            fav_folders = await client.get_all_favorites(
+                max_folders=20, max_items_per_folder=200,
+            )
+            for folder in fav_folders:
+                folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
+                for item in folder.items if hasattr(folder, "items") else []:
+                    favs.append({
+                        "title": getattr(item, "title", str(item)),
+                        "upper": getattr(item, "upper", ""),
+                        "folder": folder_title,
+                    })
+        except Exception as exc:
+            console.print(f"  [yellow]收藏夹拉取失败: {exc}[/yellow]")
+
+        follows: list[dict[str, Any]] = []
+        try:
+            for page in range(1, 6):
+                page_users = await client.get_following(page=page, page_size=50)
+                if not page_users:
+                    break
+                for user in page_users:
+                    follows.append({
+                        "name": getattr(user, "uname", str(user)),
+                        "sign": getattr(user, "sign", ""),
+                    })
+                if len(page_users) < 50:
+                    break
+        except Exception as exc:
+            console.print(f"  [yellow]关注列表拉取失败: {exc}[/yellow]")
+
+        return hist, favs, follows
+
+    _print_section_title("1/4 拉取数据")
+    history, favorites_data, following_data = asyncio.run(_fetch_all_data())
     if not history:
         _print_status_panel("warning", "历史为空", "当前无法从 B 站历史中生成初始画像。")
         raise typer.Exit(code=1)
-    console.print(f"  [green]{len(history)}[/green] 条浏览历史")
-
-    _print_section_title("2/5 拉取收藏夹与关注列表")
-    favorites_data: list[dict[str, Any]] = []
-    try:
-        fav_folders = asyncio.run(
-            client.get_all_favorites(max_folders=20, max_items_per_folder=200)
-        )
-        for folder in fav_folders:
-            folder_title = folder.folder.title if hasattr(folder, "folder") else "未知"
-            for item in folder.items if hasattr(folder, "items") else []:
-                favorites_data.append({
-                    "title": getattr(item, "title", str(item)),
-                    "upper": getattr(item, "upper", ""),
-                    "folder": folder_title,
-                })
-        console.print(f"  [green]{len(favorites_data)}[/green] 个收藏")
-    except Exception:
-        console.print("  [yellow]收藏夹拉取失败，跳过[/yellow]")
-
-    following_data: list[dict[str, Any]] = []
-    try:
-        for page in range(1, 6):
-            page_users = asyncio.run(client.get_following(page=page, page_size=50))
-            if not page_users:
-                break
-            for user in page_users:
-                following_data.append({
-                    "name": getattr(user, "uname", str(user)),
-                    "sign": getattr(user, "sign", ""),
-                })
-            if len(page_users) < 50:
-                break
-        console.print(f"  [green]{len(following_data)}[/green] 个关注")
-    except Exception:
-        console.print("  [yellow]关注列表拉取失败，跳过[/yellow]")
+    console.print(
+        f"  浏览历史 [green]{len(history)}[/green] 条"
+        f" / 收藏 [green]{len(favorites_data)}[/green] 个"
+        f" / 关注 [green]{len(following_data)}[/green] 人"
+    )
 
     # Build events from all data sources
     events = [_history_item_to_event(item) for item in history]
@@ -695,14 +705,23 @@ def init() -> None:
                 "upper": str(fav.get("upper", "")),
             },
         })
+    for user in following_data:
+        events.append({
+            "event_type": "follow",
+            "title": str(user.get("name", "")),
+            "metadata": {
+                "up_name": str(user.get("name", "")),
+                "sign": str(user.get("sign", "")),
+            },
+        })
     for event in events:
         asyncio.run(memory.propagate_event(event))
 
-    _print_section_title("3/5 分析偏好")
+    _print_section_title("2/4 分析偏好")
     console.print(f"  总信号量: [green]{len(events)}[/green] 条事件")
     asyncio.run(soul_engine.analyze_events(events))
 
-    _print_section_title("4/5 生成画像")
+    _print_section_title("3/4 生成画像")
     # Merge favorites and following into history for profile builder
     combined_history: list[dict[str, Any]] = list(history)
     if favorites_data:
@@ -723,7 +742,7 @@ def init() -> None:
         })
     profile_data = asyncio.run(soul_engine.build_initial_profile(combined_history))
 
-    _print_section_title("5/5 发现内容")
+    _print_section_title("4/4 发现内容")
     discovered_count = 0
     discovery_error = False
     try:

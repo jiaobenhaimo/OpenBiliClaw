@@ -32,6 +32,8 @@ _EVENT_TYPES = {
     "hover",
     "snapshot",
     "feedback",
+    "follow",
+    "share",
 }
 
 
