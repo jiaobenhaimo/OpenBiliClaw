@@ -133,8 +133,10 @@ class ExploreStrategy(DiscoveryStrategy):
                 if domain_label:
                     normalized_domain = re.sub(r"\s+", "", domain_label).lower()[:8]
                     content.topic_group = normalized_domain
-                    # Override topic_key so diversity scoring sees distinct domains
-                    content.topic_key = f"explore:{normalized_domain}"
+                    # Use query-level granularity for topic_key so both diversity
+                    # and no_echo_chamber scoring see distinct entries per query
+                    normalized_query = re.sub(r"\s+", "", query).lower()[:16]
+                    content.topic_key = f"explore:{normalized_domain}:{normalized_query}"
                 candidates.append((content, novelty_level, interest_anchored))
 
         scores = await asyncio.gather(
@@ -261,9 +263,11 @@ class ExploreStrategy(DiscoveryStrategy):
         if not anchored:
             return domains[: self.max_domains]
 
-        # Allow at least 2 truly novel (loose) domains for better diversity
-        loose_cap = max(2, self.max_domains // 2)
-        prioritized = [*anchored, *loose[:loose_cap]]
+        # Prioritize loose (novel) domains to fight echo chamber:
+        # At least 3 loose domains when available, interleave with anchored
+        loose_cap = max(3, (self.max_domains + 1) // 2)
+        anchored_cap = max(1, self.max_domains - min(loose_cap, len(loose)))
+        prioritized = [*loose[:loose_cap], *anchored[:anchored_cap]]
         return prioritized[: self.max_domains]
 
     def _is_interest_anchored(

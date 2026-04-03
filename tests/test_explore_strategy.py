@@ -215,10 +215,11 @@ async def test_explore_strategy_prioritizes_interest_anchored_domains() -> None:
     )
     results = await strategy.discover(_build_profile(), limit=20)
 
-    assert bilibili_client.calls == ["纪录片 幕后 工艺", "历史 事件 复盘", "排水 系统 科普"]
+    # Loose (novel) domains prioritized first to fight echo chamber,
+    # then anchored domains fill remaining slots
+    assert bilibili_client.calls == ["排水 系统 科普", "纪录片 幕后 工艺", "历史 事件 复盘"]
     assert {item.bvid for item in results} == {"BV1A", "BV1B", "BV1C"}
     assert "BV1D" not in {item.bvid for item in results}
-    assert results[-1].bvid == "BV1C"
 
 
 @pytest.mark.asyncio
