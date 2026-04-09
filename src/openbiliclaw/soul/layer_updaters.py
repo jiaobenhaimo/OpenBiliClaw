@@ -29,6 +29,7 @@ async def update_layer(
     memory: MemoryManager,
     preference_analyzer: PreferenceAnalyzer,
     profile_builder: ProfileBuilder,
+    embedding_service: Any | None = None,
 ) -> LayerUpdateResult:
     """Dispatch to the appropriate layer updater."""
     updater = _LAYER_UPDATERS.get(layer)
@@ -40,6 +41,7 @@ async def update_layer(
         memory=memory,
         preference_analyzer=preference_analyzer,
         profile_builder=profile_builder,
+        embedding_service=embedding_service,
     )
 
 
@@ -101,6 +103,7 @@ async def _update_interest(
     profile: OnionProfile,
     memory: MemoryManager,
     preference_analyzer: PreferenceAnalyzer,
+    embedding_service: Any | None = None,
     **_: Any,
 ) -> LayerUpdateResult:
     """Update interest layer by delegating to PreferenceAnalyzer."""
@@ -167,8 +170,48 @@ async def _update_interest(
         updated_preference.get("disliked_topics") or []
         if isinstance(updated_preference.get("disliked_topics"), list) else []
     )
-    for topic in new_dislikes - old_dislikes:
+    newly_added_dislikes = new_dislikes - old_dislikes
+    for topic in newly_added_dislikes:
         changes.append(f"新增讨厌: {topic}")
+
+    # Eagerly purge already-cached pool candidates that match the new dislikes.
+    # Without this, the candidate pool would keep disliked topics alive for
+    # another full discovery cycle — the curator's -0.10 penalty only demotes
+    # them, it doesn't remove them.
+    if newly_added_dislikes:
+        database = getattr(memory, "_database", None)
+
+        # Pass 1: fast string match (topic_key / title substring / label).
+        try:
+            purge_fn = getattr(database, "purge_pool_by_disliked_topics", None)
+            if callable(purge_fn):
+                purged = purge_fn(list(newly_added_dislikes))
+                if purged:
+                    changes.append(f"从候选池清除 {purged} 条相关内容")
+        except Exception:
+            logger.exception("Failed to purge pool candidates by new dislikes")
+
+        # Pass 2: embedding-based semantic match. Catches candidates where
+        # the literal word is absent but the topic is semantically close
+        # (e.g. "沙雕视频合集" ~ "鬼畜"). Only runs if an embedding service
+        # was provided to the pipeline.
+        if embedding_service is not None and database is not None:
+            try:
+                from openbiliclaw.soul.pool_purge import (
+                    semantic_purge_pool_by_disliked_topics,
+                )
+
+                semantic_purged = await semantic_purge_pool_by_disliked_topics(
+                    database=database,
+                    topics=list(newly_added_dislikes),
+                    embedding_service=embedding_service,
+                )
+                if semantic_purged:
+                    changes.append(
+                        f"从候选池语义清除 {semantic_purged} 条相关内容"
+                    )
+            except Exception:
+                logger.exception("Failed to semantic-purge pool candidates")
 
     # Feed speculative_interests to speculator as seed candidates
     speculative_seeds = updated_preference.get("speculative_interests")

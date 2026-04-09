@@ -62,9 +62,20 @@ class SoulEngine:
     5. Maintaining the soul-level personality portrait
     """
 
-    def __init__(self, llm: LLMProvider, memory: MemoryManager) -> None:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        memory: MemoryManager,
+        *,
+        embedding_service: Any | None = None,
+        cognition_cycle_interval_seconds: int | None = None,
+    ) -> None:
         from openbiliclaw.llm.service import LLMService
 
+        from .cognition_cycle import (
+            DEFAULT_MIN_INTERVAL_SECONDS as _DEFAULT_COG_INTERVAL,
+            CognitionCycle,
+        )
         from .pipeline import ProfileUpdatePipeline
         from .speculator import InterestSpeculator
 
@@ -81,12 +92,34 @@ class SoulEngine:
             llm_service=self._llm_service,
             data_dir=data_dir,
         )
+        self._embedding_service = embedding_service
+        self._cognition_cycle = CognitionCycle(
+            memory=memory,
+            awareness_analyzer=self._awareness_analyzer,
+            insight_analyzer=self._insight_analyzer,
+            min_interval_seconds=(
+                cognition_cycle_interval_seconds
+                if cognition_cycle_interval_seconds is not None
+                else _DEFAULT_COG_INTERVAL
+            ),
+        )
         self._pipeline = ProfileUpdatePipeline(
             memory=memory,
             preference_analyzer=self._preference_analyzer,
             profile_builder=self._profile_builder,
             speculator=self._speculator,
+            embedding_service=embedding_service,
+            cognition_cycle=self._cognition_cycle,
         )
+
+    def set_embedding_service(self, embedding_service: Any) -> None:
+        """Attach or update the embedding service after construction.
+
+        Useful when the embedding service is built later than the soul
+        engine in the bootstrap order.
+        """
+        self._embedding_service = embedding_service
+        self._pipeline.set_embedding_service(embedding_service)
 
     @property
     def pipeline(self) -> Any:

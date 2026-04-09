@@ -134,10 +134,22 @@ class ProfileBuilder:
 
     @staticmethod
     def _summarize_history(history: list[dict[str, Any]]) -> dict[str, object]:
-        titles = [str(item.get("title", "")).strip() for item in history if item.get("title")]
+        # Separate enriched items (favorites/following summaries) from regular history
+        regular_items: list[dict[str, Any]] = []
+        favorites_summary: str = ""
+        following_summary: str = ""
+        for item in history:
+            if item.get("_favorites_summary"):
+                favorites_summary = str(item["_favorites_summary"])
+            elif item.get("_following_summary"):
+                following_summary = str(item["_following_summary"])
+            else:
+                regular_items.append(item)
+
+        titles = [str(item.get("title", "")).strip() for item in regular_items if item.get("title")]
         # Extract authors from multiple possible field names
         authors: list[str] = []
-        for item in history:
+        for item in regular_items:
             author = (
                 item.get("author_name")
                 or item.get("author")
@@ -155,15 +167,8 @@ class ProfileBuilder:
         # Time-based grouping: split into recent vs older if timestamps exist
         recent_titles: list[str] = []
         older_titles: list[str] = []
-        for item in history:
-            title = str(item.get("title", "")).strip()
-            if not title:
-                continue
-            view_at = item.get("view_at") or item.get("timestamp") or 0
-            # Items in top 30% by position are "recent" (history is usually sorted newest first)
-            # This is a heuristic when timestamps aren't available
-        cutoff = max(1, len(history) * 3 // 10)
-        for i, item in enumerate(history):
+        cutoff = max(1, len(regular_items) * 3 // 10)
+        for i, item in enumerate(regular_items):
             title = str(item.get("title", "")).strip()
             if not title:
                 continue
@@ -173,7 +178,7 @@ class ProfileBuilder:
                 older_titles.append(title)
 
         summary: dict[str, object] = {
-            "count": len(history),
+            "count": len(regular_items),
             "titles": titles[:20],
             "authors": top_authors,
         }
@@ -182,6 +187,10 @@ class ProfileBuilder:
             summary["recent_hint"] = f"最近观看的 {len(recent_titles)} 个视频（前30%）代表当前活跃兴趣"
         if older_titles:
             summary["older_titles"] = older_titles[:10]
+        if favorites_summary:
+            summary["favorites_summary"] = favorites_summary
+        if following_summary:
+            summary["following_summary"] = following_summary
         return summary
 
     @staticmethod

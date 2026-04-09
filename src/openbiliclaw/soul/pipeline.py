@@ -41,6 +41,10 @@ class SignalType(Enum):
     DIALOGUE_INSIGHT = "dialogue_insight"
     DIALOGUE_TURN = "dialogue_turn"
     ACCOUNT_SNAPSHOT = "account_snapshot"
+    # Explicit click-through on a recommendation card in the extension popup.
+    # The user trusted the recommender enough to open the video — this is a
+    # strong positive signal that reveals both interest and taste.
+    RECOMMENDATION_CLICK = "recommendation_click"
 
 
 class OnionLayer(Enum):
@@ -98,9 +102,20 @@ class LayerBuffer:
     last_updated_at: str = ""
     update_count: int = 0
 
-    def is_ready(self, threshold: LayerThreshold, now: datetime) -> bool:
-        """Check if this buffer has enough signals and enough time has passed."""
-        if len(self.signals) < threshold.min_signals:
+    def is_ready(
+        self,
+        threshold: LayerThreshold,
+        now: datetime,
+        *,
+        has_strong_signal: bool = False,
+    ) -> bool:
+        """Check if this buffer has enough signals and enough time has passed.
+
+        If *has_strong_signal* is True the min_signals gate is reduced to 1,
+        so feedback and dialogue signals update the profile immediately.
+        """
+        effective_min = 1 if has_strong_signal else threshold.min_signals
+        if len(self.signals) < effective_min:
             return False
         if self.last_updated_at:
             try:
@@ -197,9 +212,15 @@ _STATIC_LAYER_MAP: dict[SignalType, frozenset[OnionLayer]] = {
     SignalType.FEEDBACK: frozenset({
         OnionLayer.INTEREST, OnionLayer.SURFACE, OnionLayer.VALUES,
     }),
-    SignalType.DIALOGUE_TURN: frozenset({OnionLayer.SURFACE}),
+    SignalType.DIALOGUE_TURN: frozenset({OnionLayer.SURFACE, OnionLayer.INTEREST}),
     SignalType.ACCOUNT_SNAPSHOT: frozenset({
         OnionLayer.INTEREST, OnionLayer.SURFACE, OnionLayer.ROLE,
+    }),
+    # Click-through reveals immediate topical preference (INTEREST) and
+    # content-style preference (SURFACE). It does not touch ROLE/VALUES —
+    # a single click is not strong enough evidence about life stage or values.
+    SignalType.RECOMMENDATION_CLICK: frozenset({
+        OnionLayer.INTEREST, OnionLayer.SURFACE,
     }),
     SignalType.DIALOGUE_INSIGHT: frozenset(),  # Dynamic, see classify_signal
 }
@@ -252,6 +273,16 @@ _BUFFERED_LAYERS = frozenset({
     OnionLayer.SURFACE, OnionLayer.INTEREST, OnionLayer.ROLE,
     OnionLayer.VALUES, OnionLayer.CORE,
 })
+
+# Signal types that carry explicit user intent.
+# For these, the min_signals gate is reduced to 1 so the profile updates immediately.
+_STRONG_SIGNAL_TYPES: frozenset[SignalType] = frozenset({
+    SignalType.FEEDBACK,
+    SignalType.DIALOGUE_TURN,
+    SignalType.DIALOGUE_INSIGHT,
+    SignalType.RECOMMENDATION_CLICK,
+})
+_STRONG_TYPE_VALUES: frozenset[str] = frozenset(st.value for st in _STRONG_SIGNAL_TYPES)
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +369,35 @@ def signals_from_account_sync(events: list[dict[str, Any]]) -> list[ProfileSigna
     for event in events:
         result.append(_make_signal(SignalType.ACCOUNT_SNAPSHOT, "account_sync", dict(event)))
     return result
+
+
+def signal_from_recommendation_click(
+    bvid: str,
+    title: str = "",
+    *,
+    recommendation_id: int | None = None,
+    topic_label: str = "",
+    up_name: str = "",
+) -> ProfileSignal:
+    """Convert a recommendation click-through into a strong profile signal.
+
+    The user actively chose to open this video from a recommendation — that
+    is a high-signal positive vote for both topic (interest) and presentation
+    style (surface). This signal bypasses the min_signals gate so the profile
+    updates immediately.
+    """
+    payload: dict[str, object] = {
+        "bvid": bvid,
+        "title": title,
+        "event_type": "recommendation_click",
+    }
+    if recommendation_id is not None:
+        payload["recommendation_id"] = recommendation_id
+    if topic_label:
+        payload["topic_label"] = topic_label
+    if up_name:
+        payload["up_name"] = up_name
+    return _make_signal(SignalType.RECOMMENDATION_CLICK, "recommendation", payload)
 
 
 # ---------------------------------------------------------------------------
@@ -427,17 +487,29 @@ class ProfileUpdatePipeline:
         profile_builder: ProfileBuilder,
         thresholds: dict[OnionLayer, LayerThreshold] | None = None,
         speculator: InterestSpeculator | None = None,
+        embedding_service: Any | None = None,
+        cognition_cycle: Any | None = None,
     ) -> None:
         self._memory = memory
         self._preference_analyzer = preference_analyzer
         self._profile_builder = profile_builder
         self._thresholds = thresholds or dict(DEFAULT_THRESHOLDS)
         self._speculator = speculator
+        self._embedding_service = embedding_service
+        self._cognition_cycle = cognition_cycle
         data_dir = getattr(memory, "_data_dir", None)
         self._buffers = load_pipeline_state(data_dir) if data_dir else {
             layer.value: LayerBuffer(layer=layer) for layer in _BUFFERED_LAYERS
         }
         self._total_ingested = 0
+
+    def set_embedding_service(self, embedding_service: Any) -> None:
+        """Attach or replace the embedding service for semantic operations."""
+        self._embedding_service = embedding_service
+
+    def set_cognition_cycle(self, cognition_cycle: Any) -> None:
+        """Attach or replace the cognition cycle runner."""
+        self._cognition_cycle = cognition_cycle
 
     # -- Public API -----------------------------------------------------------
 
@@ -477,12 +549,16 @@ class ProfileUpdatePipeline:
             ]
             self._speculator.observe(raw_events)
 
-        # Check thresholds and update ready layers
+        # Check thresholds and update ready layers.
+        # Strong-signal types (feedback, dialogue) bypass the min_signals gate.
         now = datetime.now()
         for layer in _BUFFERED_LAYERS:
             buf = self._buffers.get(layer.value)
             threshold = self._thresholds.get(layer)
-            if buf and threshold and buf.is_ready(threshold, now):
+            has_strong = buf is not None and any(
+                s.get("signal_type") in _STRONG_TYPE_VALUES for s in buf.signals
+            )
+            if buf and threshold and buf.is_ready(threshold, now, has_strong_signal=has_strong):
                 update_result = await self._update_layer(layer, buf)
                 if update_result:
                     result.layers_updated.append(update_result)
@@ -497,7 +573,10 @@ class ProfileUpdatePipeline:
         for layer in _BUFFERED_LAYERS:
             buf = self._buffers.get(layer.value)
             threshold = self._thresholds.get(layer)
-            if buf and threshold and buf.is_ready(threshold, now):
+            has_strong = buf is not None and any(
+                s.get("signal_type") in _STRONG_TYPE_VALUES for s in buf.signals
+            )
+            if buf and threshold and buf.is_ready(threshold, now, has_strong_signal=has_strong):
                 update_result = await self._update_layer(layer, buf)
                 if update_result:
                     result.layers_updated.append(update_result)
@@ -505,6 +584,28 @@ class ProfileUpdatePipeline:
         # Speculator tick: expire → promote → generate
         if self._speculator:
             await self._run_speculator_tick(result)
+
+        # Cognition cycle: throttled awareness + insight regeneration.
+        # Runs at most once per configured interval (default 12h).
+        if self._cognition_cycle is not None:
+            try:
+                cog_result = await self._cognition_cycle.run_if_due()
+                if cog_result.ran and (
+                    cog_result.awareness_generated or cog_result.insight_generated
+                ):
+                    cog_update = LayerUpdateResult(
+                        layer=OnionLayer.PORTRAIT,
+                        changed=True,
+                        changes=[
+                            f"新增观察 {cog_result.awareness_generated} 条，"
+                            f"新增洞察 {cog_result.insight_generated} 条",
+                        ],
+                        trigger="半日深度反思",
+                        timestamp=datetime.now().isoformat(),
+                    )
+                    result.layers_updated.append(cog_update)
+            except Exception:
+                logger.exception("Cognition cycle failed during pipeline tick")
 
         self._save_state()
         return result
@@ -547,6 +648,7 @@ class ProfileUpdatePipeline:
                 memory=self._memory,
                 preference_analyzer=self._preference_analyzer,
                 profile_builder=self._profile_builder,
+                embedding_service=self._embedding_service,
             )
         except Exception:
             logger.exception("Failed to update layer %s", layer.value)

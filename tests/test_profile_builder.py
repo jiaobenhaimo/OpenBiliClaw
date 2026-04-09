@@ -269,6 +269,126 @@ async def test_profile_builder_injects_old_friend_tone_in_prompt() -> None:
     assert "<active_insights>" in str(service.calls[0]["user_input"])
 
 
+def test_summarize_history_includes_favorites_and_following() -> None:
+    from openbiliclaw.soul.profile_builder import ProfileBuilder
+
+    history: list[dict[str, object]] = [
+        {"title": f"视频{i}", "author_name": f"UP主{i % 3}"} for i in range(10)
+    ]
+    history.append({
+        "title": "[收藏夹汇总]",
+        "_favorites": [{"title": "收藏A", "folder": "默认"}],
+        "_favorites_summary": "共 1 个收藏，涵盖: 默认",
+    })
+    history.append({
+        "title": "[关注列表汇总]",
+        "_following": [{"name": "大佬A"}],
+        "_following_summary": "共关注 1 人，包括: 大佬A",
+    })
+
+    summary = ProfileBuilder._summarize_history(history)  # type: ignore[arg-type]
+
+    # Enriched summaries should be present
+    assert summary["favorites_summary"] == "共 1 个收藏，涵盖: 默认"
+    assert summary["following_summary"] == "共关注 1 人，包括: 大佬A"
+    # count should exclude the two enriched items
+    assert summary["count"] == 10
+    # titles should not contain the placeholder titles
+    assert "[收藏夹汇总]" not in summary["titles"]  # type: ignore[operator]
+    assert "[关注列表汇总]" not in summary["titles"]  # type: ignore[operator]
+
+
+def test_summarize_history_works_without_enriched_items() -> None:
+    from openbiliclaw.soul.profile_builder import ProfileBuilder
+
+    history: list[dict[str, object]] = [
+        {"title": f"视频{i}", "author_name": "某UP"} for i in range(5)
+    ]
+
+    summary = ProfileBuilder._summarize_history(history)  # type: ignore[arg-type]
+
+    assert summary["count"] == 5
+    assert "favorites_summary" not in summary
+    assert "following_summary" not in summary
+
+
+@pytest.mark.asyncio
+async def test_e2e_init_favorites_following_reach_llm_prompt() -> None:
+    """Simulate the cli init flow and verify favorites/following reach the LLM prompt.
+
+    This is the end-to-end regression test for the Docker profile completeness bug:
+    cli.py builds combined_history with _favorites_summary/_following_summary,
+    ProfileBuilder._summarize_history extracts them, and they appear in the
+    user_input sent to the LLM.
+    """
+    from openbiliclaw.soul.profile_builder import ProfileBuilder
+
+    # 1. Simulate what cli.py init builds as combined_history
+    history: list[dict[str, object]] = [
+        {"title": f"视频{i}", "author_name": f"UP主{i % 5}"} for i in range(500)
+    ]
+    favorites_data = [
+        {"title": "收藏A", "folder": "游戏", "upper": "UP主0"},
+        {"title": "收藏B", "folder": "科技", "upper": "UP主1"},
+        {"title": "收藏C", "folder": "游戏", "upper": "UP主2"},
+    ]
+    following_data = [
+        {"name": "影视飓风", "sign": "科技影视"},
+        {"name": "老番茄", "sign": "游戏搞笑"},
+    ]
+
+    combined_history: list[dict[str, object]] = list(history)
+    combined_history.append({
+        "title": "[收藏夹汇总]",
+        "_favorites": favorites_data,
+        "_favorites_summary": f"共 {len(favorites_data)} 个收藏，涵盖: "
+        + ", ".join(set(f["folder"] for f in favorites_data)),
+    })
+    combined_history.append({
+        "title": "[关注列表汇总]",
+        "_following": following_data,
+        "_following_summary": f"共关注 {len(following_data)} 人，包括: "
+        + ", ".join(f["name"] for f in following_data),
+    })
+
+    # 2. Build profile with a fake LLM that captures the prompt
+    service = FakeStructuredService(
+        json.dumps(
+            {
+                "personality_portrait": "x" * 200,
+                "core_traits": ["好奇"],
+                "cognitive_style": ["偏好深度"],
+                "motivational_drivers": ["探索"],
+                "current_phase": "当前阶段描述",
+                "values": ["成长"],
+                "life_stage": "学生",
+                "deep_needs": ["被理解"],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    await ProfileBuilder(service).build(
+        history=combined_history,  # type: ignore[arg-type]
+        preference={"interests": []},
+        awareness_notes=[],
+        active_insights=[],
+    )
+
+    # 3. Verify the LLM prompt contains favorites and following summaries
+    user_input = str(service.calls[0]["user_input"])
+    assert "共 3 个收藏" in user_input, "favorites_summary missing from LLM prompt"
+    assert "影视飓风" in user_input, "following names missing from LLM prompt"
+    assert "老番茄" in user_input, "following names missing from LLM prompt"
+
+    # 4. Verify placeholder titles are NOT in the prompt's history_summary titles
+    assert "[收藏夹汇总]" not in user_input, "placeholder title leaked into prompt"
+    assert "[关注列表汇总]" not in user_input, "placeholder title leaked into prompt"
+
+    # 5. Verify history count is correct (500, not 502)
+    assert '"count": 500' in user_input, "history count should exclude enriched items"
+
+
 def test_profile_builder_requires_core_memory_task_service() -> None:
     from openbiliclaw.soul.profile_builder import ProfileBuilder
 
