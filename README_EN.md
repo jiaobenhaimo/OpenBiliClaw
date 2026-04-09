@@ -1,0 +1,166 @@
+<div align="center">
+
+# 🦀 OpenBiliClaw
+
+**Your personal AI companion for Bilibili — discovers content you'll love but can't find on your own**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+
+English | [中文](README.md)
+
+</div>
+
+---
+
+OpenBiliClaw is an open-source AI Agent for personalized content recommendation on [Bilibili](https://www.bilibili.com). It's not a cold recommendation algorithm — it's like a friend who truly understands you: who you are, why you enjoy certain content, and proactively discovers things on Bilibili that you'd love but could never find on your own.
+
+## ✨ Key Features
+
+- 🧠 **Deep User Understanding** — Five-layer memory architecture (Event → Preference → Awareness → Insight → Soul) that understands you from a psychological perspective, inferring MBTI, cognitive style, and deep needs
+- 🔍 **Multi-Strategy Discovery** — Four coordinated strategies (Search, Trending, Related Chain, Cross-domain Explore) with fair quota distribution, working like an expert Bilibili user finding content for you
+- 🔮 **Speculative Interest Exploration** — Uses psychological bridging logic to proactively guess domains you might enjoy but have never explored, breaking the filter bubble
+- 💬 **Warm Recommendations** — Not "because you watched similar videos", but friend-like explanations of why you'd enjoy something
+- 🎯 **Smart Diversity** — Source balancing, topic deduplication, cross-domain coverage — every recommendation batch brings surprises
+- 🔄 **Continuous Learning** — Socratic dialogue + behavioral analysis, constantly deepening its understanding of you
+- 🔧 **Skill System** — Extensible skill architecture supporting custom discovery strategies
+- 🔒 **Privacy First** — All data and computation stays local
+
+## 🏛️ Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Chrome Extension                   │
+│         (Behavior Collection · Recs · Chat)          │
+└────────────────────────┬────────────────────────────┘
+                         │ REST API
+┌────────────────────────▼────────────────────────────┐
+│                 Agent Orchestration                   │
+│            (Skill System · Dialogue Mgmt)            │
+├─────────┬──────────┬───────────┬────────────────────┤
+│  Soul   │ Memory   │ Discovery │  Recommendation    │
+│  Engine │ System   │  Engine   │     Engine          │
+│(Profile)│(5-Layer) │(4-Strategy│   (Expression)     │
+├─────────┴──────────┴───────────┴────────────────────┤
+│        LLM Adapters  ·  Bilibili API  ·  SQLite     │
+└─────────────────────────────────────────────────────┘
+```
+
+### Content Discovery Engine
+
+Four strategies work in coordination, each with independent API quota:
+
+| Strategy | Description | Quota |
+|----------|-------------|-------|
+| **Search** | Generates queries from interests + speculative interests | Fair share |
+| **Trending** | Popular content from multiple Bilibili ranking categories | Fair share |
+| **Related Chain** | Expands from seed videos along recommendation chains | Fair share |
+| **Explore** | LLM-driven cross-domain exploration | Fair share |
+
+Results go through multi-dimensional diversity selection: per-source reservation → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations.
+
+### Soul Engine
+
+Infers from user behavior:
+- **Personality Portrait** — Natural language user profile
+- **MBTI** — Four dimensions with confidence scores
+- **Cognitive Style** — Information processing preferences
+- **Deep Needs** — Psychological content drivers
+- **Speculative Interests** — System-predicted potential interest domains (e.g., molecular gastronomy, architectural aesthetics, watchmaking...)
+
+## 🏗️ Project Structure
+
+```
+OpenBiliClaw/
+├── src/openbiliclaw/          # Python backend core
+│   ├── agent/                 # Agent orchestration & Skill system
+│   ├── soul/                  # Soul Engine (profiling · MBTI · interest speculation)
+│   ├── memory/                # Multi-layer memory system
+│   ├── discovery/             # Discovery engine (4 strategies · quota balancing · diversity)
+│   ├── recommendation/        # Recommendation & expression engine
+│   ├── bilibili/              # Bilibili API layer (WBI signing · rate control)
+│   ├── llm/                   # Multi-model LLM adapters
+│   └── storage/               # Data storage layer
+├── extension/                 # Chrome browser extension
+├── skills/                    # Built-in Skill definitions
+├── docs/                      # Documentation
+└── tests/                     # Tests (497+)
+```
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Clone
+git clone https://github.com/OpenBiliClaw/OpenBiliClaw.git
+cd OpenBiliClaw
+
+# Using uv (recommended)
+uv sync
+
+# Or using pip
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### Configuration
+
+```bash
+# Copy config template
+cp config.example.toml config.toml
+
+# Edit config (set LLM API keys, etc.)
+vim config.toml
+```
+
+### Run
+
+```bash
+# One-command init (fetch history · build profile · first discovery)
+openbiliclaw init
+
+# Manual content discovery
+openbiliclaw discover
+
+# Get recommendations
+openbiliclaw recommend
+
+# View user profile
+openbiliclaw profile
+```
+
+### Docker Deployment
+
+> 📦 Docker deployment is also supported. See the [Docker Deployment Guide](docs/docker-deployment.md) for details.
+
+## 🛠️ Tech Stack
+
+| Module | Technology |
+|--------|-----------|
+| Backend | Python 3.11+ |
+| Browser Extension | TypeScript + Chrome Extension (Manifest V3) |
+| LLM | Multi-model support (Gemini / DeepSeek / OpenAI / Claude / Local models) |
+| Bilibili API | Custom client (WBI signing · v_voucher auto-recovery · rate control) |
+| Storage | SQLite + Embedding vector index |
+| Agent Framework | Lightweight custom framework |
+
+## 📖 Documentation
+
+- [Documentation Hub](docs/index.md) — All-in-one entry point
+- [Project Spec](docs/spec.md) — Complete design & planning
+- [Architecture](docs/architecture.md) — System architecture deep dive
+- [Memory Design](docs/memory-design.md) — Multi-layer memory architecture
+- [Discovery Engine](docs/modules/discovery.md) — 4-strategy discovery + diversity selection
+- [Soul Engine](docs/modules/soul.md) — Deep profiling + MBTI + interest speculation
+- [CLI Reference](docs/modules/cli.md) · [Config Reference](docs/modules/config.md)
+- [Contributing Guide](docs/contributing.md)
+
+## 🤝 Contributing
+
+Contributions welcome! See the [Contributing Guide](docs/contributing.md) to get started.
+
+## 📄 License
+
+[MIT](LICENSE)
