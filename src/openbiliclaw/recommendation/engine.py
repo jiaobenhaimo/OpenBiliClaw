@@ -13,7 +13,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from openbiliclaw.recommendation.curator import PoolCurator
 from openbiliclaw.soul.tone import build_tone_profile
@@ -287,15 +287,33 @@ class RecommendationEngine:
         *,
         profile: SoulProfile,
         limit: int = 20,
+        delight_limit: int = 30,
         batch_size: int = 8,
     ) -> int:
         """Precompute fast-path popup copy for fresh pool candidates.
 
         Uses batched LLM calls: one call generates expressions for up to
         ``batch_size`` items, reducing API calls by ~8x.
+
+        Also runs delight scoring on un-scored candidates and generates
+        delight reasons for items above the delight threshold.
+
+        Args:
+            profile: Current soul profile used for personalisation.
+            limit: Max pool candidates to generate expression copy for.
+            delight_limit: Max un-scored candidates to evaluate for delight
+                potential. Independent from ``limit`` because delight scans
+                the whole pool for missing scores, not just items that need
+                expression copy — sharing one limit would starve delight
+                scoring whenever the copy queue is short.
+            batch_size: Batch size for expression generation LLM calls.
         """
         candidates = self._load_pool_candidates_needing_copy(limit=max(0, limit))
         if not candidates:
+            # Even when no expression work is needed, still run delight scoring
+            await self.precompute_delight_scores(
+                profile=profile, limit=delight_limit,
+            )
             return 0
 
         completed = 0
@@ -303,7 +321,152 @@ class RecommendationEngine:
             batch = candidates[batch_start:batch_start + batch_size]
             count = await self._precompute_batch(batch, profile)
             completed += count
+
+        # Run delight scoring after expression precompute
+        await self.precompute_delight_scores(
+            profile=profile, limit=delight_limit,
+        )
         return completed
+
+    async def precompute_delight_scores(
+        self,
+        *,
+        profile: SoulProfile,
+        limit: int = 30,
+    ) -> int:
+        """Score un-scored pool candidates for proactive delight potential.
+
+        Items scoring above the delight threshold get LLM-generated
+        delight_reason explanations persisted to the database.
+        """
+        from openbiliclaw.recommendation.delight import DelightScorer
+
+        scorer = DelightScorer(
+            embedding_service=self._embedding_service,
+            database=self._database,
+        )
+
+        rows = self._database.get_pool_candidates_needing_delight_score(limit=limit)
+        if not rows:
+            return 0
+
+        candidates = self._rows_to_discovered(rows)
+
+        prefs = getattr(profile, "preferences", None)
+        exploration_openness = float(getattr(prefs, "exploration_openness", 0.5))
+        effective_threshold = scorer.effective_threshold(exploration_openness)
+
+        scored_count = 0
+        for candidate in candidates:
+            try:
+                delight_score, signals, reason_stub = await scorer.score(
+                    candidate, profile,
+                )
+            except Exception:
+                logger.exception(
+                    "Delight scoring failed for %s, writing score=0.01 to skip next cycle",
+                    candidate.bvid,
+                )
+                delight_score = 0.01  # Mark as scored (non-zero) to skip next time
+                self._database.update_delight_score(
+                    candidate.bvid,
+                    delight_score=delight_score,
+                    delight_reason="",
+                    delight_hook="",
+                )
+                continue
+
+            if delight_score < effective_threshold:
+                # Below threshold — persist score but no reason
+                self._database.update_delight_score(
+                    candidate.bvid,
+                    delight_score=max(0.01, delight_score),
+                    delight_reason="",
+                    delight_hook="",
+                )
+                scored_count += 1
+                continue
+
+            # Above threshold — generate delight reason via LLM
+            delight_reason, delight_hook = await self._generate_delight_reason(
+                candidate, profile, reason_stub,
+            )
+            self._database.update_delight_score(
+                candidate.bvid,
+                delight_score=delight_score,
+                delight_reason=delight_reason,
+                delight_hook=delight_hook,
+            )
+            scored_count += 1
+            logger.info(
+                "Delight candidate found: %s (score=%.3f, hook=%s)",
+                candidate.bvid, delight_score, delight_hook,
+            )
+
+        return scored_count
+
+    async def _generate_delight_reason(
+        self,
+        content: DiscoveredContent,
+        profile: SoulProfile,
+        reason_stub: str,
+    ) -> tuple[str, str]:
+        """Generate a delight reason explanation via LLM.
+
+        Returns:
+            (delight_reason, delight_hook) tuple.
+        """
+        from openbiliclaw.llm.prompts import build_delight_reason_prompt
+        from openbiliclaw.soul.tone import build_tone_profile
+
+        tone_profile = build_tone_profile(
+            profile=profile,
+            preference_summary={
+                "exploration_openness": profile.preferences.exploration_openness,
+            },
+            recent_feedback=[],
+        )
+        messages = build_delight_reason_prompt(
+            profile_summary={
+                "personality_portrait": profile.personality_portrait,
+                "core_traits": profile.core_traits[:5],
+                "deep_needs": profile.deep_needs[:5],
+                "active_insights": [
+                    {
+                        "hypothesis": str(getattr(ins, "hypothesis", "")),
+                        "confidence": float(getattr(ins, "confidence", 0.5)),
+                    }
+                    for ins in getattr(profile, "active_insights", [])[:5]
+                ],
+            },
+            content_summary={
+                "title": content.title,
+                "up_name": content.up_name,
+                "description": (content.description or "")[:300],
+                "source_strategy": content.source_strategy,
+                "relevance_score": content.relevance_score,
+            },
+            reason_stub=reason_stub,
+            tone_profile=tone_profile,
+        )
+        try:
+            response = await self._llm.complete_structured_task(
+                system_instruction=messages[0]["content"],
+                user_input=messages[1]["content"],
+            )
+            payload = json.loads(response.content.strip())
+            if not isinstance(payload, dict):
+                raise ValueError("Delight reason response must be a JSON object.")
+            reason = str(payload.get("delight_reason", "")).strip()
+            hook = str(payload.get("delight_hook", "")).strip()
+            if reason and hook:
+                return (reason, hook)
+        except Exception:
+            logger.exception(
+                "Failed to generate delight reason for %s", content.bvid,
+            )
+        # Fallback
+        return ("这条可能会给你意外的惊喜", "意外惊喜")
 
     async def _precompute_batch(
         self,
@@ -947,10 +1110,17 @@ class RecommendationEngine:
     def _source_cap(limit: int) -> int:
         return 2 if limit <= 5 else 3
 
-    def _load_pool_candidates(self, *, limit: int) -> list[DiscoveredContent]:
+    def _rows_to_discovered(
+        self,
+        rows: list[dict[str, Any]],
+    ) -> list[DiscoveredContent]:
+        """Map raw DB pool rows into ``DiscoveredContent`` dataclasses.
+
+        Single source of truth for the row → dataclass field mapping so
+        adding/removing a pool column only needs one edit.
+        """
         from openbiliclaw.discovery.engine import DiscoveredContent
 
-        rows = self._database.get_pool_candidates(limit=limit)
         return [
             DiscoveredContent(
                 bvid=str(row.get("bvid", "")),
@@ -977,37 +1147,14 @@ class RecommendationEngine:
             )
             for row in rows
         ]
+
+    def _load_pool_candidates(self, *, limit: int) -> list[DiscoveredContent]:
+        rows = self._database.get_pool_candidates(limit=limit)
+        return self._rows_to_discovered(rows)
 
     def _load_pool_candidates_needing_copy(self, *, limit: int) -> list[DiscoveredContent]:
-        from openbiliclaw.discovery.engine import DiscoveredContent
-
         rows = self._database.get_pool_candidates_needing_copy(limit=limit)
-        return [
-            DiscoveredContent(
-                bvid=str(row.get("bvid", "")),
-                title=str(row.get("title", "")),
-                up_name=str(row.get("up_name", "")),
-                up_mid=int(row.get("up_mid", 0) or 0),
-                duration=int(row.get("duration", 0) or 0),
-                description=str(row.get("description", "")),
-                cover_url=str(row.get("cover_url", "")),
-                view_count=int(row.get("view_count", 0) or 0),
-                like_count=int(row.get("like_count", 0) or 0),
-                tags=self._parse_tags(row.get("tags", "[]")),
-                topic_key=str(row.get("topic_key", "")),
-                topic_group=str(row.get("topic_group", "")),
-                style_key=str(row.get("style_key", "")),
-                source_strategy=str(row.get("source", "")),
-                relevance_score=float(row.get("relevance_score", 0.0) or 0.0),
-                relevance_reason=str(row.get("relevance_reason", "")),
-                pool_expression=str(row.get("pool_expression", "")),
-                pool_topic_label=str(row.get("pool_topic_label", "")),
-                candidate_tier=str(row.get("candidate_tier", "primary") or "primary"),
-                discovered_at=str(row.get("discovered_at", "")),
-                last_scored_at=str(row.get("last_scored_at", "")),
-            )
-            for row in rows
-        ]
+        return self._rows_to_discovered(rows)
 
     def _exclude_recently_viewed(
         self,
