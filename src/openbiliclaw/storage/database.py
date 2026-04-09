@@ -125,6 +125,7 @@ class Database:
         self._ensure_content_cache_relevance_columns()
         self._ensure_content_cache_topic_columns()
         self._ensure_content_cache_pool_copy_columns()
+        self._ensure_content_cache_delight_columns()
 
         # Set schema version
         self._conn.execute(
@@ -630,6 +631,106 @@ class Database:
         )
         return cursor.rowcount
 
+    def purge_pool_by_disliked_topics(self, topics: list[str]) -> int:
+        """Mark fresh pool candidates matching new dislikes as purged.
+
+        Matching strategy (all case-sensitive at the SQLite layer — Chinese
+        text makes case folding moot and ASCII matching still works):
+          1. Exact match on ``topic_key``, ``topic_group``, or ``pool_topic_label``
+          2. Substring match on ``title`` or ``pool_topic_label``
+             (catches "鬼畜合集" when the dislike is "鬼畜")
+
+        Only candidates in ``pool_status = 'fresh'`` are affected — historical
+        rows (``shown``, ``feedbacked``, ``stale``) are preserved for audit.
+        Already-recommended items are skipped so the recommendation history
+        remains intact.
+
+        Args:
+            topics: Newly added disliked topics (stripped, non-empty strings).
+
+        Returns:
+            Number of rows transitioned to ``pool_status = 'purged_by_dislike'``.
+        """
+        clean = [t.strip() for t in topics if t and t.strip()]
+        if not clean:
+            return 0
+
+        # Build the match clause dynamically. Use parameterized queries
+        # throughout — topic values may contain SQL metacharacters that must
+        # not be interpolated into the query string.
+        exact_placeholders = ", ".join("?" for _ in clean)
+        like_conditions = " OR ".join(
+            "title LIKE ? OR pool_topic_label LIKE ?" for _ in clean
+        )
+
+        params: list[Any] = []
+        params.extend(clean)  # topic_key IN (...)
+        params.extend(clean)  # topic_group IN (...)
+        params.extend(clean)  # pool_topic_label IN (...)
+        for topic in clean:
+            like = f"%{topic}%"
+            params.append(like)  # title LIKE ?
+            params.append(like)  # pool_topic_label LIKE ?
+
+        cursor = self._execute_write(
+            f"""
+            UPDATE content_cache
+            SET pool_status = 'purged_by_dislike'
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND NOT EXISTS (
+                SELECT 1 FROM recommendations AS r WHERE r.bvid = content_cache.bvid
+              )
+              AND (
+                topic_key IN ({exact_placeholders})
+                OR topic_group IN ({exact_placeholders})
+                OR pool_topic_label IN ({exact_placeholders})
+                OR {like_conditions}
+              )
+            """,
+            params,
+        )
+        return cursor.rowcount
+
+    def get_fresh_pool_candidates_for_purge_scan(
+        self, *, limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return fresh, not-yet-recommended pool candidates for a semantic scan.
+
+        Returns only the fields needed for embedding-based matching:
+        bvid, title, topic_key, topic_group, pool_topic_label.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT bvid, title, topic_key, topic_group, pool_topic_label
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND NOT EXISTS (
+                SELECT 1 FROM recommendations AS r WHERE r.bvid = content_cache.bvid
+              )
+            ORDER BY discovered_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def mark_pool_items_purged_by_dislike(self, bvids: list[str]) -> int:
+        """Mark specified bvids as purged_by_dislike (only if currently fresh)."""
+        clean = [b.strip() for b in bvids if b and b.strip()]
+        if not clean:
+            return 0
+        placeholders = ", ".join("?" for _ in clean)
+        cursor = self._execute_write(
+            f"""
+            UPDATE content_cache
+            SET pool_status = 'purged_by_dislike'
+            WHERE bvid IN ({placeholders})
+              AND COALESCE(pool_status, 'fresh') = 'fresh'
+            """,
+            clean,
+        )
+        return cursor.rowcount
+
     def get_pool_candidates_needing_copy(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return fresh pool candidates missing precomputed popup copy."""
         cursor = self.conn.execute(
@@ -1010,6 +1111,124 @@ class Database:
             self.conn.execute(
                 f"ALTER TABLE content_cache ADD COLUMN {column_name} {column_type}"
             )
+
+    def _ensure_content_cache_delight_columns(self) -> None:
+        """Backfill proactive delight scoring fields for existing databases."""
+        existing_columns = {
+            str(row["name"])
+            for row in self.conn.execute("PRAGMA table_info(content_cache)").fetchall()
+        }
+        required_columns = {
+            "delight_score": "REAL DEFAULT 0.0",
+            "delight_reason": "TEXT DEFAULT ''",
+            "delight_hook": "TEXT DEFAULT ''",
+            "delight_notified": "INTEGER DEFAULT 0",
+            "delight_notified_at": "TIMESTAMP",
+        }
+        for column_name, column_type in required_columns.items():
+            if column_name in existing_columns:
+                continue
+            self.conn.execute(
+                f"ALTER TABLE content_cache ADD COLUMN {column_name} {column_type}"
+            )
+
+    def get_delight_candidate(
+        self,
+        *,
+        min_delight_score: float = 0.85,
+    ) -> dict[str, Any] | None:
+        """Return one un-notified pool item with the highest delight_score."""
+        cursor = self.conn.execute(
+            """
+            SELECT *
+            FROM content_cache
+            WHERE COALESCE(delight_score, 0.0) >= ?
+              AND COALESCE(delight_notified, 0) = 0
+              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
+            ORDER BY delight_score DESC, relevance_score DESC, discovered_at DESC
+            LIMIT 1
+            """,
+            (min_delight_score,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def mark_delight_notified(self, bvid: str) -> None:
+        """Mark one content item as delight-notified."""
+        self._execute_write(
+            """
+            UPDATE content_cache
+            SET delight_notified = 1,
+                delight_notified_at = CURRENT_TIMESTAMP
+            WHERE bvid = ?
+            """,
+            (bvid,),
+        )
+
+    def update_delight_score(
+        self,
+        bvid: str,
+        *,
+        delight_score: float,
+        delight_reason: str,
+        delight_hook: str = "",
+    ) -> None:
+        """Persist the computed delight score and explanation for a pool item."""
+        self._execute_write(
+            """
+            UPDATE content_cache
+            SET delight_score = ?,
+                delight_reason = ?,
+                delight_hook = ?
+            WHERE bvid = ?
+            """,
+            (delight_score, delight_reason, delight_hook, bvid),
+        )
+
+    def count_delight_candidates(
+        self,
+        *,
+        min_delight_score: float = 0.85,
+    ) -> int:
+        """Return the number of un-notified delight candidates."""
+        cursor = self.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM content_cache
+            WHERE COALESCE(delight_score, 0.0) >= ?
+              AND COALESCE(delight_notified, 0) = 0
+              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
+            """,
+            (min_delight_score,),
+        )
+        row = cursor.fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    def get_pool_candidates_needing_delight_score(
+        self,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Return fresh pool candidates that haven't been delight-scored yet."""
+        cursor = self.conn.execute(
+            """
+            SELECT *
+            FROM content_cache
+            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
+              AND COALESCE(feedback_type, '') != 'dislike'
+              AND COALESCE(delight_score, 0.0) = 0.0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM recommendations AS r
+                WHERE r.bvid = content_cache.bvid
+              )
+            ORDER BY relevance_score DESC, discovered_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod
     def _extract_bvid_from_view_event(row: dict[str, Any]) -> str:

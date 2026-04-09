@@ -208,6 +208,212 @@ class TestDatabase:
 
             db.close()
 
+    def test_purge_pool_by_disliked_topics_matches_topic_key_exact(self) -> None:
+        """An exact topic_key match should flip pool_status to purged_by_dislike."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1ghost",
+                title="鬼畜全明星2026",
+                up_name="鬼畜区UP",
+                source="trending",
+                topic_key="鬼畜",
+                pool_topic_label="娱乐",
+            )
+            db.cache_content(
+                "BV2ai",
+                title="深度学习与Transformer",
+                up_name="AI教程君",
+                source="search",
+                topic_key="AI技术",
+                pool_topic_label="知识",
+            )
+
+            purged = db.purge_pool_by_disliked_topics(["鬼畜"])
+            assert purged == 1
+
+            rows = db.get_cached_content(limit=10)
+            by_bvid = {row["bvid"]: row for row in rows}
+            assert by_bvid["BV1ghost"]["pool_status"] == "purged_by_dislike"
+            assert by_bvid["BV2ai"]["pool_status"] == "fresh"
+
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_matches_title_substring(self) -> None:
+        """Substring match on title should catch videos even when topic_key differs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            # Topic_key is "年终总结" but title contains "鬼畜"
+            db.cache_content(
+                "BV1mix",
+                title="跨年鬼畜合集",
+                up_name="混剪UP",
+                source="explore",
+                topic_key="年终总结",
+                pool_topic_label="娱乐",
+            )
+            db.cache_content(
+                "BV2pure",
+                title="纯知识内容",
+                up_name="知识UP",
+                source="search",
+                topic_key="科技",
+                pool_topic_label="知识",
+            )
+
+            purged = db.purge_pool_by_disliked_topics(["鬼畜"])
+            assert purged == 1
+
+            rows = db.get_cached_content(limit=10)
+            by_bvid = {row["bvid"]: row for row in rows}
+            assert by_bvid["BV1mix"]["pool_status"] == "purged_by_dislike"
+            assert by_bvid["BV2pure"]["pool_status"] == "fresh"
+
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_matches_pool_topic_label(self) -> None:
+        """Matching on pool_topic_label should also purge candidates."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1label",
+                title="各种奇葩挑战",
+                up_name="挑战UP",
+                source="trending",
+                topic_key="挑战视频",
+                pool_topic_label="整蛊",
+            )
+
+            purged = db.purge_pool_by_disliked_topics(["整蛊"])
+            assert purged == 1
+
+            rows = db.get_cached_content(limit=10)
+            assert rows[0]["pool_status"] == "purged_by_dislike"
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_skips_already_recommended(self) -> None:
+        """Items already in the recommendations table must not be purged."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1kept",
+                title="鬼畜经典",
+                up_name="怀旧UP",
+                source="trending",
+                topic_key="鬼畜",
+                pool_topic_label="娱乐",
+            )
+            # Insert a recommendation row pointing at this bvid
+            db.conn.execute(
+                """
+                INSERT INTO recommendations (
+                    bvid, expression, topic, confidence, created_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                ("BV1kept", "这条鬼畜应该对味", "娱乐", 0.9),
+            )
+            db.conn.commit()
+
+            purged = db.purge_pool_by_disliked_topics(["鬼畜"])
+            assert purged == 0
+
+            rows = db.get_cached_content(limit=10)
+            assert rows[0]["pool_status"] == "fresh", (
+                "Already-recommended items must be preserved for history audit"
+            )
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_skips_non_fresh_items(self) -> None:
+        """Only fresh candidates should be touched; shown/stale are preserved."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1shown",
+                title="鬼畜视频",
+                up_name="鬼畜UP",
+                source="trending",
+                topic_key="鬼畜",
+            )
+            db.cache_content(
+                "BV2fresh",
+                title="另一个鬼畜视频",
+                up_name="鬼畜UP",
+                source="trending",
+                topic_key="鬼畜",
+            )
+            db.conn.execute(
+                "UPDATE content_cache SET pool_status='shown' WHERE bvid = ?",
+                ("BV1shown",),
+            )
+            db.conn.commit()
+
+            purged = db.purge_pool_by_disliked_topics(["鬼畜"])
+            assert purged == 1, "Only the fresh item should be purged"
+
+            rows = {row["bvid"]: row for row in db.get_cached_content(limit=10)}
+            assert rows["BV1shown"]["pool_status"] == "shown"
+            assert rows["BV2fresh"]["pool_status"] == "purged_by_dislike"
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_empty_list_is_noop(self) -> None:
+        """Empty or whitespace-only topics should do nothing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+            db.cache_content("BV1", title="test", up_name="u", source="s", topic_key="k")
+            assert db.purge_pool_by_disliked_topics([]) == 0
+            assert db.purge_pool_by_disliked_topics(["", "  "]) == 0
+            rows = db.get_cached_content(limit=10)
+            assert rows[0]["pool_status"] == "fresh"
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_multi_topic_batch(self) -> None:
+        """Multiple topics in one call should purge any matching item."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content("BV1", title="鬼畜A", up_name="u", source="s", topic_key="鬼畜")
+            db.cache_content("BV2", title="恐怖片B", up_name="u", source="s", topic_key="恐怖")
+            db.cache_content("BV3", title="AI教程", up_name="u", source="s", topic_key="科技")
+
+            purged = db.purge_pool_by_disliked_topics(["鬼畜", "恐怖"])
+            assert purged == 2
+
+            rows = {row["bvid"]: row for row in db.get_cached_content(limit=10)}
+            assert rows["BV1"]["pool_status"] == "purged_by_dislike"
+            assert rows["BV2"]["pool_status"] == "purged_by_dislike"
+            assert rows["BV3"]["pool_status"] == "fresh"
+            db.close()
+
+    def test_purge_pool_by_disliked_topics_matches_topic_group(self) -> None:
+        """topic_group column should be matched too (added by migration)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Database(Path(tmpdir) / "test.db")
+            db.initialize()
+
+            db.cache_content(
+                "BV1",
+                title="某内容",
+                up_name="u",
+                source="s",
+                topic_key="子话题",
+                topic_group="大分类",
+            )
+            purged = db.purge_pool_by_disliked_topics(["大分类"])
+            assert purged == 1
+            db.close()
+
     def test_query_events_supports_type_keyword_and_time_filters(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db = Database(Path(tmpdir) / "test.db")

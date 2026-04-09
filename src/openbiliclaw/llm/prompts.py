@@ -484,12 +484,16 @@ def build_search_queries_prompt(
 2. query 必须是适合 B 站搜索的短词或短组合，不要写成长句。
 3. 优先组合"兴趣主题 + 内容风格/需求"，避免过泛的词。
 4. queries 数量控制在 5 到 10 个。
-5. 用户画像中包含 interest_domains（一级兴趣域）和 interests（二级具体兴趣）。
+5. 用户画像中包含 interest_domains（一级兴趣域）、interests（二级具体兴趣）
+   以及可选的 speculative_interests（猜测兴趣——系统推测用户可能感兴趣但尚未确认的方向）。
    你必须保证 query 主题分布均匀，避免集中在用户最强兴趣上：
-   - 约 30% query 使用一级兴趣域名称搜索（如 "科技 深度" "游戏 机制"），
+   - 约 25% query 使用一级兴趣域名称搜索（如 "科技 深度" "游戏 机制"），
      目的是发现该域中用户尚未接触的新内容。
-   - 约 30% query 使用二级兴趣的细分角度（非直接重复现有词条）。
-   - 约 40% query 跨域探索（桥接用户认知风格或深层需求到相邻但陌生的领域）。
+   - 约 25% query 使用二级兴趣的细分角度（非直接重复现有词条）。
+   - 约 25% query 基于 speculative_interests 生成（如果画像中存在），
+     直接用猜测兴趣的 domain 作为核心主题词组合搜索。
+     若不存在 speculative_interests 则将此配额分配给跨域探索。
+   - 约 25% query 跨域探索（桥接用户认知风格或深层需求到相邻但陌生的领域）。
    跨域 query 不需要完全脱离用户认知范围，但核心主题词必须不在用户任何
    interest_domains / interests 中出现。
 6. 所有 query 的核心主题词（第一个实词）必须两两不同，
@@ -870,6 +874,62 @@ def build_batch_expression_prompt(
     ]
 
 
+def build_delight_reason_prompt(
+    *,
+    profile_summary: dict[str, object],
+    content_summary: dict[str, object],
+    reason_stub: str,
+    tone_profile: ToneProfile | None,
+) -> list[dict[str, str]]:
+    """Build a prompt for generating a delight reason explanation.
+
+    The output should feel like a friend saying "I know you don't usually
+    watch this kind of thing, but I genuinely think this one would hit
+    different for you because..."
+    """
+    system_prompt = (
+        "<task>\n"
+        "你要为一条「主动惊喜推荐」写一段解释，说明为什么这条内容可能会让这个人意外地喜欢。\n"
+        "这不是普通推荐——这是你作为一个真正懂他的朋友，主动跑来说「这条你一定要看」。\n"
+        "</task>\n\n"
+        "<rules>\n"
+        "1. 输出必须是严格 JSON，包含 delight_reason 和 delight_hook。\n"
+        "2. delight_reason（80-200字中文口语）要解释：\n"
+        "   - 这条内容为什么会让这个人产生「意外的共鸣」或「惊喜的发现」\n"
+        "   - 必须引用用户画像中的至少一个深层需求、洞察假说或认知偏好\n"
+        "   - 语气比普通推荐更亲密、更有把握，像「我知道你不常看这类，但这条真的会戳到你」\n"
+        "3. delight_hook（2-4个中文字）是一个短标签，用于UI徽章展示。\n"
+        "   例如：深层共鸣、跨域惊喜、灵感碰撞、意外契合、隐藏需求\n"
+        "4. 不要用：强烈推荐、值得一看、高质量、信息密度等套话。\n"
+        "5. reason_stub 提供了打分信号的线索，用它来组织 delight_reason 的叙事方向。\n"
+        "</rules>\n\n"
+        "<output_schema>\n"
+        "{\n"
+        '  "delight_reason": "你之前聊到过想搞明白...",\n'
+        '  "delight_hook": "深层共鸣"\n'
+        "}\n"
+        "</output_schema>"
+    )
+    system_prompt = "\n\n".join([system_prompt, _render_tone_profile(tone_profile)])
+    user_prompt = "\n\n".join(
+        [
+            "<profile_summary>",
+            json.dumps(profile_summary, ensure_ascii=False, indent=2),
+            "</profile_summary>",
+            "<content_summary>",
+            json.dumps(content_summary, ensure_ascii=False, indent=2),
+            "</content_summary>",
+            "<reason_stub>",
+            reason_stub,
+            "</reason_stub>",
+        ]
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def build_explore_domains_prompt(
     *,
     profile_summary: dict[str, object],
@@ -883,19 +943,22 @@ def build_explore_domains_prompt(
 <rules>
 1. 输出必须是严格 JSON，不要附带解释。
 2. domain 不能直接重复用户现有高权重兴趣词。
-3. domains 至少覆盖 3 类不同内容方向，
+3. 如果画像中存在 speculative_interests（猜测兴趣），至少 1 个 domain 应基于
+   猜测兴趣的 domain 展开（可以细化或拓展，但核心方向要对应）。
+   这些是系统推测用户可能喜欢但尚未确认的方向，优先用于探索。
+4. domains 至少覆盖 3 类不同内容方向，
    例如知识解释、现实观察、审美体验、人物叙事、技术机制、社会文化；
    不要都落在同一个抽象轴上。
-4. 同一母题的换皮变体最多只能保留 1 个，
-   例如“博弈论 / 桌游机制 / 纳什均衡 / 策略模型”这类本质相同的方向不能同时出现。
-5. why_it_might_resonate 必须先说明它对应用户的哪种认知需求、
+5. 同一母题的换皮变体最多只能保留 1 个，
+   例如”博弈论 / 桌游机制 / 纳什均衡 / 策略模型”这类本质相同的方向不能同时出现。
+6. why_it_might_resonate 必须先说明它对应用户的哪种认知需求、
    信息处理偏好或内在驱动力，再解释这种陌生内容为什么仍然可能打动这个人。
-6. novelty_level 范围必须在 0.65 到 0.95 之间；至少 3 个 domain 的 novelty_level ≥ 0.75。
-7. 每个 domain 生成 2 到 3 个适合 B 站搜索的 query，query 必须具体到可直接搜索的细分话题，禁止只写宽泛大词。
-8. 不同 domain 的 query 之间词汇重叠率要低；每个 query 必须包含一个内容形式词
+7. novelty_level 范围必须在 0.65 到 0.95 之间；至少 3 个 domain 的 novelty_level ≥ 0.75。
+8. 每个 domain 生成 2 到 3 个适合 B 站搜索的 query，query 必须具体到可直接搜索的细分话题，禁止只写宽泛大词。
+9. 不同 domain 的 query 之间词汇重叠率要低；每个 query 必须包含一个内容形式词
    （如 纪录片/深度讲解/科普/测评/vlog/解说/手书/混剪），
    不同 domain 必须使用不同的形式词，以保证搜索结果在风格维度上有差异。
-9. 反信息茧房：不同 domain 的 query 第一个实词（核心主题词）必须两两不同，
+10. 反信息茧房：不同 domain 的 query 第一个实词（核心主题词）必须两两不同，
    禁止仅替换修饰词而保留相同核心名词；至少 4 个 domain 必须来自用户
    已有兴趣领域之外的全新方向（即用户画像中未出现的领域）。
    不同 domain 之间不得共享同一个上位概念（如"城市空间"与"城市规划"共享"城市"）。
