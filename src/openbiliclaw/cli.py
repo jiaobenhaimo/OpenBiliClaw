@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
@@ -914,19 +915,94 @@ def profile() -> None:
         raise typer.Exit(code=1) from exc
 
     _print_page_title("用户画像概览", "当前稳定画像")
-    _print_section_title("人格描述")
-    console.print(profile_data.personality_portrait or "（暂无）")
-    _print_section_title("核心特质")
-    traits_text = "、".join(profile_data.core_traits) if profile_data.core_traits else "（暂无）"
-    console.print(f"  {traits_text}")
-    _print_section_title("价值观")
-    values_text = "、".join(profile_data.values) if profile_data.values else "（暂无）"
-    console.print(f"  {values_text}")
-    _print_section_title("当前阶段")
-    console.print(f"  {profile_data.life_stage or '（暂无）'}")
-    _print_section_title("深层需求")
-    needs_text = "、".join(profile_data.deep_needs) if profile_data.deep_needs else "（暂无）"
-    console.print(f"  {needs_text}")
+
+    # -- 人格描述 ------------------------------------------------------------
+    # Split by Chinese sentence terminators so Rich wraps at sentence boundaries
+    # instead of mid-word CJK cell breaks. Each sentence starts on its own line.
+    portrait_raw = profile_data.personality_portrait or "（暂无）"
+    sentences = [s.strip() for s in re.split(r"(?<=[。！？])", portrait_raw) if s.strip()]
+    portrait_body = "\n".join(sentences) if sentences else portrait_raw
+    console.print(
+        Panel(
+            portrait_body,
+            title="[bold cyan]人格描述[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2),
+        )
+    )
+
+    # -- 核心层 Core ---------------------------------------------------------
+    core = profile_data.core
+    _print_section_title("核心层 Core")
+    core_traits = "、".join(core.core_traits) if core.core_traits else "（暂无）"
+    deep_needs = "、".join(core.deep_needs) if core.deep_needs else "（暂无）"
+    console.print(f"  [bold]人格特质[/bold]：{core_traits}")
+    console.print(f"  [bold]深层需求[/bold]：{deep_needs}")
+    mbti = core.mbti
+    if mbti.type:
+        dim_parts = [
+            f"{key}={dim.pole}({dim.strength:.2f})"
+            for key, dim in mbti.dimensions.items()
+        ]
+        dims_text = "  ".join(dim_parts) if dim_parts else ""
+        console.print(
+            f"  [bold]MBTI[/bold]：{mbti.type}  置信度 {mbti.confidence:.0%}"
+            + (f"  [dim]{dims_text}[/dim]" if dims_text else "")
+        )
+
+    # -- 价值层 Values -------------------------------------------------------
+    values_layer = profile_data.values_layer
+    _print_section_title("价值层 Values")
+    values_text = "、".join(values_layer.values) if values_layer.values else "（暂无）"
+    drivers_text = (
+        "、".join(values_layer.motivational_drivers)
+        if values_layer.motivational_drivers
+        else "（暂无）"
+    )
+    console.print(f"  [bold]价值观[/bold]：{values_text}")
+    console.print(f"  [bold]动机驱动[/bold]：{drivers_text}")
+
+    # -- 角色层 Role ---------------------------------------------------------
+    role = profile_data.role
+    _print_section_title("角色层 Role")
+    console.print(f"  [bold]生活阶段[/bold]：{role.life_stage or '（暂无）'}")
+    console.print(f"  [bold]当前阶段[/bold]：{role.current_phase or '（暂无）'}")
+
+    # -- 兴趣层 Interest -----------------------------------------------------
+    interest = profile_data.interest
+    _print_section_title("兴趣层 Interest")
+    if interest.likes:
+        sorted_likes = sorted(interest.likes, key=lambda d: d.weight, reverse=True)
+        for dom in sorted_likes[:10]:
+            spec_names = [s.name for s in dom.specifics[:5]]
+            spec_text = "、".join(spec_names)
+            suffix = f"  [dim]{spec_text}[/dim]" if spec_text else ""
+            console.print(
+                f"  ▸ [bold]{dom.domain}[/bold] [dim]({dom.weight:.2f})[/dim]{suffix}"
+            )
+    else:
+        console.print("  （暂无兴趣领域）")
+    if interest.dislikes:
+        dislike_text = "、".join(d.domain for d in interest.dislikes[:8])
+        console.print(f"  [dim]讨厌领域：{dislike_text}[/dim]")
+    if interest.favorite_up_users:
+        up_total = len(interest.favorite_up_users)
+        preview = "、".join(interest.favorite_up_users[:6])
+        suffix = f"（共{up_total}位）" if up_total > 6 else ""
+        console.print(f"  [bold]常看UP主[/bold]：{preview}{suffix}")
+
+    # -- 表层 Surface --------------------------------------------------------
+    surface = profile_data.surface
+    _print_section_title("表层 Surface")
+    if surface.cognitive_style:
+        for idx, item in enumerate(surface.cognitive_style, start=1):
+            console.print(f"  {idx}. {item}")
+    else:
+        console.print("  认知风格：（暂无）")
+    console.print(
+        f"  [bold]深度偏好[/bold]：{surface.style.depth_preference:.2f}"
+        f"   [bold]探索开放度[/bold]：{surface.exploration_openness:.2f}"
+    )
 
 
 @app.command()

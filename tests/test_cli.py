@@ -13,7 +13,14 @@ from openbiliclaw.bilibili.browser import BrowserCommandError
 from openbiliclaw.cli import app
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
-from openbiliclaw.soul.profile import PreferenceLayer, SoulProfile
+from openbiliclaw.soul.profile import (
+    CoreLayer,
+    OnionProfile,
+    PreferenceLayer,
+    RoleLayer,
+    SoulProfile,
+    ValuesLayer,
+)
 
 
 def _write_example_config(project_root: Path) -> None:
@@ -783,17 +790,24 @@ def test_profile_command_shows_saved_profile(
     monkeypatch: pytest.MonkeyPatch, runner: CliRunner
 ) -> None:
     class FakeSoulEngine:
-        async def get_profile(self) -> SoulProfile:
-            return SoulProfile(
+        async def get_profile(self) -> OnionProfile:
+            return OnionProfile(
                 personality_portrait=(
                     "这是一个偏爱深度内容、会主动寻找原理解释、决策比较克制的人。"
                     * 6
                 ),
-                core_traits=["理性", "谨慎", "自驱"],
-                values=["成长", "真实"],
-                life_stage="稳定积累阶段",
-                deep_needs=["被理解", "持续成长"],
-                preferences=PreferenceLayer(),
+                core=CoreLayer(
+                    core_traits=["理性", "谨慎", "自驱"],
+                    deep_needs=["被理解", "持续成长"],
+                ),
+                values_layer=ValuesLayer(
+                    values=["成长", "真实"],
+                    motivational_drivers=["自我完善"],
+                ),
+                role=RoleLayer(
+                    life_stage="稳定积累阶段",
+                    current_phase="专注深耕",
+                ),
             )
 
     monkeypatch.setattr(cli_module, "_build_soul_engine", lambda: FakeSoulEngine(), raising=False)
@@ -804,9 +818,11 @@ def test_profile_command_shows_saved_profile(
     assert result.exit_code == 0
     assert "用户画像概览" in result.stdout
     assert "人格描述" in result.stdout
-    assert "核心特质" in result.stdout
+    assert "核心层" in result.stdout
     assert "理性" in result.stdout
     assert "稳定积累阶段" in result.stdout
+    assert "专注深耕" in result.stdout
+    assert "自我完善" in result.stdout
 
 
 def test_profile_command_prints_init_guidance_when_missing_profile(
