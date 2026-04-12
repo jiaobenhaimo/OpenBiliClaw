@@ -43,13 +43,22 @@ user_profiles/
 memory_store/
 behavior_logs/
 
-# Environment variables
+# Secrets / local config (never commit)
+config.toml
 .env
 .env.local
 
 # Node (Chrome extension)
 extension/node_modules/
 extension/dist/
+extension/openbiliclaw-extension-*.zip
+
+# Raw screenshots (canonical copies live in docs/images/)
+screenshot/
+
+# Local artifacts / debug output
+output/
+.codex/
 
 # Logs
 *.log
