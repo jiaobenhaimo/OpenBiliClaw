@@ -37,15 +37,14 @@ jobs:
         run: python packaging/build.py --clean --archive-version "${{ github.ref_name }}"
 
       - name: Verify release archive
+        shell: python
         run: |
-          python - <<'PY'
           from pathlib import Path
 
           archives = sorted(Path("dist/release").glob("*.zip"))
           if len(archives) != 1:
               raise SystemExit(f"expected exactly one release archive, got: {archives}")
           print(f"verified release archive: {archives[0]}")
-          PY
 
       - name: Upload packaged backend artifact
         uses: actions/upload-artifact@v4
@@ -68,8 +67,8 @@ jobs:
           merge-multiple: true
 
       - name: Verify downloaded artifacts
+        shell: python
         run: |
-          python - <<'PY'
           from pathlib import Path
 
           archives = sorted(Path("release-artifacts").glob("*.zip"))
@@ -77,7 +76,6 @@ jobs:
               raise SystemExit(f"expected at least two backend archives, got: {archives}")
           for archive in archives:
               print(f"release artifact ready: {archive}")
-          PY
 
       - name: Create GitHub Release and upload packages
         uses: softprops/action-gh-release@v2
