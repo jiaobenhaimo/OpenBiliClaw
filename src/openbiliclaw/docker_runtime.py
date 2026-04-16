@@ -85,16 +85,39 @@ def _merge_no_proxy(current: str) -> str:
     return ",".join(entries)
 
 
+def is_running_in_container(env: MutableMapping[str, str] | None = None) -> bool:
+    """Return whether this process is running inside a container runtime.
+
+    The host-proxy auto-detection below is only safe inside a container,
+    where ``host.docker.internal`` really does point to the host and is
+    the only route to the internet.  On a native macOS developer
+    machine Docker Desktop still resolves that name — so without this
+    gate the bootstrapper routes every outbound request through the
+    host's Clash proxy, which breaks Bilibili calls (and anything else
+    that doesn't tolerate Clash's routing).
+    """
+    resolved_env = env if env is not None else os.environ
+    if str(resolved_env.get("OPENBILICLAW_IN_CONTAINER", "")).strip():
+        return True
+    # Docker writes /.dockerenv; Podman writes /run/.containerenv.
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
 def bootstrap_runtime_environment(
     env: MutableMapping[str, str],
     *,
     can_connect: Callable[[str, int, float], bool] = can_connect,
+    in_container: Callable[[MutableMapping[str, str]], bool] = is_running_in_container,
 ) -> None:
     """Bootstrap the isolated runtime root and optional proxy env in-place."""
     runtime_root = Path(env.get("OPENBILICLAW_PROJECT_ROOT", _DEFAULT_RUNTIME_ROOT))
     template_path = Path(env.get("OPENBILICLAW_CONFIG_TEMPLATE", _DEFAULT_TEMPLATE_PATH))
     bootstrap_runtime_root(runtime_root=runtime_root, template_path=template_path)
     env.setdefault("OPENBILICLAW_PROJECT_ROOT", str(runtime_root))
+
+    # Proxy auto-detection is ONLY safe inside container runtimes.
+    if not in_container(env):
+        return
 
     proxy_host = env.get("OPENBILICLAW_PROXY_HOST", _DEFAULT_PROXY_HOST).strip()
     proxy_port = int(env.get("OPENBILICLAW_PROXY_PORT", str(_DEFAULT_PROXY_PORT)))
