@@ -248,13 +248,7 @@ Contributions welcome! See the [Contributing Guide](docs/contributing.md) to get
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/#whiteguo233/OpenBiliClaw&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=whiteguo233/OpenBiliClaw&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=whiteguo233/OpenBiliClaw&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=whiteguo233/OpenBiliClaw&type=Date" />
-  </picture>
-</a>
+[![Star History Chart](https://api.star-history.com/svg?repos=whiteguo233/OpenBiliClaw&type=Date)](https://www.star-history.com/#whiteguo233/OpenBiliClaw&Date)
 
 ## 📄 License
 
