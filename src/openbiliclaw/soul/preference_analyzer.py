@@ -42,6 +42,9 @@ class PreferenceAnalyzer:
     registry: SupportsCoreMemoryTask
     decay_factor_per_week: float = 0.9
     min_interest_weight: float = 0.05
+    # EMA blend: 0.3 * latest batch + 0.7 * prior mix. Chosen so one-off
+    # cross-platform batches don't erase long-running bilibili history.
+    source_mix_blend_alpha: float = 0.3
 
     def __post_init__(self) -> None:
         if not hasattr(self.registry, "complete_structured_task"):
@@ -72,6 +75,10 @@ class PreferenceAnalyzer:
         raw_preference = self._parse_response(response.content)
         normalized = self._normalize_preference(raw_preference)
         merged = self.merge_preferences(existing_preference, normalized, now=datetime.now())
+        merged["source_platform_mix"] = self._merge_source_mix(
+            existing_preference.get("source_platform_mix"),
+            self.compute_source_platform_mix(events),
+        )
         # Preserve cognitive_style from LLM output (not modeled in PreferenceLayer)
         raw_cs = raw_preference.get("cognitive_style")
         if isinstance(raw_cs, list):
@@ -81,6 +88,63 @@ class PreferenceAnalyzer:
             if isinstance(existing_cs, list):
                 merged["cognitive_style"] = existing_cs
         return merged
+
+    @staticmethod
+    def compute_source_platform_mix(
+        events: list[dict[str, object]],
+    ) -> dict[str, float]:
+        """Count events by source_platform and return a normalized share dict."""
+        counts: dict[str, int] = {}
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            metadata = event.get("metadata")
+            source = ""
+            if isinstance(metadata, dict):
+                raw = metadata.get("source_platform")
+                if isinstance(raw, str):
+                    source = raw.strip()
+            if not source:
+                # Events predating source_platform are always bilibili.
+                source = "bilibili"
+            counts[source] = counts.get(source, 0) + 1
+        total = sum(counts.values())
+        if total == 0:
+            return {}
+        return {name: count / total for name, count in counts.items()}
+
+    def _merge_source_mix(
+        self,
+        existing: object,
+        batch: dict[str, float],
+    ) -> dict[str, float]:
+        """Blend the existing persisted mix with the latest batch using EMA."""
+        prior: dict[str, float] = {}
+        if isinstance(existing, dict):
+            for key, value in existing.items():
+                if isinstance(key, str) and key:
+                    try:
+                        prior[key] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+        if not batch:
+            return prior
+        if not prior:
+            return dict(batch)
+        alpha = max(0.0, min(1.0, self.source_mix_blend_alpha))
+        keys = set(prior) | set(batch)
+        blended = {
+            key: alpha * batch.get(key, 0.0) + (1.0 - alpha) * prior.get(key, 0.0)
+            for key in keys
+        }
+        total = sum(blended.values())
+        if total <= 0:
+            return {}
+        return {
+            key: round(value / total, 4)
+            for key, value in blended.items()
+            if value > 0
+        }
 
     def merge_preferences(
         self,
