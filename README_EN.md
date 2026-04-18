@@ -2,7 +2,7 @@
 
 # 🦀 OpenBiliClaw
 
-**An open-source alternative to Bilibili's recommendation algorithm — runs on your machine, understands only you**
+**A cross-platform personalized content discovery engine — runs on your machine, understands only you**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
