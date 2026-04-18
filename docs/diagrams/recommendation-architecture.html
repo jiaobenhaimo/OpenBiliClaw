@@ -170,7 +170,7 @@
   <text x="420" y="850" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="600">list[Recommendation]</text>
 
   <!-- ── Side: Curator detail ── -->
-  <rect x="800" y="375" width="300" height="245" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="1.5"/>
+  <rect x="800" y="375" width="300" height="300" rx="10" fill="#1e1028" stroke="#f778ba" stroke-width="1.5"/>
   <text x="950" y="398" text-anchor="middle" fill="#f778ba" font-size="13" font-weight="700">PoolCurator (推荐侧管家)</text>
   <line x1="815" y1="408" x2="1085" y2="408" stroke="#30363d" stroke-width="1"/>
   <text x="950" y="428" text-anchor="middle" fill="#c9d1d9" font-size="10" font-weight="600">ScoringWeights (frozen)</text>
@@ -187,6 +187,11 @@
   <text x="950" y="588" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">FeedbackSignals</text>
   <text x="950" y="605" text-anchor="middle" fill="#8b949e" font-size="9">dislike UP &rarr; -0.20 / dislike topic &rarr; -0.10 / like &rarr; +0.05</text>
 
+  <line x1="815" y1="615" x2="1085" y2="615" stroke="#30363d" stroke-width="1"/>
+  <text x="950" y="632" text-anchor="middle" fill="#da3633" font-size="10" font-weight="600">多源混排 (NEW)</text>
+  <text x="950" y="648" text-anchor="middle" fill="#8b949e" font-size="9">source_monotony 惩罚同源连续推荐</text>
+  <text x="950" y="663" text-anchor="middle" fill="#8b949e" font-size="9">bilibili + xiaohongshu 按 platform_mix 交叉</text>
+
   <line x1="800" y1="475" x2="712" y2="440" stroke="#f778ba" stroke-width="1" stroke-dasharray="4,3"/>
 
   <!-- ── Side: Wrapper methods ── -->
@@ -200,8 +205,8 @@
 
   <!-- Summary -->
   <rect x="30" y="875" width="1080" height="35" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
-  <text x="60" y="897" fill="#f778ba" font-size="11" font-weight="600">关键变化:</text>
-  <text x="140" y="897" fill="#8b949e" font-size="11">排序不再使用 Discovery 的 relevance_score，而是 PoolCurator 的 rec_score (考虑时效/疲劳/反馈/探索)</text>
+  <text x="60" y="892" fill="#f778ba" font-size="11" font-weight="600">关键变化:</text>
+  <text x="140" y="892" fill="#8b949e" font-size="10">排序用 PoolCurator rec_score (时效/疲劳/反馈/探索) · 多源内容混排 (bilibili + xiaohongshu) · LLM prompt 源感知</text>
 </svg>
 </div>
 
