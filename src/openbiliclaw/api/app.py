@@ -935,6 +935,42 @@ def create_app(
             raise HTTPException(status_code=404, detail="Recipe not found")
         return {"ok": True, "id": recipe_id}
 
+    # ── XHS observed URL ingestion endpoint ─────────────────────────
+
+    _XHS_MAX_URLS_PER_BATCH = 50
+    _XHS_URL_PREFIX = "https://www.xiaohongshu.com/"
+
+    @app.post("/api/sources/xhs/observed-urls")
+    def ingest_xhs_observed_urls(payload: dict[str, Any]) -> dict[str, Any]:
+        """Accept xhs note URLs the extension passively collected.
+
+        Body: ``{ "urls": [...], "page_type": "search" | "profile" | ... }``
+        """
+        from fastapi import HTTPException
+
+        urls_raw: list[str] = payload.get("urls", [])
+        page_type: str = payload.get("page_type", "other")
+
+        if not urls_raw:
+            raise HTTPException(status_code=422, detail="urls must be a non-empty list")
+        if len(urls_raw) > _XHS_MAX_URLS_PER_BATCH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many URLs (max {_XHS_MAX_URLS_PER_BATCH})",
+            )
+
+        # Filter to valid xhs note URLs
+        valid_urls = [
+            u for u in urls_raw
+            if isinstance(u, str) and u.startswith(_XHS_URL_PREFIX) and "/explore/" in u
+        ]
+
+        if not valid_urls:
+            return {"ok": True, "accepted": 0}
+
+        accepted = ctx.database.save_xhs_observed_urls(valid_urls, page_type)
+        return {"ok": True, "accepted": accepted}
+
     # ── Configuration management endpoints ──────────────────────────
 
     def _config_to_response(

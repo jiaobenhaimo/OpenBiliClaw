@@ -115,7 +115,9 @@ class Database:
     def initialize(self) -> None:
         """Initialize the database and run migrations if needed."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), timeout=30.0)
+        self._conn = sqlite3.connect(
+            str(self._db_path), timeout=30.0, check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout = 30000")
@@ -128,6 +130,7 @@ class Database:
         self._ensure_content_cache_delight_columns()
         self._ensure_content_cache_multisource_columns()
         self._ensure_source_recipes_table()
+        self._ensure_xhs_observed_urls_table()
 
         # Set schema version
         self._conn.execute(
@@ -1199,6 +1202,41 @@ class Database:
                 last_fetched_at TIMESTAMP
             );
         """)
+
+    def _ensure_xhs_observed_urls_table(self) -> None:
+        """Create the xhs_observed_urls table if it does not exist."""
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS xhs_observed_urls (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                url         TEXT NOT NULL,
+                page_type   TEXT NOT NULL DEFAULT 'other',
+                observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                enriched    INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_xhs_observed_urls_url
+                ON xhs_observed_urls (url);
+        """)
+
+    # ── XHS observed URL ingest ───────────────────────────────────
+
+    def save_xhs_observed_urls(
+        self, urls: list[str], page_type: str
+    ) -> int:
+        """Insert observed xhs URLs, skipping duplicates. Returns count inserted."""
+        inserted = 0
+        for url in urls:
+            # Skip if we've already seen this URL
+            existing = self.conn.execute(
+                "SELECT 1 FROM xhs_observed_urls WHERE url = ?", (url,)
+            ).fetchone()
+            if existing:
+                continue
+            self._execute_write(
+                "INSERT INTO xhs_observed_urls (url, page_type) VALUES (?, ?)",
+                (url, page_type),
+            )
+            inserted += 1
+        return inserted
 
     # ── Source recipe CRUD ──────────────────────────────────────────
 
