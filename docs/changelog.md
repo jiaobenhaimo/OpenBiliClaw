@@ -6,6 +6,38 @@
 
 ## M8: 插件后端 API（进行中）
 
+### 源无关内容分类：XHS 内容入库后自动 LLM 分类
+
+- **症状**：XHS 内容通过 `_cache_xhs_notes` 直接入库 `content_cache`，绕过了 bilibili 内容必经的 LLM 评估管线，导致 `style_key` / `topic_group` / `relevance_score` 全为空。推荐多样性机制崩溃——所有 XHS 条目共享 `"unknown"` style 和单一 `"xhs-extension-task"` topic token，一轮 10 条推荐完全被 XHS 占满
+- **修复**（推荐模块为源无关统一入口）：
+  1. `recommendation/engine.py::classify_pool_backlog()`：检测 pool 中 `style_key` 和 `topic_group` 都为空的条目，调用与 bilibili 同款的 LLM batch 评估 prompt 打上分类标签，结果回写 DB。分类后所有内容只有内容特征（style / topic / score），没有来源标签
+  2. `api/app.py::ingest_xhs_observed_urls`：入库后 `asyncio.create_task(_classify_new_pool_items())` 触发后台分类
+  3. `asyncio.Lock` 防止并发重复 LLM 调用；失败标 0.01 分防无限重试
+  4. `topic_key` 自动从 `topic_group` 回填，确保 `_diversity_tokens` 有可用 token
+- **DB 保护**：`cache_content()` upsert 的 `topic_key` / `topic_group` / `style_key` / `relevance_score` / `relevance_reason` 改用 `COALESCE(NULLIF(excluded.xxx, ''), existing, '')` 保护——extension 重发同一笔记不会覆盖已分类字段
+- **`author_name` 字段修复**：加入 INSERT 子句 + schema 迁移，之前这个字段写了等于没写
+- **`_diversity_tokens` 修复**：移除 `source_strategy` 作为 topic fallback（根因），改用作者名 + 标题中文/英文关键词
+- **共享定义**：提取 `VALID_STYLE_KEYS` 到 `discovery/engine.py` 模块级，`DiscoveredContent.to_cache_kwargs()` 作为唯一的字段映射源，消除 3 处 `_VALID_STYLES` + 2 处 20-kwarg `cache_content` 展开的重复
+- **空标题过滤**：extension 端 `extractNoteMetadataFromAnchor` 空标题返回 null；后端 `_cache_xhs_notes` 跳过空标题笔记。DB 历史 46 条空标题行标为 suppressed
+- **测试**：新增 12 个测试（5 个 unit + 7 个 E2E multi-source diversity suite）——覆盖分类流程、重复入库保护、混排多样性、并发锁、失败重试、空标题过滤
+
+### 兴趣探针用户确认交互
+
+- **产品形态**：WebSocket 推送 `interest.probe` 事件 → Chrome 系统通知"阿B 想确认：你对「XX」感兴趣吗？" → 点击打开 popup Profile tab → 卡片显示猜测方向 + 具体子方向 chips → 三按钮交互：「是」「不是」「多聊聊」
+- **后端**：
+  - `speculator.py::user_confirm_speculation(domain)`：直接 promote 到正式兴趣
+  - `speculator.py::user_reject_speculation(domain)`：30 天冷却期
+  - `api/app.py::POST /api/interest-probes/respond`：接收 confirm / reject / chat，chat 转发到 dialogue 引擎
+- **去重冷却**：`_PROBE_COOLDOWN_HOURS = 4`，同一 domain 4 小时内只推一次，记录在 `discovery_runtime_state["probed_domains"]`
+- **推送时机修复**：`_publish_delight_if_available` 和 `_publish_interest_probe_if_available` 从 `_run_refresh_plan` 内部移到 `run_forever` 主循环——之前 pool 满时不触发 refresh plan，推送永远到不了客户端
+- **插件前端**：`popup.js::renderProbeCard()` + `handleProbeResponse()` + CSS 动画；service-worker 处理 `interest.probe` 事件创建 Chrome 通知
+- **CLI**：`openbiliclaw delight`（手动查看惊喜推荐候选）+ `openbiliclaw probe`（手动列出猜测方向、序号确认/拒绝）
+
+### 架构图更新
+
+- **discovery-architecture.html**：新增 XHS 入库 + `classify_pool_backlog` 并行通道；`pool_target_count` 300→600；refresh loop 加 `_tick_xhs_producer`
+- **recommendation-architecture.html**：serve() 管道加 `classify_pool_backlog` 安全网步骤；diversity 描述更新为源无关；解耦架构图加 XHS Extension 作为第二数据源经"源无关门"入池；模块边界加 `VALID_STYLE_KEYS` 共享常量
+
 ### 修复加入 xhs 后推荐列表出现 xhs 独占轮次，丰富度塌陷
 
 - **症状**：引入小红书内容后，一轮推荐偶尔全是 xhs 笔记——`picked summary` 出现 `{"count":10,"styles":{"unknown":10},"sources":{"xhs-extension-task":10}}`，风格 / 主题 / 平台都单一，用户每次下拉都看到同一类短视频
