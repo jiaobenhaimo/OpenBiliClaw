@@ -133,6 +133,16 @@ export async function sendChatMessage(message) {
   });
 }
 
+export async function respondToInterestProbe(domain, responseType, message = "") {
+  return requestJson("/interest-probes/respond", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ domain, response: responseType, message }),
+  });
+}
+
 export async function fetchConfig() {
   return requestJson("/config?reveal_keys=true", { method: "GET" });
 }

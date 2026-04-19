@@ -1261,6 +1261,146 @@ def chat() -> None:
 
 
 @app.command()
+def delight() -> None:
+    """手动触发一次惊喜推荐检查."""
+    from openbiliclaw.soul.engine import SoulProfileNotInitializedError
+
+    _require_runtime_config()
+    soul_engine = _build_soul_engine()
+    try:
+        profile = asyncio.run(soul_engine.get_profile())
+    except SoulProfileNotInitializedError as exc:
+        _print_status_panel(
+            "warning", "尚未初始化用户画像",
+            "请先执行 `openbiliclaw init` 拉取历史并生成初始画像。",
+        )
+        raise typer.Exit(code=1) from exc
+
+    database = _get_runtime_database()
+    recommendation_engine = _build_recommendation_engine()
+
+    # Score un-scored items first
+    asyncio.run(recommendation_engine.precompute_delight_scores(
+        profile=profile, limit=30,
+    ))
+
+    candidate = database.get_delight_candidate(min_delight_score=0.85)
+
+    _print_page_title("惊喜推荐", "从池中寻找你可能意外喜欢的内容")
+    if candidate is None:
+        _print_status_panel("info", "暂时没有惊喜候选", "池中没有 delight_score ≥ 0.85 的内容，多刷一阵会有的。")
+        return
+
+    bvid = str(candidate.get("bvid", ""))
+    title = str(candidate.get("title", ""))
+    score = float(candidate.get("delight_score", 0.0))
+    hook = str(candidate.get("delight_hook", ""))
+    reason = str(candidate.get("delight_reason", ""))
+    platform = str(candidate.get("source_platform", "") or "bilibili")
+    url = str(candidate.get("content_url", ""))
+
+    hook_label = f"【{hook}】" if hook else ""
+    _print_key_value_table(
+        f"{hook_label}阿B 觉得这条你会意外喜欢",
+        [
+            ("标题", title),
+            ("惊喜分", f"{score:.2f}"),
+            ("理由", reason or "—"),
+            ("来源", platform),
+            ("链接", url or f"https://www.bilibili.com/video/{bvid}"),
+        ],
+    )
+
+    # Mark as notified so it won't be pushed again
+    database.mark_delight_notified(bvid)
+    console.print(f"  [dim]已标记 {bvid} 为已通知，不会重复推送。[/dim]")
+
+
+@app.command()
+def probe() -> None:
+    """手动触发一次兴趣探针，确认或拒绝猜测方向."""
+    from openbiliclaw.soul.engine import SoulProfileNotInitializedError
+
+    _require_runtime_config()
+    soul_engine = _build_soul_engine()
+    try:
+        asyncio.run(soul_engine.get_profile())
+    except SoulProfileNotInitializedError as exc:
+        _print_status_panel(
+            "warning", "尚未初始化用户画像",
+            "请先执行 `openbiliclaw init` 拉取历史并生成初始画像。",
+        )
+        raise typer.Exit(code=1) from exc
+
+    speculator = getattr(soul_engine, "_speculator", None)
+    if speculator is None:
+        _print_status_panel("info", "猜测引擎未就绪", "Speculator 未初始化。")
+        raise typer.Exit(code=1)
+
+    specs = speculator.get_active_speculations()
+    _print_page_title("兴趣探针", "确认或拒绝阿B 正在试探的方向")
+
+    if not specs:
+        _print_status_panel("info", "暂时没有活跃的猜测", "过一阵阿B 会生成新的猜测方向。")
+        return
+
+    for i, spec in enumerate(specs, 1):
+        specifics = [
+            str(getattr(s, "name", "")).strip()
+            for s in getattr(spec, "specifics", [])
+            if str(getattr(s, "name", "")).strip()
+        ][:3]
+        hint = f"（{', '.join(specifics)}）" if specifics else ""
+        progress = f"{spec.confirmation_count}/{spec.confirmation_threshold}"
+
+        console.print(f"\n  [bold]{i}. {spec.domain}[/bold] {hint}")
+        console.print(f"     理由：{spec.reason or '—'}")
+        console.print(f"     确认进度：{progress}  置信度：{spec.confidence:.0%}")
+
+    console.print()
+    try:
+        choice = typer.prompt(
+            "输入序号确认（是），序号+n 拒绝（如 1n），或 q 退出",
+            prompt_suffix="： ",
+        ).strip()
+    except (click.Abort, EOFError, KeyboardInterrupt):
+        return
+
+    if choice.lower() in {"q", "quit", "exit", ""}:
+        return
+
+    reject = choice.endswith("n") or choice.endswith("N")
+    index_str = choice.rstrip("nN").strip()
+    try:
+        index = int(index_str) - 1
+    except ValueError:
+        console.print("[red]无效输入[/red]")
+        raise typer.Exit(code=1)
+
+    if index < 0 or index >= len(specs):
+        console.print("[red]序号超出范围[/red]")
+        raise typer.Exit(code=1)
+
+    target = specs[index]
+    domain = target.domain
+
+    if reject:
+        ok = speculator.user_reject_speculation(domain)
+        if ok:
+            console.print(f"  好，「{domain}」先不看了，30 天内不再猜测这个方向。")
+        else:
+            console.print(f"  [yellow]未找到活跃的「{domain}」猜测。[/yellow]")
+    else:
+        ok = speculator.user_confirm_speculation(domain)
+        if ok:
+            # Trigger promotion
+            speculator.force_tick(asyncio.run(soul_engine.get_profile()))
+            console.print(f"  好，「{domain}」记住了，已转入正式兴趣。")
+        else:
+            console.print(f"  [yellow]未找到活跃的「{domain}」猜测。[/yellow]")
+
+
+@app.command()
 def config_show() -> None:
     """显示当前配置."""
     from openbiliclaw.config import load_config_with_diagnostics

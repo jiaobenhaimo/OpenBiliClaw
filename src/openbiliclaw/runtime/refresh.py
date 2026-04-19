@@ -299,6 +299,13 @@ class ContinuousRefreshController:
                 await self._tick_soul_pipeline()
             with suppress(Exception):
                 await self._tick_xhs_producer()
+            # Proactive push: delight + interest probe are independent of
+            # discovery refresh — they should fire even when the pool is
+            # full and no _run_refresh_plan executes.
+            with suppress(Exception):
+                await self._publish_delight_if_available()
+            with suppress(Exception):
+                await self._publish_interest_probe_if_available()
             await asyncio.sleep(self.check_interval_seconds)
 
     async def _tick_xhs_producer(self) -> None:
@@ -546,11 +553,17 @@ class ContinuousRefreshController:
             }
         )
 
+    _PROBE_COOLDOWN_HOURS = 4  # Don't re-push the same domain within this window
+
     async def _publish_interest_probe_if_available(self) -> None:
         """Push the top speculative-interest hypothesis via WebSocket.
 
         Fires an ``interest.probe`` event when the speculator has an active
         hypothesis that the agent should ask the user to confirm.
+
+        De-duplication: each domain is pushed at most once per cooldown
+        window (``_PROBE_COOLDOWN_HOURS``).  Already-probed domains are
+        tracked in ``discovery_runtime_state["probed_domains"]``.
         """
         speculator = getattr(self.soul_engine, "_speculator", None)
         get_active = getattr(speculator, "get_active_speculations", None)
@@ -559,16 +572,39 @@ class ContinuousRefreshController:
         specs = list(get_active())
         if not specs:
             return
+
+        # Load probe history from runtime state
+        state = self.memory_manager.load_discovery_runtime_state()
+        probed: dict[str, str] = state.get("probed_domains", {})  # type: ignore[assignment]
+        # Purge expired entries
+        now = self._now()
+        cutoff = (now - timedelta(hours=self._PROBE_COOLDOWN_HOURS)).isoformat()
+        probed = {d: t for d, t in probed.items() if t > cutoff}
+
+        # Pick the best candidate that hasn't been probed recently
         specs.sort(
             key=lambda s: (
                 int(getattr(s, "confirmation_count", 0) or 0),
                 -float(getattr(s, "weight", 0.0) or 0.0),
             )
         )
-        top = specs[0]
+        top = None
+        for candidate in specs:
+            d = str(getattr(candidate, "domain", "")).strip().lower()
+            if d and d not in probed:
+                top = candidate
+                break
+        if top is None:
+            return  # All active specs were probed recently
+
         domain = str(getattr(top, "domain", "")).strip()
         if not domain:
             return
+
+        # Record this probe
+        probed[domain.lower()] = now.isoformat()
+        state["probed_domains"] = probed
+        self.memory_manager.save_discovery_runtime_state(state)
         reason = str(getattr(top, "reason", "")).strip()
         specifics = [
             str(getattr(item, "name", "")).strip()

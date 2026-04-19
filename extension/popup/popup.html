@@ -1362,6 +1362,84 @@
       padding: 6px 0;
     }
 
+    .probe-card {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(255, 244, 230, 0.98), rgba(255, 238, 215, 0.96));
+      border: 1.5px solid rgba(240, 136, 62, 0.35);
+      margin-bottom: 12px;
+      animation: probeSlideIn 0.3s ease-out;
+    }
+
+    @keyframes probeSlideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .probe-question {
+      font-size: 13px;
+      line-height: 1.6;
+      color: #3d2e1f;
+      margin-bottom: 10px;
+    }
+
+    .probe-specifics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .probe-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .probe-btn {
+      flex: 1;
+      padding: 8px 0;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .probe-btn.is-confirm {
+      background: rgba(63, 185, 80, 0.15);
+      color: #1a7f37;
+      border-color: rgba(63, 185, 80, 0.3);
+    }
+    .probe-btn.is-confirm:hover {
+      background: rgba(63, 185, 80, 0.25);
+    }
+
+    .probe-btn.is-reject {
+      background: rgba(139, 148, 158, 0.1);
+      color: #57606a;
+      border-color: rgba(139, 148, 158, 0.2);
+    }
+    .probe-btn.is-reject:hover {
+      background: rgba(139, 148, 158, 0.2);
+    }
+
+    .probe-btn.is-chat {
+      background: rgba(88, 166, 255, 0.12);
+      color: #0969da;
+      border-color: rgba(88, 166, 255, 0.25);
+    }
+    .probe-btn.is-chat:hover {
+      background: rgba(88, 166, 255, 0.22);
+    }
+
+    .probe-result {
+      font-size: 13px;
+      color: #57606a;
+      text-align: center;
+      padding: 8px 0;
+    }
+
     .cognition-list {
       display: flex;
       flex-direction: column;

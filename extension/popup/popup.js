@@ -35,6 +35,7 @@ import {
   reportRecommendationClick,
   reshuffleRecommendations,
   refreshRecommendations,
+  respondToInterestProbe,
   sendChatMessage,
   submitFeedback,
   updateConfig,
@@ -62,6 +63,7 @@ const state = {
   activityExpanded: false,
   activeFeedbackProgress: null,
   refreshStatusMessage: "",
+  pendingProbe: null,
 };
 
 const elements = {
@@ -256,6 +258,11 @@ function connectRuntimeStream() {
       if (event.type === "config_reloaded") {
         setHint("后端配置已热重载，正在刷新数据…", "success");
         void initializeRecommendations();
+      }
+      // Interest probe: show interactive probe card
+      if (event.type === "interest.probe" && event.domain) {
+        state.pendingProbe = event;
+        renderProbeCard();
       }
       // Init completed: re-fetch everything including profile
       if (event.type === "init_completed") {
@@ -486,6 +493,110 @@ function renderSpeculativeInterests(container, items) {
     }
 
     container.append(row);
+  }
+}
+
+function renderProbeCard() {
+  const container = elements.profileSpeculativeInterests;
+  if (!(container instanceof HTMLElement) || !state.pendingProbe) return;
+
+  const probe = state.pendingProbe;
+
+  // Remove any existing probe card
+  const existing = container.querySelector(".probe-card");
+  if (existing) existing.remove();
+
+  const card = document.createElement("div");
+  card.className = "probe-card";
+
+  const question = document.createElement("p");
+  question.className = "probe-question";
+  question.textContent = probe.question || `\u6211\u4ece\u4f60\u6700\u8fd1\u7684\u8f68\u8ff9\u91cc\u55c5\u5230\u4f60\u53ef\u80fd\u5bf9\u300c${probe.domain}\u300d\u611f\u5174\u8da3\u2014\u2014\u4f60\u81ea\u5df1\u8ba4\u4e0d\u8ba4\uff1f`;
+  card.append(question);
+
+  if (probe.specifics && probe.specifics.length > 0) {
+    const chips = document.createElement("div");
+    chips.className = "probe-specifics";
+    for (const s of probe.specifics.slice(0, 5)) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = typeof s === "string" ? s : s.name || s;
+      chips.append(chip);
+    }
+    card.append(chips);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "probe-actions";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "probe-btn is-confirm";
+  confirmBtn.textContent = "是";
+  confirmBtn.addEventListener("click", () => handleProbeResponse("confirm"));
+
+  const rejectBtn = document.createElement("button");
+  rejectBtn.className = "probe-btn is-reject";
+  rejectBtn.textContent = "不是";
+  rejectBtn.addEventListener("click", () => handleProbeResponse("reject"));
+
+  const chatBtn = document.createElement("button");
+  chatBtn.className = "probe-btn is-chat";
+  chatBtn.textContent = "\u591a\u804a\u804a";
+  chatBtn.addEventListener("click", () => handleProbeResponse("chat"));
+
+  actions.append(confirmBtn, rejectBtn, chatBtn);
+  card.append(actions);
+
+  // Insert at the top of the speculative interests container
+  container.prepend(card);
+}
+
+async function handleProbeResponse(responseType) {
+  const probe = state.pendingProbe;
+  if (!probe) return;
+
+  const domain = probe.domain;
+
+  if (responseType === "chat") {
+    // Switch to chat tab with pre-filled context
+    const chatTab = document.querySelector('[data-tab="chat"]');
+    if (chatTab) chatTab.click();
+
+    const message = `\u6211\u60f3\u804a\u804a\u4f60\u731c\u6211\u53ef\u80fd\u611f\u5174\u8da3\u7684\u300c${domain}\u300d\u8fd9\u4e2a\u65b9\u5411`;
+    if (elements.chatInput instanceof HTMLTextAreaElement) {
+      elements.chatInput.value = message;
+      elements.chatInput.focus();
+    }
+
+    // Clear probe
+    state.pendingProbe = null;
+    const probeCard = document.querySelector(".probe-card");
+    if (probeCard) probeCard.remove();
+    return;
+  }
+
+  try {
+    await respondToInterestProbe(domain, responseType);
+
+    // Show feedback
+    const probeCard = document.querySelector(".probe-card");
+    if (probeCard) {
+      probeCard.replaceChildren();
+      const msg = document.createElement("p");
+      msg.className = "probe-result";
+      msg.textContent = responseType === "confirm"
+        ? `好，「${domain}」记住了。`
+        : `好，「${domain}」先不看了。`;
+      probeCard.append(msg);
+      setTimeout(() => probeCard.remove(), 3000);
+    }
+
+    state.pendingProbe = null;
+
+    // Refresh profile to show updated speculations
+    void loadProfileSummary({ force: true });
+  } catch (err) {
+    console.error("Failed to respond to probe:", err);
   }
 }
 

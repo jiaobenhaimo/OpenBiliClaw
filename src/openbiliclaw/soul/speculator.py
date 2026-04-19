@@ -568,6 +568,41 @@ class InterestSpeculator:
         state = self._load_state()
         return [s for s in state.active if s.status == "active"]
 
+    def user_confirm_speculation(self, domain: str) -> bool:
+        """User explicitly confirmed a speculated interest. Force-promote it."""
+        state = self._load_state()
+        for spec in state.active:
+            if spec.domain.lower() == domain.lower() and spec.status == "active":
+                spec.confirmation_count = spec.confirmation_threshold  # Meet threshold
+                spec.confirming_events.append("user_confirmed")
+                self._save_state(state)
+                return True
+        return False
+
+    def user_reject_speculation(self, domain: str, cooldown_days: int = 30) -> bool:
+        """User explicitly rejected a speculated interest. Move to cooldown."""
+        state = self._load_state()
+        remaining = []
+        found = False
+        now = datetime.now()
+        for spec in state.active:
+            if spec.domain.lower() == domain.lower() and spec.status == "active":
+                spec.status = "rejected"
+                state.total_rejected += 1
+                state.cooldown.append(CooldownEntry(
+                    domain=spec.domain,
+                    category=spec.category,
+                    rejected_at=now.isoformat(),
+                    cooldown_until=(now + timedelta(days=cooldown_days)).isoformat(),
+                ))
+                found = True
+            else:
+                remaining.append(spec)
+        state.active = remaining
+        if found:
+            self._save_state(state)
+        return found
+
     # -- Internal -------------------------------------------------------------
 
     def _should_generate(

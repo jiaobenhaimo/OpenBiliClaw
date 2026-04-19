@@ -757,6 +757,61 @@ def create_app(
         reply = await ctx.dialogue.respond(message)
         return ChatResponse(reply=reply)
 
+    @app.post("/api/interest-probes/respond")
+    async def respond_to_interest_probe(payload: dict[str, Any]) -> dict[str, Any]:
+        """User responds to a speculated interest probe.
+
+        Body: { "domain": "...", "response": "confirm" | "reject" | "chat", "message": "..." }
+
+        - confirm: Force-promote the speculation
+        - reject: Move to cooldown (30 days)
+        - chat: Forward to dialogue engine with probe context, return reply
+        """
+        domain = str(payload.get("domain", "")).strip()
+        response_type = str(payload.get("response", "")).strip().lower()
+
+        if not domain:
+            raise HTTPException(status_code=422, detail="domain is required")
+        if response_type not in {"confirm", "reject", "chat"}:
+            raise HTTPException(status_code=422, detail="response must be confirm, reject, or chat")
+
+        speculator = getattr(ctx.soul_engine, "_speculator", None)
+        if speculator is None:
+            raise HTTPException(status_code=503, detail="Speculator not available")
+
+        if response_type == "confirm":
+            ok = speculator.user_confirm_speculation(domain)
+            # Trigger promotion cycle
+            if ok:
+                tick_fn = getattr(speculator, "force_tick", None)
+                if callable(tick_fn):
+                    try:
+                        profile = await ctx.soul_engine.get_profile()
+                        if asyncio.iscoroutinefunction(tick_fn):
+                            await tick_fn(profile)
+                        else:
+                            tick_fn(profile)
+                    except Exception:
+                        pass
+            return {"ok": ok, "action": "confirmed", "domain": domain}
+
+        if response_type == "reject":
+            ok = speculator.user_reject_speculation(domain)
+            return {"ok": ok, "action": "rejected", "domain": domain}
+
+        # Chat: forward to dialogue with context
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            message = f"我想聊聊你猜我可能感兴趣的「{domain}」这个方向"
+        if ctx.dialogue is None:
+            return {"ok": False, "action": "chat", "domain": domain, "reply": "对话引擎暂不可用。"}
+        try:
+            reply = await ctx.dialogue.respond(message)
+        except Exception:
+            logger.exception("Dialogue failed for probe chat: %s", domain)
+            return {"ok": False, "action": "chat", "domain": domain, "reply": "聊天出了点问题，稍后再试。"}
+        return {"ok": True, "action": "chat", "domain": domain, "reply": reply}
+
     @app.post("/api/feedback", response_model=FeedbackResponse)
     async def feedback(payload: FeedbackIn) -> FeedbackResponse:
         feedback_type = payload.feedback_type.strip().lower()

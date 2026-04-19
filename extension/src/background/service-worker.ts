@@ -135,6 +135,23 @@ let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function handleRuntimeEvent(event: Record<string, unknown>): void {
   const eventType = String(event.type ?? "");
+
+  if (eventType === "interest.probe") {
+    const domain = String(event.domain ?? "");
+    if (!domain) return;
+    void chrome.notifications.create(
+      `openbiliclaw-probe:${domain}`,
+      {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: `\u963F\u0042 \u60F3\u786E\u8BA4\uFF1A\u4F60\u5BF9\u300C${domain}\u300D\u611F\u5174\u8DA3\u5417\uFF1F`,
+        message: String(event.reason ?? "\u70B9\u51FB\u67E5\u770B\u8BE6\u60C5\uFF0C\u544A\u8BC9\u6211\u4F60\u600E\u4E48\u60F3\u3002"),
+        priority: 2,
+      },
+    );
+    return;
+  }
+
   if (eventType !== "delight.candidate") return;
 
   const bvid = String(event.bvid ?? "");
@@ -314,6 +331,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.notifications.onClicked.addListener((notificationId) => {
+  if (notificationId.startsWith("openbiliclaw-probe:")) {
+    void openExtensionUi(chrome, { tab: "profile" });
+    void chrome.notifications.clear(notificationId);
+    return;
+  }
   const bvid = parseNotificationBvid(notificationId);
   if (bvid) {
     void openExtensionUi(chrome, { tab: "recommend" });
