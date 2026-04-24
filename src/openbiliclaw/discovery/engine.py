@@ -649,6 +649,17 @@ class ContentDiscoveryEngine:
         self._eval_cache[cache_key] = (score, reason, topic_group, style_key)
         return score
 
+    # Safety cap applied at the evaluator level regardless of caller.
+    # Strategies that over-fetch (related_chain depth-2 fanout, explore
+    # with expanded budget, etc.) would otherwise dump 400+ items into a
+    # single discover run, turning init into tens of minutes even with
+    # heavy concurrency. 80 leaves a single strategy with at most 8
+    # eval batches — enough to keep quality, tight enough to bound
+    # walltime. Truncation is top-of-list (natural ranking from
+    # strategies), and a WARNING is emitted so we see when strategies
+    # hit the cap.
+    _EVALUATE_BATCH_HARD_CAP = 80
+
     async def evaluate_content_batch(
         self,
         contents: list[DiscoveredContent],
@@ -667,6 +678,16 @@ class ContentDiscoveryEngine:
         """
         if self._llm_service is None or not contents:
             return [0.0] * len(contents)
+
+        original_len = len(contents)
+        if original_len > self._EVALUATE_BATCH_HARD_CAP:
+            logger.warning(
+                "evaluate_content_batch: truncating %d -> %d items (source=%s)",
+                original_len,
+                self._EVALUATE_BATCH_HARD_CAP,
+                source_context or "mixed",
+            )
+            contents = contents[: self._EVALUATE_BATCH_HARD_CAP]
 
         # Split into cached vs uncached
         uncached_indices: list[int] = []
@@ -737,6 +758,11 @@ class ContentDiscoveryEngine:
         for batch_indices, batch_scores in await asyncio.gather(*tasks):
             for idx, batch_score in zip(batch_indices, batch_scores, strict=True):
                 scores[idx] = batch_score
+
+        # Pad for any items dropped by the hard cap above so callers
+        # that ``zip(candidates, scores, strict=True)`` still line up.
+        if len(scores) < original_len:
+            scores = scores + [0.0] * (original_len - len(scores))
 
         return scores
 
