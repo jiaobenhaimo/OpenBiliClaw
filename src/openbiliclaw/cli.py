@@ -55,19 +55,26 @@ def _bootstrap_container_runtime() -> None:
 
 
 _RUNTIME_COMPONENTS: dict[str, Any] = {}
-# Initial discover runs one cheap stage only. ``trending`` is the
-# fastest strategy — it skips LLM query generation (fetches editorial
-# rankings directly) so the wall time is dominated by a single LLM
-# evaluation batch. The remaining strategies (search / related_chain /
-# explore) each add at least one more 60s+ LLM call under thinking
-# mode, which blows the init budget.
+# Initial discover runs all four strategies in a single stage so the
+# discovery engine's built-in concurrency kicks in: phase 1 runs
+# ``search`` alone against a cookie-free client to avoid the IP-level
+# search throttle, then phase 2 fans out ``trending``, ``related_chain``
+# and ``explore`` concurrently via asyncio.gather. Wall time compresses
+# from ``∑strategy`` to roughly ``search + max(trending, related, explore)``.
+#
+# Rate-limiting is already bounded by ``DiscoveryConcurrencyController``:
+# ``search_budget_total=30`` splits across the three search-using
+# strategies, and ``bilibili_request_concurrency=2`` caps simultaneous
+# HTTP requests regardless of how many strategies run in parallel.
 _INIT_DISCOVERY_PLAN = [
-    ["trending"],
+    ["search", "trending", "related_chain", "explore"],
 ]
-# Initial pool target. Kept deliberately small so the evaluator only
-# needs a single batch. The background refresh loop tops the pool up
-# to ``scheduler.pool_target_count`` over the following hour.
-_INIT_POOL_TARGET_COUNT = 10
+# Initial pool target. Small enough that each strategy typically stays
+# within a single LLM evaluation batch, but big enough to give the
+# four strategies room to contribute diverse candidates. The
+# background refresh loop tops the pool up to
+# ``scheduler.pool_target_count`` over the following hour.
+_INIT_POOL_TARGET_COUNT = 40
 
 if TYPE_CHECKING:
     from pathlib import Path
