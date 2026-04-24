@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
+from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
 from openbiliclaw.soul.speculator import build_probe_axis, choose_next_probe_candidate
 
 logger = logging.getLogger(__name__)
@@ -52,13 +53,13 @@ class SupportsEventDatabase(Protocol):
     def get_delight_candidate(
         self,
         *,
-        min_delight_score: float = 0.85,
+        min_delight_score: float = DEFAULT_DELIGHT_THRESHOLD,
     ) -> dict[str, Any] | None: ...
     def mark_delight_notified(self, bvid: str) -> None: ...
     def count_delight_candidates(
         self,
         *,
-        min_delight_score: float = 0.85,
+        min_delight_score: float = DEFAULT_DELIGHT_THRESHOLD,
     ) -> int: ...
 
 
@@ -150,7 +151,7 @@ class ContinuousRefreshController:
         pending_delight_count = 0
         with suppress(Exception):
             pending_delight_count = self.database.count_delight_candidates(
-                min_delight_score=0.85,
+                min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
             )
         return {
             "initialized": self._is_initialized(),
@@ -296,7 +297,7 @@ class ContinuousRefreshController:
             hours=self.delight_cooldown_hours
         ):
             return None
-        candidate = self.database.get_delight_candidate(min_delight_score=0.85)
+        candidate = self.database.get_delight_candidate(min_delight_score=DEFAULT_DELIGHT_THRESHOLD)
         if candidate is None:
             return None
         return {
@@ -315,6 +316,16 @@ class ContinuousRefreshController:
         state["last_delight_notification_at"] = self._now().isoformat()
         self.memory_manager.save_discovery_runtime_state(state)
 
+    async def prepare_delight_candidates(self) -> int:
+        """Warm ready-to-push delight candidates even when no refresh runs."""
+        if not self._is_initialized():
+            return 0
+        profile = await self.soul_engine.get_profile()
+        return await self.recommendation_engine.precompute_pool_copy(
+            profile=profile,
+            limit=0,
+        )
+
     async def run_forever(self) -> None:
         """Launch all background tasks as independent concurrent loops.
 
@@ -330,6 +341,8 @@ class ContinuousRefreshController:
             ├─ _loop_xhs_producer()   60s   keyword generation
             └─ _loop_proactive_push() 60s   delight + interest probe
         """
+        with suppress(Exception):
+            await self.prepare_delight_candidates()
         tasks = [
             asyncio.create_task(self._loop_refresh()),
             asyncio.create_task(self._loop_soul_pipeline()),

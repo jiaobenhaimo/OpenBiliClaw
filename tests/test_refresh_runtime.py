@@ -38,10 +38,16 @@ class _FakeDatabase:
         *,
         pool_count: int = 30,
         source_counts: dict[str, int] | None = None,
+        delight_candidate: dict[str, object] | None = None,
+        delight_count: int = 0,
     ) -> None:
         self.events = events
         self.pool_count = pool_count
         self.source_counts = source_counts or {}
+        self.delight_candidate = delight_candidate
+        self.delight_count = delight_count
+        self.count_delight_thresholds: list[float] = []
+        self.get_delight_thresholds: list[float] = []
         self.recommendations = [
             {"id": 1, "presented": 0},
             {"id": 2, "presented": 1},
@@ -94,7 +100,8 @@ class _FakeDatabase:
         *,
         min_delight_score: float = 0.85,
     ) -> dict[str, object] | None:
-        return None
+        self.get_delight_thresholds.append(min_delight_score)
+        return self.delight_candidate
 
     def mark_delight_notified(self, bvid: str) -> None:
         pass
@@ -104,7 +111,8 @@ class _FakeDatabase:
         *,
         min_delight_score: float = 0.85,
     ) -> int:
-        return 0
+        self.count_delight_thresholds.append(min_delight_score)
+        return self.delight_count
 
 
 class _FakeSoulEngine:
@@ -287,6 +295,52 @@ async def test_refresh_controller_backfills_pool_copy_after_replenishment() -> N
     await controller.refresh_if_needed()
 
     assert recommendations.pool_copy_calls == [({"profile": "ok"}, 60)]
+
+
+async def test_refresh_controller_uses_shared_delight_threshold_for_runtime_queries() -> None:
+    database = _FakeDatabase(
+        [],
+        delight_candidate={
+            "bvid": "BV1DELIGHT",
+            "title": "惊喜候选",
+            "delight_reason": "这条会戳到你最近那股想把问题想透的劲头。",
+            "delight_score": 0.72,
+            "delight_hook": "意外击中",
+            "cover_url": "https://example.com/cover.jpg",
+        },
+        delight_count=2,
+    )
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=database,
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+    )
+
+    status = controller.get_runtime_status()
+    pending = controller.get_pending_delight()
+
+    assert status["pending_delight_count"] == 2
+    assert pending is not None
+    assert database.count_delight_thresholds == [0.70]
+    assert database.get_delight_thresholds == [0.70]
+
+
+async def test_refresh_controller_prepares_delight_candidates_without_refresh() -> None:
+    recommendations = _FakeRecommendationEngine()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase([]),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=recommendations,
+    )
+
+    prepared = await controller.prepare_delight_candidates()
+
+    assert prepared == 0
+    assert recommendations.pool_copy_calls == [({"profile": "ok"}, 0)]
 
 
 async def test_refresh_controller_reports_zero_replenishment_without_false_positive_copy() -> None:

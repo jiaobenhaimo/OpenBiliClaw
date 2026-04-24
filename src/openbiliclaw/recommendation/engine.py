@@ -20,7 +20,6 @@ from openbiliclaw.soul.tone import ToneProfile, build_tone_profile
 if TYPE_CHECKING:
     from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.llm.base import LLMResponse
-    from openbiliclaw.llm.embedding import SupportsEmbeddingService
     from openbiliclaw.recommendation.curator import PoolCurator
     from openbiliclaw.soul.profile import SoulProfile
     from openbiliclaw.storage.database import Database
@@ -104,6 +103,14 @@ class SupportsCoreMemoryTask(Protocol):
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> LLMResponse: ...
+
+
+class SupportsEmbeddingService(Protocol):
+    """Embedding service protocol used by recommendation helpers."""
+
+    similarity_threshold: float
+
+    async def embed(self, text: str) -> list[float]: ...
 
 
 @dataclass
@@ -342,7 +349,7 @@ class RecommendationEngine:
         scored: list[tuple[dict[str, object], float]] = []
         for interest in all_interests:
             raw_weight = interest.get("weight", 0.0)
-            weight = float(raw_weight) if isinstance(raw_weight, int | float) else 0.0
+            weight = float(raw_weight) if isinstance(raw_weight, int | float | str) else 0.0
             interest_vec = await self._embedding_service.embed(str(interest["name"]))
             if not interest_vec:
                 scored.append((interest, weight))
@@ -601,25 +608,57 @@ class RecommendationEngine:
         Items scoring above the delight threshold get LLM-generated
         delight_reason explanations persisted to the database.
         """
-        from openbiliclaw.recommendation.delight import DelightScorer
+        from openbiliclaw.recommendation.delight import DelightScorer, DelightSignals
 
         scorer = DelightScorer(
             embedding_service=self._embedding_service,
             database=self._database,
         )
 
-        rows = self._database.get_pool_candidates_needing_delight_score(limit=limit)
+        prefs = getattr(profile, "preferences", None)
+        exploration_openness = float(getattr(prefs, "exploration_openness", 0.5))
+        effective_threshold = scorer.effective_threshold(exploration_openness)
+        rows = self._database.get_pool_candidates_needing_delight_score(
+            limit=limit,
+            min_delight_score_for_reason=effective_threshold,
+        )
         if not rows:
             return 0
 
         candidates = self._rows_to_discovered(rows)
 
-        prefs = getattr(profile, "preferences", None)
-        exploration_openness = float(getattr(prefs, "exploration_openness", 0.5))
-        effective_threshold = scorer.effective_threshold(exploration_openness)
-
         scored_count = 0
-        for candidate in candidates:
+        for row, candidate in zip(rows, candidates, strict=True):
+            stored_delight_score = float(row.get("delight_score", 0.0) or 0.0)
+            needs_copy_backfill = stored_delight_score >= effective_threshold and (
+                not str(row.get("delight_reason", "")).strip()
+                or not str(row.get("delight_hook", "")).strip()
+            )
+            if needs_copy_backfill:
+                reason_stub = scorer._build_reason_stub(
+                    DelightSignals(),
+                    candidate,
+                    profile,
+                )
+                delight_reason, delight_hook = await self._generate_delight_reason(
+                    candidate,
+                    profile,
+                    reason_stub,
+                )
+                self._database.update_delight_score(
+                    candidate.bvid,
+                    delight_score=stored_delight_score,
+                    delight_reason=delight_reason,
+                    delight_hook=delight_hook,
+                )
+                scored_count += 1
+                logger.info(
+                    "Delight candidate backfilled: %s (score=%.3f, hook=%s)",
+                    candidate.bvid,
+                    stored_delight_score,
+                    delight_hook,
+                )
+                continue
             try:
                 delight_score, signals, reason_stub = await scorer.score(
                     candidate,

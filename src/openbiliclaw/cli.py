@@ -29,6 +29,16 @@ app.add_typer(auth_app, name="auth")
 app.add_typer(browser_app, name="browser")
 console = Console()
 _APP_CONTEXT: dict[str, Any] = {}
+_DISCOVER_STRATEGIES_OPTION = typer.Option(
+    None,
+    "--strategy",
+    "-S",
+    help=(
+        "Bilibili 策略过滤，可多次传或逗号分隔："
+        "search / trending / explore / related_chain。"
+        "仅在 --source=bilibili 时生效。"
+    ),
+)
 
 
 def _bootstrap_container_runtime() -> None:
@@ -205,7 +215,10 @@ def _build_recommendation_engine() -> Any:
     """Build the recommendation engine with core-memory-aware LLM access."""
     from openbiliclaw.config import load_config
     from openbiliclaw.llm.service import LLMService
-    from openbiliclaw.recommendation.engine import RecommendationEngine
+    from openbiliclaw.recommendation.engine import (
+        RecommendationEngine,
+        SupportsEmbeddingService,
+    )
 
     memory = _build_memory_manager()
     database = _get_runtime_database()
@@ -214,7 +227,12 @@ def _build_recommendation_engine() -> Any:
     llm_service = LLMService(registry=registry, memory=memory)
     from openbiliclaw.llm.registry import build_embedding_service
     _emb = build_embedding_service(cfg, registry)
-    return RecommendationEngine(llm=llm_service, database=database, embedding_service=_emb)
+    embedding_service = cast("SupportsEmbeddingService | None", _emb)
+    return RecommendationEngine(
+        llm=llm_service,
+        database=database,
+        embedding_service=embedding_service,
+    )
 
 
 def _build_dialogue(soul_engine: Any) -> Any:
@@ -1112,7 +1130,11 @@ def _run_xhs_discovery(*, force: bool) -> None:
         return
 
     messages = {
-        "disabled": ("info", "xhs producer 已禁用", "config.scheduler.enabled = false 时无法触发。"),
+        "disabled": (
+            "info",
+            "xhs producer 已禁用",
+            "config.scheduler.enabled = false 时无法触发。",
+        ),
         "throttled": (
             "info",
             "距离上次关键词生产不足 4 小时",
@@ -1142,16 +1164,7 @@ def discover(
         help="触发发现的内容源：bilibili 或 xiaohongshu。",
         case_sensitive=False,
     ),
-    strategies: list[str] | None = typer.Option(
-        None,
-        "--strategy",
-        "-S",
-        help=(
-            "Bilibili 策略过滤，可多次传或逗号分隔："
-            "search / trending / explore / related_chain。"
-            "仅在 --source=bilibili 时生效。"
-        ),
-    ),
+    strategies: list[str] | None = _DISCOVER_STRATEGIES_OPTION,
     limit: int = typer.Option(30, "--limit", "-n", min=1, help="Bilibili 发现结果条数上限。"),
     force: bool = typer.Option(
         False,
@@ -1263,6 +1276,7 @@ def chat() -> None:
 @app.command()
 def delight() -> None:
     """手动触发一次惊喜推荐检查."""
+    from openbiliclaw.recommendation.delight import DEFAULT_DELIGHT_THRESHOLD
     from openbiliclaw.soul.engine import SoulProfileNotInitializedError
 
     _require_runtime_config()
@@ -1284,11 +1298,17 @@ def delight() -> None:
         profile=profile, limit=30,
     ))
 
-    candidate = database.get_delight_candidate(min_delight_score=0.85)
+    candidate = database.get_delight_candidate(
+        min_delight_score=DEFAULT_DELIGHT_THRESHOLD
+    )
 
     _print_page_title("惊喜推荐", "从池中寻找你可能意外喜欢的内容")
     if candidate is None:
-        _print_status_panel("info", "暂时没有惊喜候选", "池中没有 delight_score ≥ 0.85 的内容，多刷一阵会有的。")
+        _print_status_panel(
+            "info",
+            "暂时没有惊喜候选",
+            "池中还没有文案已就绪的高分惊喜内容，多刷一阵会有的。",
+        )
         return
 
     bvid = str(candidate.get("bvid", ""))
@@ -1375,7 +1395,7 @@ def probe() -> None:
         index = int(index_str) - 1
     except ValueError:
         console.print("[red]无效输入[/red]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     if index < 0 or index >= len(specs):
         console.print("[red]序号超出范围[/red]")

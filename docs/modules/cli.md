@@ -34,6 +34,8 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `profile` | 查看用户画像 | ✅ |
 | `discover` | 手动触发发现 | ✅ |
 | `chat` | 苏格拉底式对话 | ✅ |
+| `delight` | 手动查看当前惊喜推荐候选 | ✅ |
+| `probe` | 手动查看并确认猜测兴趣方向 | ✅ |
 
 ## 详细说明
 
@@ -181,6 +183,36 @@ $ openbiliclaw serve-api --host 0.0.0.0 --port 8420
 ```
 
 推荐容器内使用该命令作为启动入口。
+
+### `openbiliclaw delight`
+
+手动查看当前可推送的惊喜推荐候选。
+
+```bash
+$ openbiliclaw delight
+惊喜推荐
+【意外契合】阿B 觉得这条你会意外喜欢
+  标题: ...
+  惊喜分: 0.72
+  理由: ...
+```
+
+行为说明：
+
+- 先补一次 delight backlog，再从当前池子里取一条“文案已就绪”的候选
+- 运行时与 CLI 共用同一套 delight 阈值口径：默认 `0.70`
+- 如果当前只有分数、还没生成 `reason/hook`，CLI 不会把它当成可展示候选
+
+### `openbiliclaw probe`
+
+手动列出当前最值得确认的猜测兴趣方向，并支持确认 / 否认 / 多聊聊。
+
+```bash
+$ openbiliclaw probe
+猜测兴趣方向
+1. 城市空间叙事
+2. 复杂系统
+```
 
 ### `openbiliclaw profile`
 

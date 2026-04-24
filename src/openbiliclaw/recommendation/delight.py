@@ -64,8 +64,8 @@ class DelightWeights:
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_THRESHOLD: float = 0.80
-_CONSERVATIVE_THRESHOLD: float = 0.90
+DEFAULT_DELIGHT_THRESHOLD: float = 0.70
+CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.80
 _LOW_EXPLORATION_OPENNESS: float = 0.3
 _DEFAULT_WEIGHTS = DelightWeights()
 
@@ -82,12 +82,12 @@ class DelightScorer:
         embedding_service: SupportsEmbeddingService | None,
         database: SupportsRecommendationSignalStore,
         *,
-        weights: DelightWeights = _DEFAULT_WEIGHTS,
-        threshold: float = _DEFAULT_THRESHOLD,
+        weights: DelightWeights | None = None,
+        threshold: float = DEFAULT_DELIGHT_THRESHOLD,
     ) -> None:
         self._embedding = embedding_service
         self._database = database
-        self._weights = weights
+        self._weights = weights or DelightWeights()
         self._threshold = threshold
 
     @property
@@ -97,7 +97,7 @@ class DelightScorer:
     def effective_threshold(self, exploration_openness: float) -> float:
         """Return a possibly raised threshold for conservative users."""
         if exploration_openness < _LOW_EXPLORATION_OPENNESS:
-            return max(self._threshold, _CONSERVATIVE_THRESHOLD)
+            return max(self._threshold, CONSERVATIVE_DELIGHT_THRESHOLD)
         return self._threshold
 
     async def score(

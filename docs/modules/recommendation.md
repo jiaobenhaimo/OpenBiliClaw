@@ -37,6 +37,7 @@
 | M126 源无关内容分类 | ✅ | `classify_pool_backlog()` 在 `precompute_pool_copy` 前自动为未分类内容（XHS 等）补上 `style_key` / `topic_group` / `relevance_score`。COALESCE 保护已分类字段不被重复入库覆盖。`_diversity_tokens` 不再 fallback `source_strategy`——推荐层只看内容特征，来源完全透明 |
 | M127 兴趣探针用户确认 | ✅ | WebSocket 推送 `interest.probe` → Chrome 通知 → popup 卡片（是 / 不是 / 多聊聊）→ `POST /api/interest-probes/respond` → speculator confirm/reject/chat。4h 去重冷却。推送从 `_run_refresh_plan` 移到 `run_forever` 主循环 |
 | M128 CLI delight + probe | ✅ | `openbiliclaw delight` 手动查看惊喜推荐候选；`openbiliclaw probe` 手动列出猜测方向并交互确认/拒绝 |
+| M129 惊喜候选自动预热与回填 | ✅ | delight 运行时统一使用共享阈值（默认 `0.70`，保守用户 `0.80`）；后台启动会自动补齐高分但缺 `reason/hook` 的候选，`suppressed` 高分库存也允许作为惊喜推荐入口 |
 
 ## 公开 API
 
@@ -126,6 +127,23 @@ count = await engine.precompute_pool_copy(
 - 成功后把结果回写到 `content_cache.pool_expression / content_cache.pool_topic_label`
 - 生成失败时不会写 profile 级统一 fallback，而是保留空值，交给 popup 隐藏
 - runtime refresh 会在补货后自动触发这一步，避免 popup 的“换一批 / 继续追加”现场等待 LLM
+- 即使当前没有普通推荐文案要补，runtime 启动时也会走一次 `limit=0` 的预热路径，把高分 delight backlog 补成可直接推送的候选
+
+### RecommendationEngine.precompute_delight_scores
+
+```python
+count = await engine.precompute_delight_scores(
+    profile=profile,
+    limit=30,
+)
+```
+
+行为说明：
+
+- 对 fresh / suppressed 池子里还没打分的候选补 `delight_score`
+- 对已经高分但缺 `delight_reason / delight_hook` 的 backlog 候选补齐文案，而不是永远卡在“只有分数没有解释”
+- 候选出池阈值与运行时 `pending delight` 查询共用同一套口径：默认 `0.70`，探索开放度较低时自动提高到 `0.80`
+- `get_pending_delight()` 只会暴露文案已就绪的候选，避免前端收到空 `reason/hook`
 
 ### Recommendation
 

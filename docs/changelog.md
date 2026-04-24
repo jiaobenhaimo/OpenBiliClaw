@@ -21,11 +21,25 @@
 
 - **症状**：用户反馈 popup 显示 896 条可换，远超配置 `pool_target_count=600`。排查发现 600 只作为"低于它就补货"的地板（floor），`trending` 每 3 小时 / `explore` 每 12 小时 / 事件阈值触发的 refresh 都不看总量，会越线往池子里加内容。`_run_refresh_plan` 的中途 break 条件也只在"起步低于目标"时生效
 - **修复**（source-of-truth 在 `runtime/refresh.py`）：
-  1. 新增 `ContinuousRefreshController._enforce_pool_cap()`：在 `refresh_if_needed` 和 `force_refresh` 入口检查 pool ≥ target 则直接返回 `{"refreshed": False, "reason": "pool_at_cap"}`，不再触发 discover。pool > target 时先调用新 DB 方法 `trim_pool_to_target_count` 把溢出部分降为 `suppressed`
+  1. 新增 `ContinuousRefreshController._enforce_pool_cap()`：在 `refresh_if_needed` 和 `force_refresh` 入口检查 pool ≥ target 则直接返回 `{"refreshed": False, "reason": "pool_at_cap"}`，不再触发 discover。pool > target 时先调用新 DB 方法 `trim_pool_to_target_count` 把溢出部分降为 `suppressed`；每次触发都会写 INFO 日志 `enforce_pool_cap: trimmed=..., pool_available=..., target=...`，失败捕获并 `logger.exception`
   2. `_run_refresh_plan` 中途 break 条件从 `initial_pool_below_target and current_pool_count >= target` 改为 `current_pool_count >= target`：任何策略在执行过程中把池子撑到目标就立刻停
   3. 新 DB 方法 `Database.trim_pool_to_target_count(target)`：按 `relevance_score` 降序 → `last_scored_at` 降序 → 非 `explore` 优先 → `bvid` 稳定序排序，保留前 target 条，其余标 `suppressed`。只动当前 `pool_status='fresh'` 且未进入 recommendations 的条目
 - **文档一致性**：`docs/modules/config.md` 的 `pool_target_count` 描述原本承诺"到达目标后不再触发新 discover"，与旧实现不符。现在行为和文档对齐
 - **测试**：新增 4 个测试覆盖 `refresh_if_needed` / `force_refresh` 在 cap 时返回 `pool_at_cap`、入口触发 trim、策略中途命中 cap 就停；调整 6 个原本依赖"pool_count == target"假设的测试（降到 pool_count=20 保持原意图）；`test_refresh_controller_triggers_event_refresh_when_signal_threshold_reached` 重命名为 `_falls_back_to_full_plan_when_below_target`——原测试覆盖的"pool ≥ target 时事件阈值触发"分支现在是不可达代码
+
+### 惊喜推荐前移到推荐页首屏
+
+- popup `recommend` tab 新增独立的惊喜推荐首屏卡位，不再只能依赖系统通知或临时消息才能看到 delight 候选
+- popup 启动、后端重连和 `init_completed` 后会主动读取 `/api/delight/pending`，runtime stream 收到新的 `delight.candidate` 也会即时刷新首屏卡
+- 惊喜推荐通知点击后会打开带 `?tab=recommend&delight=<bvid>` 的插件页面，直接落到对应候选，而不是只回到通用推荐页
+- 首屏惊喜卡支持 `看看 / 不感兴趣 / 聊一聊 / 稍后看` 四个动作，并会把“已打开 / 已聊过 / 先少来点”保留成本地稳定态，而不是立刻消失
+
+### 惊喜推荐运行时修复
+
+- delight 运行时和后台打分不再各用一套门槛：共享阈值统一到默认 `0.70`，探索开放度低时自动提高到 `0.80`，避免真实数据里分数已经够高却永远过不了 `pending` 查询
+- `precompute_delight_scores()` 现在会回填“已有高分但缺 `delight_reason / delight_hook`”的 backlog，不再只处理 `delight_score = 0` 的新候选
+- 后台启动时会额外跑一次 delight 预热，即使当前没有普通推荐文案要补，也会把可推送的惊喜候选准备好
+- `pending delight` 只会暴露文案已就绪的候选；`suppressed` 的高分库存也允许作为惊喜推荐入口，避免被普通池限流后直接从惊喜通道里消失
 
 ### 源无关内容分类：XHS 内容入库后自动 LLM 分类
 

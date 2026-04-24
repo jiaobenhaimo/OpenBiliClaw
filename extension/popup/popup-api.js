@@ -62,6 +62,11 @@ export async function fetchPendingNotification() {
   return requestJson("/notifications/pending", { method: "GET" });
 }
 
+export async function fetchPendingDelight() {
+  const payload = await requestJson("/delight/pending", { method: "GET" });
+  return payload?.item ?? null;
+}
+
 export async function acknowledgeNotificationSent(bvid) {
   return requestJson("/notifications/sent", {
     method: "POST",

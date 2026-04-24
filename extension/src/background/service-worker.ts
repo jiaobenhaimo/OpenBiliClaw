@@ -344,7 +344,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   }
   const delightBvid = parseDelightBvid(notificationId);
   if (delightBvid) {
-    void openExtensionUi(chrome, { tab: "recommend" });
+    void openExtensionUi(chrome, { tab: "recommend", delightBvid });
     void chrome.notifications.clear(notificationId);
     return;
   }

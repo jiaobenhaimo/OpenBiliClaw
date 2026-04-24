@@ -1471,7 +1471,9 @@ class Database:
             FROM content_cache
             WHERE COALESCE(delight_score, 0.0) >= ?
               AND COALESCE(delight_notified, 0) = 0
-              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
+              AND COALESCE(delight_reason, '') != ''
+              AND COALESCE(delight_hook, '') != ''
+              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown', 'suppressed')
             ORDER BY delight_score DESC, relevance_score DESC, discovered_at DESC
             LIMIT 1
             """,
@@ -1526,7 +1528,9 @@ class Database:
             FROM content_cache
             WHERE COALESCE(delight_score, 0.0) >= ?
               AND COALESCE(delight_notified, 0) = 0
-              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
+              AND COALESCE(delight_reason, '') != ''
+              AND COALESCE(delight_hook, '') != ''
+              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown', 'suppressed')
             """,
             (min_delight_score,),
         )
@@ -1536,25 +1540,59 @@ class Database:
     def get_pool_candidates_needing_delight_score(
         self,
         limit: int = 30,
+        *,
+        min_delight_score_for_reason: float | None = None,
     ) -> list[dict[str, Any]]:
-        """Return fresh pool candidates that haven't been delight-scored yet."""
-        cursor = self.conn.execute(
-            """
-            SELECT *
-            FROM content_cache
-            WHERE COALESCE(pool_status, 'fresh') = 'fresh'
-              AND COALESCE(feedback_type, '') != 'dislike'
-              AND COALESCE(delight_score, 0.0) = 0.0
-              AND NOT EXISTS (
-                SELECT 1
-                FROM recommendations AS r
-                WHERE r.bvid = content_cache.bvid
-              )
-            ORDER BY relevance_score DESC, discovered_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        """Return pool candidates that still need delight evaluation or copy."""
+        if min_delight_score_for_reason is None:
+            cursor = self.conn.execute(
+                """
+                SELECT *
+                FROM content_cache
+                WHERE COALESCE(pool_status, 'fresh') IN ('fresh', 'suppressed')
+                  AND COALESCE(feedback_type, '') != 'dislike'
+                  AND COALESCE(delight_score, 0.0) = 0.0
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM recommendations AS r
+                    WHERE r.bvid = content_cache.bvid
+                  )
+                ORDER BY relevance_score DESC, discovered_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        else:
+            cursor = self.conn.execute(
+                """
+                SELECT *
+                FROM content_cache
+                WHERE COALESCE(pool_status, 'fresh') IN ('fresh', 'suppressed')
+                  AND COALESCE(feedback_type, '') != 'dislike'
+                  AND (
+                    COALESCE(delight_score, 0.0) = 0.0
+                    OR (
+                      COALESCE(delight_score, 0.0) >= ?
+                      AND (
+                        COALESCE(delight_reason, '') = ''
+                        OR COALESCE(delight_hook, '') = ''
+                      )
+                    )
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM recommendations AS r
+                    WHERE r.bvid = content_cache.bvid
+                  )
+                ORDER BY
+                    CASE WHEN COALESCE(delight_score, 0.0) > 0.0 THEN 0 ELSE 1 END ASC,
+                    delight_score DESC,
+                    relevance_score DESC,
+                    discovered_at DESC
+                LIMIT ?
+                """,
+                (min_delight_score_for_reason, limit),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
     @staticmethod

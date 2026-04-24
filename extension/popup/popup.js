@@ -8,6 +8,7 @@ import {
   getCommentSubmitUiState,
   getCognitionHistoryUiState,
   getConnectionBadgeState,
+  getDelightUiState,
   getDisplayedPoolStatusSummary,
   getNextExpandedCognitionIndex,
   getReadyRecommendationHint,
@@ -17,6 +18,7 @@ import {
   getSubmissionProgressMessage,
   getTabButtonState,
   mergeRuntimeStatusEvent,
+  mergeDelightCandidate,
   normalizeActivityFeed,
   normalizeProfileSummary,
   shouldFetchProfileSummary,
@@ -29,6 +31,7 @@ import {
   checkBackendStatus,
   fetchActivityFeed,
   fetchConfig,
+  fetchPendingDelight,
   fetchProfileSummary,
   fetchRecommendations,
   fetchRuntimeStatus,
@@ -62,6 +65,9 @@ const state = {
   runtimeEvent: null,
   activityFeed: null,
   activityExpanded: false,
+  activeDelight: null,
+  delightHighlightBvid: "",
+  dismissedDelightBvids: [],
   activeFeedbackProgress: null,
   refreshStatusMessage: "",
   pendingProbe: null,
@@ -87,6 +93,7 @@ const elements = {
   poolAvailable: document.getElementById("poolAvailable"),
   poolReplenished: document.getElementById("poolReplenished"),
   poolTopics: document.getElementById("poolTopics"),
+  delightSlot: document.getElementById("delightSlot"),
   tabRecommend: document.getElementById("tabRecommend"),
   tabProfile: document.getElementById("tabProfile"),
   tabChat: document.getElementById("tabChat"),
@@ -239,6 +246,22 @@ function renderPoolStatus(runtimeStatus) {
   elements.poolTopics.textContent = summary.topics;
 }
 
+function rememberDismissedDelight(bvid) {
+  if (!bvid || state.dismissedDelightBvids.includes(bvid)) {
+    return;
+  }
+  state.dismissedDelightBvids = [...state.dismissedDelightBvids, bvid];
+}
+
+function mergeIncomingDelight(candidate) {
+  state.activeDelight = mergeDelightCandidate(
+    state.activeDelight,
+    candidate,
+    state.dismissedDelightBvids,
+  );
+  renderDelightSlot();
+}
+
 function getRuntimeEventTone(event) {
   const type = String(event?.type ?? "");
   if (type === "refresh.failed") {
@@ -256,6 +279,9 @@ function connectRuntimeStream() {
       state.runtimeEvent = event;
       state.runtimeStatus = mergeRuntimeStatusEvent(state.runtimeStatus, event);
       renderPoolStatus(state.runtimeStatus);
+      if (event.type === "delight.candidate" && event.bvid) {
+        mergeIncomingDelight(event);
+      }
       state.activeFeedbackProgress?.handle?.(event);
       if (elements.footer instanceof HTMLElement) {
         elements.footer.dataset.tone = getHintBannerState(getRuntimeEventTone(event)).tone;
@@ -1642,6 +1668,220 @@ function createActionButton(label, className, onClick) {
   return button;
 }
 
+function renderDelightSlot() {
+  if (!(elements.delightSlot instanceof HTMLElement)) {
+    return;
+  }
+
+  const uiState = getDelightUiState(state.activeDelight, {
+    highlightBvid: state.delightHighlightBvid,
+  });
+
+  if (!uiState.visible || !state.activeDelight?.bvid) {
+    elements.delightSlot.hidden = true;
+    elements.delightSlot.replaceChildren();
+    return;
+  }
+
+  const delight = state.activeDelight;
+  const isHandled = uiState.handled;
+
+  const card = document.createElement("article");
+  card.className = `delight-card${uiState.highlighted ? " is-highlighted" : ""}`;
+  card.dataset.state = delight.state || "pending";
+
+  const header = document.createElement("div");
+  header.className = "delight-header";
+
+  const kicker = document.createElement("span");
+  kicker.className = "delight-kicker";
+  kicker.textContent = "惊喜推荐";
+
+  const score = document.createElement("span");
+  score.className = "delight-score";
+  score.textContent = uiState.score_label;
+
+  header.append(kicker, score);
+
+  const hero = document.createElement("button");
+  hero.type = "button";
+  hero.className = "delight-hero";
+  hero.addEventListener("click", async () => {
+    await openRecommendation(delight.bvid, delight);
+    state.activeDelight = {
+      ...(state.activeDelight ?? delight),
+      state: "viewed",
+      response_message: "已打开，阿B 会把这次点击当成强信号。",
+      composer_open: false,
+    };
+    renderDelightSlot();
+  });
+
+  const cover = document.createElement("div");
+  cover.className = "delight-cover";
+  if (delight.cover_url) {
+    const image = document.createElement("img");
+    image.src = delight.cover_url;
+    image.alt = `${delight.title} 的封面`;
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => {
+      image.remove();
+      cover.textContent = "这条先看标题就行";
+    });
+    cover.append(image);
+  } else {
+    cover.textContent = "这条先看标题就行";
+  }
+
+  const copy = document.createElement("div");
+  copy.className = "delight-copy";
+
+  if (delight.delight_hook) {
+    const hook = document.createElement("span");
+    hook.className = "delight-hook";
+    hook.textContent = delight.delight_hook;
+    copy.append(hook);
+  }
+
+  const title = document.createElement("h3");
+  title.className = "delight-title";
+  title.textContent = delight.title;
+
+  const reason = document.createElement("p");
+  reason.className = "delight-reason";
+  reason.textContent = delight.delight_reason;
+
+  copy.append(title, reason);
+  hero.append(cover, copy);
+
+  const response = document.createElement("p");
+  response.className = "delight-response";
+  response.dataset.tone = uiState.response_tone;
+  response.textContent = uiState.response_message;
+  response.hidden = !uiState.response_message;
+
+  const actions = document.createElement("div");
+  actions.className = "delight-actions";
+
+  const openButton = createActionButton("看看", "action-button action-primary", async () => {
+    await openRecommendation(delight.bvid, delight);
+    state.activeDelight = {
+      ...(state.activeDelight ?? delight),
+      state: "viewed",
+      response_message: "已打开，阿B 会把这次点击当成强信号。",
+      composer_open: false,
+    };
+    renderDelightSlot();
+  });
+
+  const rejectButton = createActionButton("不感兴趣", "action-button action-secondary", () => {
+    state.activeDelight = {
+      ...(state.activeDelight ?? delight),
+      state: "rejected",
+      response_message: "记下了，这类惊喜先少来点。",
+      composer_open: false,
+    };
+    setHint("记下了，这类惊喜先少来点。", "success");
+    renderDelightSlot();
+  });
+
+  const chatButton = createActionButton("聊一聊", "action-button action-secondary", () => {
+    state.activeDelight = {
+      ...(state.activeDelight ?? delight),
+      composer_open: !(state.activeDelight ?? delight)?.composer_open,
+    };
+    renderDelightSlot();
+  });
+
+  const laterButton = createActionButton("稍后看", "action-button action-secondary", () => {
+    rememberDismissedDelight(delight.bvid);
+    state.activeDelight = null;
+    setHint("先给你收起来，回头想看再翻。", "info");
+    renderDelightSlot();
+  });
+
+  if (isHandled) {
+    rejectButton.disabled = true;
+    laterButton.disabled = true;
+  }
+
+  actions.append(openButton, rejectButton, chatButton, laterButton);
+  card.append(header, hero, response, actions);
+
+  if (delight.chat_reply) {
+    const reply = document.createElement("p");
+    reply.className = "delight-chat-reply";
+    reply.textContent = delight.chat_reply;
+    card.append(reply);
+  }
+
+  if (delight.composer_open) {
+    const composer = document.createElement("div");
+    composer.className = "delight-chat-composer";
+
+    const input = document.createElement("textarea");
+    input.className = "chat-input";
+    input.rows = 3;
+    input.placeholder = "说说你为什么想点开，或者哪里还拿不准";
+    input.value = delight.chat_draft || "";
+    input.addEventListener("input", () => {
+      if (state.activeDelight?.bvid === delight.bvid) {
+        state.activeDelight = {
+          ...state.activeDelight,
+          chat_draft: input.value,
+        };
+      }
+    });
+
+    const status = document.createElement("p");
+    status.className = "delight-chat-status";
+
+    const submit = createActionButton("发出去", "action-button action-primary", async () => {
+      const draft = input.value.trim();
+      if (!draft) {
+        status.textContent = "先写一句你的想法。";
+        input.focus();
+        return;
+      }
+
+      submit.disabled = true;
+      status.textContent = "正在整理这条惊喜推荐给阿B。";
+      try {
+        const payload = await sendChatMessage(
+          `我想聊聊一条惊喜推荐。\n标题：${delight.title}\n理由：${delight.delight_reason}\n我的想法：${draft}`,
+        );
+        state.activeDelight = {
+          ...(state.activeDelight ?? delight),
+          state: "chatted",
+          response_message: "这句已经记下，后面会更会试探。",
+          chat_reply: payload.reply,
+          chat_draft: "",
+          composer_open: false,
+        };
+        setHint("这句记下了，后面的惊喜推荐会继续学。", "success");
+        renderDelightSlot();
+        await refreshProfileSummaryAfterInteraction({
+          onProfileStart() {
+            setHint("正在同步画像。", "info");
+          },
+          onActivityStart() {
+            setHint("画像已同步，正在刷新最近动态。", "info");
+          },
+        });
+      } catch {
+        submit.disabled = false;
+        status.textContent = "这句还没发出去，稍后再试。";
+      }
+    });
+
+    composer.append(input, submit, status);
+    card.append(composer);
+  }
+
+  elements.delightSlot.hidden = false;
+  elements.delightSlot.replaceChildren(card);
+}
+
 function createCommentComposer(item, statusLine) {
   const wrapper = document.createElement("div");
   wrapper.className = "comment-composer";
@@ -2202,20 +2442,37 @@ async function initializeRecommendations() {
   if (!online) {
     state.runtimeStatus = null;
     state.recommendations = [];
+    state.activeDelight = null;
     state.hasMoreRecommendations = false;
     state.loadingMore = false;
+    renderDelightSlot();
     renderRecommendationState(getPopupState({ online, items: [], runtimeStatus: null }));
     renderProfileSummary(normalizeProfileSummary({ initialized: false }));
     return;
   }
 
-  const [runtimeResult, recommendationResult] = await Promise.allSettled([
+  const [runtimeResult, recommendationResult, delightResult] = await Promise.allSettled([
     fetchRuntimeStatus(),
     fetchRecommendations(),
+    fetchPendingDelight(),
   ]);
 
   state.runtimeStatus = runtimeResult.status === "fulfilled" ? runtimeResult.value : null;
+  if (delightResult.status === "fulfilled") {
+    if (delightResult.value == null) {
+      if ((state.activeDelight?.state || "pending") === "pending") {
+        state.activeDelight = null;
+      }
+    } else {
+      state.activeDelight = mergeDelightCandidate(
+        state.activeDelight,
+        delightResult.value,
+        state.dismissedDelightBvids,
+      );
+    }
+  }
   renderPoolStatus(state.runtimeStatus);
+  renderDelightSlot();
   await loadActivityFeed();
 
   if (recommendationResult.status === "fulfilled") {
@@ -2610,7 +2867,9 @@ function bindSettings() {
 }
 
 async function initializePopup() {
-  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const params = new URLSearchParams(window.location.search);
+  const requestedTab = params.get("tab");
+  state.delightHighlightBvid = params.get("delight")?.trim() || "";
   bindTabs();
   bindProfileHistoryLoading();
   bindRefreshButton();

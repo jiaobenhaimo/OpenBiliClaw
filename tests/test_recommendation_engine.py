@@ -1617,3 +1617,62 @@ def test_re_ingest_does_not_overwrite_classified_fields() -> None:
         assert row["topic_key"] == "美食烹饪"
         assert float(row["relevance_score"]) == pytest.approx(0.85)
         assert row["relevance_reason"] == "美食烹饪类内容"
+
+
+@pytest.mark.asyncio
+async def test_precompute_delight_scores_backfills_missing_copy_for_high_scored_rows() -> None:
+    class _DelightLLM:
+        async def complete_structured_task(
+            self,
+            *,
+            system_instruction: str,
+            user_input: str,
+            history: list[dict[str, str]] | None = None,
+            temperature: float = 0.7,
+            max_tokens: int = 4096,
+        ) -> LLMResponse:
+            return LLMResponse(
+                content=json.dumps(
+                    {
+                        "delight_reason": "这条会把你最近那股想搞明白系统结构的劲头接住。",
+                        "delight_hook": "结构上头",
+                    },
+                    ensure_ascii=False,
+                ),
+                provider="test",
+                model="dummy",
+                usage={},
+            )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db = Database(Path(tmpdir) / "test.db")
+        db.initialize()
+        db.cache_content(
+            "BV1BACKFILL",
+            title="讲透复杂系统的连接方式",
+            up_name="系统观察者",
+            source="explore",
+            relevance_score=0.91,
+            description="从复杂系统角度解释结构之间如何互相作用。",
+            view_count=50000,
+            like_count=3200,
+        )
+        db.update_delight_score(
+            "BV1BACKFILL",
+            delight_score=0.72,
+            delight_reason="",
+            delight_hook="",
+        )
+        engine = RecommendationEngine(llm=_DelightLLM(), database=db)
+
+        scored = await engine.precompute_delight_scores(
+            profile=_build_profile(),
+            limit=10,
+        )
+
+        assert scored == 1
+        candidate = db.get_delight_candidate(min_delight_score=0.70)
+        assert candidate is not None
+        assert candidate["bvid"] == "BV1BACKFILL"
+        assert candidate["delight_reason"] == "这条会把你最近那股想搞明白系统结构的劲头接住。"
+        assert candidate["delight_hook"] == "结构上头"
