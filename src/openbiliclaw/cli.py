@@ -55,17 +55,19 @@ def _bootstrap_container_runtime() -> None:
 
 
 _RUNTIME_COMPONENTS: dict[str, Any] = {}
+# Initial discover runs one cheap stage only. ``trending`` is the
+# fastest strategy — it skips LLM query generation (fetches editorial
+# rankings directly) so the wall time is dominated by a single LLM
+# evaluation batch. The remaining strategies (search / related_chain /
+# explore) each add at least one more 60s+ LLM call under thinking
+# mode, which blows the init budget.
 _INIT_DISCOVERY_PLAN = [
-    ["search", "related_chain"],
     ["trending"],
-    ["explore"],
 ]
-# Initial pool target. Kept deliberately small — just enough for a
-# usable first impression. The background refresh loop tops the pool
-# up to ``scheduler.pool_target_count`` over the following hour, so
-# there is no point making the user wait through tens of LLM
-# evaluations during ``init`` (especially under thinking mode).
-_INIT_POOL_TARGET_COUNT = 40
+# Initial pool target. Kept deliberately small so the evaluator only
+# needs a single batch. The background refresh loop tops the pool up
+# to ``scheduler.pool_target_count`` over the following hour.
+_INIT_POOL_TARGET_COUNT = 10
 
 if TYPE_CHECKING:
     from pathlib import Path
