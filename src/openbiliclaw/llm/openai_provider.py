@@ -149,6 +149,20 @@ class OpenAIProvider(LLMProvider):
         return {}
 
 
+# DeepSeek's ``max_tokens`` caps thinking + response combined. With
+# ``reasoning_effort="max"`` the thinking stream alone can burn tens of
+# thousands of tokens before any ``content`` is emitted, which causes the
+# response to end with ``content=""`` and our provider to raise
+# LLMResponseError. These floors ensure callers that passed a small
+# ``max_tokens`` (our codebase default is 4096) still leave enough
+# headroom for the reasoning phase to finish. DeepSeek's documented
+# ceiling is 64K.
+_DEEPSEEK_THINKING_MAX_TOKENS_FLOOR = {
+    "max": 32768,
+    "high": 16384,
+}
+
+
 class DeepSeekProvider(OpenAIProvider):
     """DeepSeek provider (OpenAI-compatible API).
 
@@ -173,6 +187,54 @@ class DeepSeekProvider(OpenAIProvider):
             provider_name="deepseek",
         )
         self._reasoning_effort = reasoning_effort.strip()
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        effort = self._reasoning_effort
+        if effort:
+            floor = _DEEPSEEK_THINKING_MAX_TOKENS_FLOOR.get(effort, 16384)
+            if max_tokens < floor:
+                logger.debug(
+                    "deepseek: bumping max_tokens from %s to %s for effort=%s",
+                    max_tokens,
+                    floor,
+                    effort,
+                )
+                max_tokens = floor
+        try:
+            return await super().complete(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                json_mode=json_mode,
+            )
+        except LLMResponseError:
+            if not effort:
+                raise
+            # Max-effort reasoning occasionally burns through the entire
+            # output budget before the model emits any ``content``. Retry
+            # once with thinking disabled so structured pipelines get a
+            # usable response instead of hard-failing.
+            logger.warning(
+                "deepseek: empty content with reasoning_effort=%s; retrying with thinking disabled",
+                effort,
+            )
+            self._reasoning_effort = ""
+            try:
+                return await super().complete(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=json_mode,
+                )
+            finally:
+                self._reasoning_effort = effort
 
     def _extra_body(self) -> dict[str, Any]:
         if not self._reasoning_effort:
