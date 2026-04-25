@@ -33,13 +33,18 @@ class DiscoveryConcurrencyController:
     """Shared bounded concurrency for external discovery dependencies."""
 
     bilibili_request_concurrency: int = 2
-    # Cap on simultaneous discovery LLM calls. Raised from 2 to 8 after
-    # moving off Gemini's 15-RPM free tier onto deepseek, which has no
-    # effective RPM cap at our request sizes. Combined with batch-level
-    # concurrency inside ``evaluate_content_batch`` this lets a single
-    # discovery run fan out ~8 LLM calls at a time instead of crawling.
-    # ``chat_active`` still yields the lane to an interactive dialogue.
-    llm_evaluation_concurrency: int = 8
+    # Cap on simultaneous discovery LLM calls. Sized so a typical init
+    # discover (4 strategies × ~8 batches each = ~32 batches) fans out
+    # in a single wave rather than queueing behind the cap. Each batch
+    # is a max-thinking deepseek call (~60-100s); without enough
+    # concurrency we'd spend the full P4 budget waiting on the
+    # semaphore (observed 17 min wall on 40 batches at concurrency=8,
+    # of which only ~100s was actual LLM compute per batch).
+    # deepseek has no effective RPM cap at our request sizes, so the
+    # only practical limits are the local event loop overhead and the
+    # ``chat_active`` yield (which still works to give interactive
+    # dialogue priority).
+    llm_evaluation_concurrency: int = 32
     search_budget_total: int = 30
     """Total bilibili search API calls allowed per discovery run.
 
