@@ -304,7 +304,9 @@ def _build_discovery_engine() -> Any:
     llm_service = LLMService(registry=_build_registry(), memory=memory)
     concurrency = DiscoveryConcurrencyController(
         bilibili_request_concurrency=2,
-        llm_evaluation_concurrency=2,
+        # Inherit dataclass default (currently 32) — sized so an init
+        # discover's ~32 batches all fan out in a single wave instead
+        # of queueing behind a tight cap. See engine.py for rationale.
     )
 
     # Build embedding service from config (optional)
