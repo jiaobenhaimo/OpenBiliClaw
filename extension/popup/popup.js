@@ -1498,6 +1498,60 @@ function getProfileCognitionItems(summary) {
   return Array.isArray(summary?.recent_cognition_updates) ? summary.recent_cognition_updates : [];
 }
 
+// Split a long prose portrait into reader-friendly paragraphs.
+// LLM-generated portraits are 600-1000 chars of continuous Chinese
+// text — rendered as a single block they read like a wall and the
+// user's eye can't find a stopping point. Group sentences (split on
+// 。！？.!?) until either ~150 chars accumulate or a natural turn
+// connector ("但"/"最近"/"所以"/"不过"/"另外"/"于是") starts a new
+// thought. Render each group as its own ``<p>``.
+function splitPortraitToParagraphs(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return [];
+  const sentences = trimmed
+    .split(/(?<=[。！？.!?])\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (sentences.length <= 1) return sentences;
+
+  const TURN_PREFIXES = ["但", "不过", "然而", "最近", "所以", "因此", "另外", "其实", "于是"];
+  const TARGET_PARAGRAPH_LEN = 150;
+
+  const paragraphs = [];
+  let buffer = [];
+  let bufferLen = 0;
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    paragraphs.push(buffer.join(""));
+    buffer = [];
+    bufferLen = 0;
+  };
+
+  for (const sentence of sentences) {
+    const isTurn = TURN_PREFIXES.some((p) => sentence.startsWith(p));
+    if (buffer.length > 0 && (bufferLen >= TARGET_PARAGRAPH_LEN || isTurn)) {
+      flush();
+    }
+    buffer.push(sentence);
+    bufferLen += sentence.length;
+  }
+  flush();
+  return paragraphs;
+}
+
+function renderPortraitParagraphs(container, text) {
+  if (!(container instanceof HTMLElement)) return;
+  container.replaceChildren();
+  const paragraphs = splitPortraitToParagraphs(text);
+  for (const p of paragraphs) {
+    const node = document.createElement("p");
+    node.className = "profile-portrait-paragraph";
+    node.textContent = p;
+    container.append(node);
+  }
+}
+
 function renderProfileSummary(summary) {
   if (
     !(elements.profileEmpty instanceof HTMLElement) ||
@@ -1526,7 +1580,7 @@ function renderProfileSummary(summary) {
 
   elements.profileEmpty.hidden = true;
   elements.profileCard.hidden = false;
-  elements.profilePortrait.textContent = summary.personality_portrait;
+  renderPortraitParagraphs(elements.profilePortrait, summary.personality_portrait);
   // Core
   renderChipList(elements.profileTraits, summary.core_traits, "这部分还在慢慢补");
   renderChipList(elements.profileNeeds, summary.deep_needs, "这块还要再多看一点");

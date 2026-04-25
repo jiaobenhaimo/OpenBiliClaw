@@ -1165,6 +1165,31 @@
       color: var(--text-main);
     }
 
+    /* Multi-paragraph portrait — auto-split on sentence boundaries
+       so the LLM's 600-1000 char prose blob breathes. Each paragraph
+       is its own block with consistent spacing; the first one gets
+       a slightly stronger lead-in feel via a left rail. */
+    .profile-portrait {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .profile-portrait-paragraph {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.85;
+      color: var(--text-main);
+      text-indent: 1.6em;
+    }
+
+    .profile-portrait-paragraph:first-child {
+      text-indent: 0;
+      padding-left: 10px;
+      border-left: 2px solid var(--brand-strong, currentColor);
+    }
+
     .profile-phase-copy {
       margin-top: 10px;
       font-size: 12px;
@@ -2895,7 +2920,7 @@
           <!-- ── 综合叙事 ── -->
           <div class="profile-summary">
             <h3>这会儿的你</h3>
-            <p id="profilePortrait" class="profile-copy"></p>
+            <div id="profilePortrait" class="profile-portrait"></div>
           </div>
 
           <!-- ── Core 层 ── -->
