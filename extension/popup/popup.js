@@ -1062,10 +1062,12 @@ function expandDelightChat(itemEl, delight) {
     const message = input.value.trim();
     if (!message) return;
     sendBtn.disabled = true;
-    sendBtn.textContent = "\u601D\u8003\u4E2D\u2026";
+    const thinking = createChatThinkingPlaceholder("\u963fB \u6b63\u5728\u54c1\u4f60\u8fd9\u53e5\u8bdd");
+    itemEl.append(thinking);
     try {
       const result = await respondToDelight(delight.bvid, "chat", delight.title, message);
       const reply = result?.reply || "\u6536\u5230\u4E86\uFF0C\u6211\u4F1A\u7EE7\u7EED\u89C2\u5BDF\u3002";
+      thinking.remove();
       const replyEl = document.createElement("div");
       replyEl.className = "message-chat-reply";
       replyEl.textContent = reply;
@@ -1075,8 +1077,8 @@ function expandDelightChat(itemEl, delight) {
       setTimeout(() => { dismissMessageByBvid(delight.bvid); itemEl.remove(); renderMessagesEmptyIfNeeded(); }, 4000);
     } catch (err) {
       console.error("Delight chat failed:", err);
+      thinking.remove();
       sendBtn.disabled = false;
-      sendBtn.textContent = "\u53D1\u9001";
       const errEl = document.createElement("div");
       errEl.className = "message-chat-reply";
       errEl.textContent = "\u540E\u53F0\u6B63\u5FD9\uFF0C\u7B49\u4E00\u4E0B\u518D\u804A\u3002";
@@ -1138,16 +1140,46 @@ function expandInlineChat(itemEl, domain) {
   input.focus();
 }
 
+
+function createChatThinkingPlaceholder(label) {
+  // Reusable "thinking" indicator for any in-card chat composer.
+  // Shows the bouncing-dots animation plus a friendly label so the
+  // user knows the request is in flight (default ~30s for delight
+  // chat, ~30s for probe chat).
+  const wrap = document.createElement("div");
+  wrap.className = "message-chat-thinking";
+  const text = document.createElement("span");
+  text.className = "message-chat-thinking-label";
+  text.textContent = label || "\u963fB \u6b63\u5728\u601d\u8003";
+  const dots = document.createElement("span");
+  dots.className = "chat-thinking-dots";
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement("span");
+    dot.className = "chat-thinking-dot";
+    dots.append(dot);
+  }
+  wrap.append(text, dots);
+  return wrap;
+}
+
 async function sendInlineChat(itemEl, domain, input, sendBtn) {
   const message = input.value.trim();
   if (!message) return;
 
   sendBtn.disabled = true;
-  sendBtn.textContent = "\u601D\u8003\u4E2D\u2026";
+
+  // Show a thinking placeholder so the user knows we\u2019re waiting
+  // on the LLM. The composer\u2019s send button alone going gray
+  // wasn\u2019t enough of a signal — many users assumed the click
+  // didn\u2019t register.
+  const thinking = createChatThinkingPlaceholder("\u963fB \u6b63\u5728\u601d\u8003\u8fd9\u4e2a\u65b9\u5411");
+  itemEl.append(thinking);
 
   try {
     const result = await respondToInterestProbe(domain, "chat", message);
     const reply = result?.reply || result?.message || "\u6536\u5230\u4E86\uFF0C\u6211\u4F1A\u7ED3\u5408\u8FD9\u4E2A\u65B9\u5411\u7EE7\u7EED\u89C2\u5BDF\u3002";
+
+    thinking.remove();
 
     // Show reply
     const replyEl = document.createElement("div");
@@ -1167,8 +1199,8 @@ async function sendInlineChat(itemEl, domain, input, sendBtn) {
     }, 4000);
   } catch (err) {
     console.error("Inline chat failed:", err);
+    thinking.remove();
     sendBtn.disabled = false;
-    sendBtn.textContent = "\u53D1\u9001";
     // Show error hint inline
     const errEl = document.createElement("div");
     errEl.className = "message-chat-reply";
@@ -2265,7 +2297,13 @@ function renderDelightSlot() {
             return;
           }
           submit.disabled = true;
-          status.textContent = "正在整理这条惊喜推荐给阿B。";
+          // Show animated thinking dots so the user knows the LLM
+          // is working — a static "正在整理…" line wasn't enough
+          // signal during the 5-30s delight chat round-trip.
+          status.replaceChildren();
+          status.append(
+            createChatThinkingPlaceholder("阿B 正在品你这句话"),
+          );
           try {
             const payload = await sendChatMessage(
               `我想聊聊一条惊喜推荐。\n标题：${delight.title}\n理由：${delight.delight_reason}\n我的想法：${draft}`,

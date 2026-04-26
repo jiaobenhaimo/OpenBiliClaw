@@ -2448,6 +2448,30 @@
       letter-spacing: 0.02em;
     }
 
+    /* In-card chat "thinking" indicator (probe / delight inbox + banner). */
+    .message-chat-thinking {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.7);
+      border-radius: 12px;
+      border: 1px solid rgba(237, 219, 233, 0.5);
+      animation: chat-thinking-fadein 0.18s ease-out;
+    }
+    .message-chat-thinking-label {
+      flex: 1;
+      min-width: 0;
+    }
+    @keyframes chat-thinking-fadein {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: none; }
+    }
+
     .chat-thinking-dots {
       display: inline-flex;
       align-items: center;
