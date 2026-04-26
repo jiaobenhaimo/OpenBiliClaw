@@ -725,10 +725,24 @@ function updateMessageBadge() {
   badge.hidden = count === 0;
 }
 
-function openMessagesPanel() {
+async function openMessagesPanel() {
   const overlay = elements.messagesOverlay;
   if (!(overlay instanceof HTMLElement)) return;
   overlay.hidden = false;
+  // Render whatever we have synchronously so the panel doesn't open
+  // empty while we refetch.
+  renderMessagesList();
+  // Then force-refresh the profile so the inbox shows the *current*
+  // active speculations.  Without this, probes that the speculator
+  // rotated out (TTL, replacement, manual force_tick) can sit stale
+  // in the inbox and clicking them returns ``ok: false`` because the
+  // backend no longer recognises the domain.
+  try {
+    await loadProfileSummary({ force: true });
+  } catch {
+    // Already-rendered stale list is acceptable on refresh failure.
+    return;
+  }
   renderMessagesList();
 }
 
@@ -1042,10 +1056,31 @@ function dismissMessage(domain) {
 
 async function handleMessageResponse(domain, responseType) {
   try {
-    await respondToInterestProbe(domain, responseType);
+    const apiResp = await respondToInterestProbe(domain, responseType);
 
-    // Show feedback in-place
     const item = elements.messagesList?.querySelector(`[data-domain="${CSS.escape(domain)}"]`);
+    // ok=false means the backend no longer recognises this domain
+    // (typical: probe rotated out by TTL or a fresh force_tick while
+    // the popup sat open with a stale inbox). Tell the user, then
+    // force-refetch and re-render so the panel matches reality.
+    if (apiResp && apiResp.ok === false) {
+      if (item) {
+        item.replaceChildren();
+        const stale = document.createElement("p");
+        stale.className = "message-result";
+        stale.textContent = "\u8FD9\u6761\u5DF2\u7ECF\u8FC7\u671F\u4E86\uFF0C\u6B63\u5728\u5237\u65B0\u2026";
+        item.append(stale);
+      }
+      try {
+        await loadProfileSummary({ force: true });
+      } catch {
+        /* fall through */
+      }
+      removeMessageFromState(domain);
+      renderMessagesList();
+      return;
+    }
+
     if (item) {
       item.replaceChildren();
       const msg = document.createElement("p");
