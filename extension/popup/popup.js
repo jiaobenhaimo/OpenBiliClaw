@@ -311,11 +311,25 @@ function pushDelightCandidate(candidate) {
 // the head, drop the item at the current index; the next item slides
 // into its place. After a removal the index points to whatever now
 // occupies that slot (or to length-1 if we just removed the last).
+//
+// Preserve the expanded state across removal so that × / 看看 / 喜欢
+// / 不感兴趣 don't collapse the next item's body — once the user
+// is in "browse with detail" mode, every queued item should keep
+// showing its full reason+actions until the user explicitly collapses.
 function removeCurrentDelight() {
   if (state.activeDelights.length === 0) return;
+  const wasExpanded = Boolean(
+    state.activeDelights[state.delightCurrentIndex]?.expanded,
+  );
   state.activeDelights.splice(state.delightCurrentIndex, 1);
   // Keep the same index — it now points to the next item, or
   // clampDelightIndex() will pin it to the last when we removed the tail.
+  if (wasExpanded && state.activeDelights[state.delightCurrentIndex]) {
+    state.activeDelights[state.delightCurrentIndex] = {
+      ...state.activeDelights[state.delightCurrentIndex],
+      expanded: true,
+    };
+  }
   syncDelightHead();
 }
 
