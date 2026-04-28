@@ -120,6 +120,15 @@ class _FakeDatabase:
             return None
         return dict(candidate)
 
+    def get_delight_candidates(
+        self,
+        *,
+        min_delight_score: float = 0.85,
+        limit: int = 20,
+    ) -> list[dict[str, object]]:
+        candidate = self.get_delight_candidate(min_delight_score=min_delight_score)
+        return [] if candidate is None else [candidate]
+
     def mark_delight_notified(self, bvid: str) -> None:
         self.marked_delight_bvids.append(bvid)
 
