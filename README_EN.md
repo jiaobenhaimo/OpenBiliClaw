@@ -2,7 +2,7 @@
 
 # 🦀 OpenBiliClaw
 
-**A cross-platform personalized content discovery engine — runs on your machine, understands only you**
+**A general-purpose personalized content discovery Agent — runs locally, understands you across platforms, built only for you**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -12,6 +12,19 @@
 English | [中文](README.md)
 
 </div>
+
+> The name comes from Bilibili (`Bili` = Bilibili, `Claw` = "the claw that grabs content for you") — the project started as a Bilibili-only tool. Since v0.3.0 it has evolved into a general cross-platform Agent: Bilibili / Xiaohongshu / generic Web adapters all live in production, with more platforms on the roadmap.
+
+---
+
+## 📌 v0.3.0 Highlights (2026-04-28)
+
+- **🌐 General multi-source architecture in production** — evolved from a Bilibili-only tool into a general-purpose content Agent; Xiaohongshu and generic-Web adapters shipped
+- **🔌 Local embedding fallback** — optional Ollama + bge-m3, no extra API key needed for similarity computation (CPU-only, works on Mac/Win/Linux)
+- **⚡ "Reshuffle" 5x faster** — popup reshuffle from 2.6s → 0.6s; rapid clicks no longer feel laggy
+- **🎯 Cross-source topic dedup** — any single topic capped at ≤10% of the candidate pool; no more "all AI all day"
+
+Full changelog: [docs/changelog.md](docs/changelog.md).
 
 ---
 
@@ -131,6 +144,9 @@ vim config.toml
 # One-command init (fetch history · build profile · first discovery)
 openbiliclaw init
 
+# Optional: enable local Ollama as embedding fallback (no extra API key)
+openbiliclaw setup-embedding
+
 # Manual content discovery
 openbiliclaw discover
 
@@ -222,13 +238,16 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 
 - 🧠 **Five-Layer Soul Profile** — Event → Preference → Awareness → Insight → Soul, inferring MBTI, cognitive style, and deep needs — like a psychologist understanding you
 - 🔮 **Speculative Interest System** — Uses psychological bridging logic to guess unexplored domains you might love; promotes correct guesses, retires wrong ones, continuously breaking the filter bubble
-- 🔍 **Four Discovery Strategies** — Search, Related Chain, Trending, and Cross-domain Explore working in coordination with fair quotas, like an expert Bilibili user finding content for you
-- 🎯 **Smart Diversity** — PoolCurator scores on five dimensions (relevance · freshness · topic fatigue · source monotony · serendipity), ensuring every batch has surprises instead of more of the same
+- 🌐 **Cross-Platform Sources** — Started on Bilibili, now extended to Xiaohongshu and generic Web; the architecture is built to keep adding more platforms. Your interests no longer get siloed
+- 🔍 **Multi-Source Discovery Strategies** — Bilibili four strategies (Search · Related Chain · Trending · Cross-domain Explore) + Xiaohongshu three-tier safe discovery (passive collection · keyword search · creator subscription), coordinated cross-platform
+- 🎯 **Smart Diversity** — PoolCurator five-dimension scoring + cross-source/round topic quota (any topic ≤10% of pool) + share-aware pool trimming that protects smaller sources; goodbye to "all AI all day"
+- ⚡ **Instant "Reshuffle"** — popup reshuffle ~0.6s (down from 2.6s in v0.3.0); rapid clicks stay snappy
 - 💬 **Warm Recommendations** — Not "because you watched similar videos", but friend-like explanations of why you'd enjoy something
 - 🔄 **Continuous Learning** — Socratic dialogue + behavioral analysis + instant feedback, understands you better over time
-- 🧩 **Chrome Extension** — Side panel for recommendations, real-time behavior collection, chat, and cognition update cards — install and go
+- 🧩 **Chrome Extension** — Side panel for recommendations, cross-site behavior collection (Bilibili + Xiaohongshu), chat, and cognition update cards — install and go
 - 🔬 **Self-Optimizing Eval Loops** — Five modules each have an LLM-as-judge SGD/RL loop that automatically improves prompt quality over rounds — no manual tuning needed
 - 🔒 **Fully Private** — All data in local SQLite; LLM calls use your own key; each instance is built for exactly one person
+- 🔌 **Local Embedding Fallback** — Optional Ollama + bge-m3, no extra embedding API key required for similarity computation (CPU-only, runs on Mac/Win/Linux)
 - 🔧 **Fully Controllable** — Swap LLMs per module, edit your profile directly, write custom Skills to extend discovery
 
 ## 🏛️ Architecture Overview
@@ -316,7 +335,12 @@ OpenBiliClaw/
 
 ## 🗺️ Roadmap
 
-- **Multi-platform content sources** — Beyond Bilibili. We plan to integrate general-purpose search engines, Xiaohongshu (Little Red Book), Douyin (TikTok China), and various web forums / BBS as content sources, so recommendations cover the content you actually care about across the entire web — not just a single platform.
+OpenBiliClaw aims to be your **personalized entry point to the entire web**. Started on Bilibili, v0.3.0 shipped Xiaohongshu and generic-Web adapters; next:
+
+- **More content sources** — Zhihu, V2EX, Douyin, Weibo, various BBS / forums; each platform is a `SourceAdapter` and the architecture is proven extensible
+- **Cross-platform interest fusion** — your mechanical-keyboard interest from Bilibili + your coffee-gear interest from Xiaohongshu = one complete you. Profile fusion stops your interests from being fragmented across silos
+- **Smarter cross-source discovery** — "you started following coffee gear on Xiaohongshu, here's a hand-drip documentary on Bilibili you might love"
+- **Community ecosystem** — user-defined SourceAdapters, shared discovery strategies, contributed platform adapters
 
 ## 🤝 Contributing
 
