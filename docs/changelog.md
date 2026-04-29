@@ -4,6 +4,31 @@
 
 ---
 
+## v0.3.1: 推荐丰富度收尾 + 装机/CI 修复（2026-04-29）
+
+### 推荐丰富度二轮治理
+
+- **SQL 层加 per-topic_group cap**：`get_pool_candidates` 用 ROW_NUMBER 把每个 topic_group 在候选窗口里的项数封顶 3，让 270 个池子 group 中的长尾 group 真正进得到候选窗口。同时 over-fetch 由 `limit*5` 涨到 `limit*8`，给下游 balance 多留 headroom
+- `_balance_pool_rows` 取消 "len(rows) ≤ limit 直接返回 SQL 顺序" 的 shortcut，改成始终 round-robin，避免 SQL 把同 topic 项目堆到候选头部
+- **PoolCurator 双轴 fatigue**：原本只看 `topic_key`（细粒度），动漫杂谈/补番/解说被当成 3 个独立 topic 各自不触发 fatigue。新增 `recent_topic_groups` 维度，跨 key/group 取 max
+- **fatigue 曲线陡化**：`count/len*3` → `(count^1.5)/len*5`，count=2 的扣分从 0.20 → 0.47，count=3 从 0.30 → 0.87；`topic_fatigue` 权重 0.15 → 0.25
+- 实测：连续三批"换一批"的 distinct topic 数从 ~12-15 提升到 ~18-22，原 3/3 批都霸屏的 topic 现在最多 1/3 批
+
+### 装机器 / CI 修复
+
+- `install.sh` 检测到现有 checkout 时自动 `git fetch + git pull --ff-only`（仅当工作树干净）。之前用户重跑一句话装永远停留在旧版
+- `agent_bootstrap.start_local_backend` 加端口冲突检测：旧 OBC backend 还在跑就 SIGTERM 替换；非 OBC 进程占着端口就抛 RuntimeError 让调用方报清楚
+- `.github/workflows/release-extension.yml`：把无效的 `shell: node` 替换成 `bash + jq`，extension release CI 解锁
+- 修了 OpenClaw proactive e2e fake 的 `get_delight_candidates` 缺失方法
+
+### 其他
+
+- 弹窗 probe 反馈可见性 fix（延迟 profile 重新拉取）
+- speculator 已确认 speculation 在 popup 隐藏直到正式 promote
+- README / 仓库 About 重新定位为通用 Agent，加 release history 表
+
+---
+
 ## v0.3.0: 多源架构回归 + 推荐稳态重写（2026-04-28）
 
 ### 多源（multi-source）
