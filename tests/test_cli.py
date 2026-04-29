@@ -1316,7 +1316,10 @@ def test_init_guides_missing_auth_interactively(
     )
     monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
 
-    result = runner.invoke(app, ["init"], input="SESSDATA=valid\n")
+    # v0.3.13: auth wizard now opens with a 2-choice prompt
+    # (1=install extension and skip / 2=paste cookie now). To keep this
+    # test exercising the manual-paste path, send "2" first.
+    result = runner.invoke(app, ["init"], input="2\nSESSDATA=valid\n")
 
     assert result.exit_code == 1
     assert fake_auth.saved_cookie == "SESSDATA=valid"

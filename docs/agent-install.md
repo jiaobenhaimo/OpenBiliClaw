@@ -183,18 +183,50 @@ strings, just omit the flags).
 Most users haven't done this before. **Don't just say "give me your
 Bilibili cookie."** Walk them through it:
 
-> 「OpenBiliClaw 需要你的 B 站登录态（Cookie），用来：拉你的观看历史 → 训练画像；以你的身份调 B 站 API 拿视频详情。**Cookie 只存在你本机，不会上传任何地方。**
->
-> 怎么拿：
->   1. 用 Chrome / Edge / Firefox **登录** https://www.bilibili.com
->   2. 按 `F12` 打开开发者工具 → 切到 **Network（网络）** 标签
->   3. 刷新一下 B 站页面 → 在请求列表点任意一条 `bilibili.com` 的请求
->   4. 右侧 **Headers（请求头）** 区域，找到 `cookie:` 这一行，右键复制整行的 value
->   5. 把那一长串（包含 `SESSDATA=...; bili_jct=...; DedeUserID=...` 等）粘给我
->
-> （或者更简单：装我们的 Chrome 扩展，它会自动用你的登录态，零配置。下载：https://github.com/whiteguo233/OpenBiliClaw/releases）」
+**Lead with the extension.** Since v0.3.12 the extension auto-syncs the
+B 站 cookie to the backend on install — `chrome.cookies.onChanged` →
+`POST /api/bilibili/cookie` → backend validates against B 站 nav and
+persists. F12 dance is now the **fallback**, not the primary path.
 
-Run with `--bilibili-cookie "<the full cookie string>"`.
+Tell the user, in this order:
+
+> 「OpenBiliClaw 需要你的 B 站登录态（Cookie）来拉你的观看历史 + 调 B 站 API。
+> **Cookie 只存在你本机，不会上传任何地方。**
+>
+> 两种方式（**任选其一**）：
+>
+> **A. 装浏览器扩展（推荐，零配置）**
+>   下载: https://github.com/whiteguo233/OpenBiliClaw/releases
+>   装好后，确保你已登录 B 站（如果没登就去登）。扩展会在几秒内把
+>   Cookie 自动推到本地后端，之后 Cookie 过期/续签都会自动同步。
+>
+> **B. 手动贴 Cookie（不想装扩展时的兜底）**
+>   1. 用 Chrome / Edge / Firefox 登录 https://www.bilibili.com
+>   2. 按 F12 → Network 标签 → 刷新 → 点任意 bilibili.com 请求
+>   3. Headers 区域找到 cookie: 这一行，右键复制整行 value
+>   4. 把那一长串（含 SESSDATA / bili_jct / DedeUserID）粘给我」
+
+**If user picks A**: don't pass `--bilibili-cookie` to bootstrap.
+Bootstrap will report `running_with_missing_secrets` because cookie
+isn't there yet — that's **expected and fine**. Tell the user:
+
+> 「我已经把后端跑起来了。现在请你装扩展（链接 ↑），登录 B 站，
+>   等几秒——扩展会自动把 Cookie 推过来。然后我帮你跑 `openbiliclaw init`
+>   完成画像生成 + 首轮发现（2-5 分钟）。」
+
+Then poll `GET /api/runtime-status` (or watch for the
+`bilibili_cookie_synced` event on `ws://127.0.0.1:8420/api/runtime-stream`)
+to detect when the cookie has arrived, and run init via:
+
+```bash
+docker exec -it openbiliclaw-backend openbiliclaw init   # docker mode
+# or
+uv run openbiliclaw init                                  # local + uv
+```
+
+**If user picks B**: collect the cookie string, run with
+`--bilibili-cookie "<full cookie string>"` — bootstrap auto-runs init
+once everything's present.
 
 ### Putting it all together — example commands
 

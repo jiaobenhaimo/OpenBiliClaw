@@ -4,6 +4,22 @@
 
 ---
 
+## v0.3.13: 各种安装路径都把「装扩展自动同步」放到 Cookie 步骤的首选（2026-04-30）
+
+v0.3.12 加了扩展自动同步 Cookie，但各个安装路径的引导（向导 / 文档 / install.sh / install.ps1）都还按 F12 那套老流程在问。新用户根本不知道有更简单的路径，结果还在手动贴 Cookie。
+
+修了 5 处：
+
+- **`scripts/install.sh`** 状态块缺 `bilibili.cookie` 时，先打印 `(A) [recommended] Install the browser extension and let it auto-sync` 教程 + 链接，再列 `(B) F12 五步` 兜底
+- **`scripts/install.ps1`** 同样的 (A)/(B) 二选一引导
+- **`docs/agent-install.md` Step 4** 完全重写：明确告诉 AI agent 默认走扩展路径，不再上来就让用户 F12；如果用户选扩展，agent 不传 `--bilibili-cookie`，让 bootstrap 走 `running_with_missing_secrets` 状态，再告诉用户「装扩展，等同步」，最后再让 agent 自己跑 `openbiliclaw init`
+- **`src/openbiliclaw/cli.py` 的 `_interactive_auth_setup`** 改成 2 选 1：1) 装扩展自动同步（默认，选了直接 `typer.Exit(0)`，提示之后扩展同步好再跑 `openbiliclaw init`） 2) 现场手贴
+- **`docs/docker-deployment.md` / `docs/openclaw-quickstart.md`** 同步把扩展放到 Cookie 步骤的首选
+
+效果：装扩展是默认路径，F12 是「死活不想装扩展」时的兜底。agent-install.md 给 AI agent 的指令也变了：默认不要追问 Cookie，鼓励用户装扩展，扩展同步完后续 init 就齐活了。
+
+---
+
 ## v0.3.12: 浏览器扩展自动同步 B 站 Cookie 到后端，再也不用 F12（2026-04-30）
 
 之前用户配 B 站 Cookie 必须自己 F12 → Network → 复制 Cookie 头 → 粘到向导里。这个体验对刚接触本项目的人极不友好，而且 Cookie 过期/刷新后还得重做。其实扩展本来就跑在 bilibili.com 上，能直接读用户的 Cookie，把这个流程自动化是天然的。

@@ -1240,7 +1240,14 @@ def _interactive_runtime_config_setup() -> None:
 
 
 def _interactive_auth_setup(auth_manager: Any) -> Any:
-    """Guide the user through Bilibili auth before init."""
+    """Guide the user through Bilibili auth before init.
+
+    Two paths since v0.3.12:
+      A. Install the browser extension and let it auto-sync the cookie
+         via ``POST /api/bilibili/cookie`` (recommended — zero F12).
+      B. Paste the cookie manually right here (fallback for users who
+         won't install the extension).
+    """
     _print_page_title("初始化前认证引导", "补齐 B 站认证")
     console.print(
         "[bold]为什么需要 B 站 Cookie？[/bold]\n"
@@ -1248,16 +1255,28 @@ def _interactive_auth_setup(auth_manager: Any) -> Any:
         "  • 拉你的观看历史（用来训练画像）\n"
         "  • 以你的身份调 B 站 API 拿视频详情\n"
         "[dim]Cookie 只存在你本机 data/bilibili_cookie.json，不会上传任何地方。[/dim]\n\n"
-        "[bold]怎么获取：[/bold]\n"
-        "  1. 用 Chrome / Edge / Firefox 登录 https://www.bilibili.com\n"
-        "  2. 按 F12 打开开发者工具 → 切到 Network（网络）标签\n"
-        "  3. 刷新一下 B 站页面 → 在请求列表点任意一条 bilibili.com 的请求\n"
-        "  4. 右侧 Headers（请求头）区域，找到 cookie: 这一行，"
-        "右键复制整行的 value\n"
-        "  5. 把那一长串（包含 SESSDATA=...; bili_jct=...; DedeUserID=... 等）粘进来\n"
-        "[dim]或者：装 OpenBiliClaw 浏览器扩展，自动复用登录态，零配置。"
-        "下载：https://github.com/whiteguo233/OpenBiliClaw/releases[/dim]\n"
+        "[bold]两种方式（任选其一）：[/bold]\n"
+        "  [cyan]1.[/cyan] 装浏览器扩展，自动同步（推荐，零配置）\n"
+        "     下载: https://github.com/whiteguo233/OpenBiliClaw/releases\n"
+        "     装好后扩展会几秒内自动把登录 Cookie 推到本地后端。\n"
+        "     选这条会先退出 init；扩展同步完再跑 `openbiliclaw init` 即可。\n\n"
+        "  [cyan]2.[/cyan] 现在手动贴 Cookie\n"
+        "     1) 用 Chrome/Edge/Firefox 登录 https://www.bilibili.com\n"
+        "     2) F12 → Network 标签 → 刷新 → 点任意 bilibili.com 请求\n"
+        "     3) Headers 区域找到 cookie: 一行，右键复制整行 value\n"
+        "     4) 把那一长串（含 SESSDATA / bili_jct / DedeUserID）粘下面\n"
     )
+    choice = typer.prompt("请选 [1=装扩展自动同步 / 2=现在手贴]", default="1").strip()
+    if choice in {"1", "extension", "ext", ""}:
+        console.print(
+            "\n[bold green]好的——退出当前 init，让扩展接手。[/bold green]\n"
+            "  1. 启动后端：[cyan]openbiliclaw start[/cyan]（或保持当前 docker compose up）\n"
+            "  2. 装扩展：[cyan]https://github.com/whiteguo233/OpenBiliClaw/releases[/cyan]\n"
+            "  3. 确认你已登录 B 站；扩展会几秒内同步 Cookie\n"
+            "  4. 再跑 [cyan]openbiliclaw init[/cyan] 完成画像生成 + 首轮发现\n"
+        )
+        raise typer.Exit(code=0)
+
     while True:
         cookie_value = typer.prompt("请粘贴 B 站 Cookie", prompt_suffix=": ")
         status = asyncio.run(auth_manager.validate_cookie(cookie_value))

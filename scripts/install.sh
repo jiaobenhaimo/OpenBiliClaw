@@ -327,11 +327,22 @@ PY
         esac
         case "$missing" in
             *bilibili.cookie*)
-                echo "     - Bilibili cookie:"
-                echo "         a. Log in at https://www.bilibili.com"
-                echo "         b. Open DevTools (F12) → Network tab"
-                echo "         c. Refresh the page, click any request"
-                echo "         d. Copy the full 'Cookie' header value"
+                echo "     - Bilibili cookie. Two ways to provide it (pick ONE):"
+                echo ""
+                echo "       (A) [recommended] Install the browser extension and let"
+                echo "           it auto-sync your cookie — no F12, no copy/paste."
+                echo "           Extension: https://github.com/whiteguo233/OpenBiliClaw/releases"
+                echo "           After install, log in to bilibili.com if you aren't already;"
+                echo "           the extension pushes the cookie to this backend within seconds."
+                echo "           If you go this route, you can SKIP step 3 below — just install"
+                echo "           the extension, then run 'openbiliclaw init' once cookie syncs."
+                echo ""
+                echo "       (B) Manually paste the cookie:"
+                echo "           a. Log in at https://www.bilibili.com"
+                echo "           b. Open DevTools (F12) → Network tab"
+                echo "           c. Refresh the page, click any request"
+                echo "           d. Copy the full 'Cookie' header value"
+                echo "           Then proceed with step 3 below using --bilibili-cookie."
                 ;;
         esac
         echo ""

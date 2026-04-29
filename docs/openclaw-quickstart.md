@@ -29,7 +29,7 @@
 - 已克隆当前仓库
 - 目标机器可用 Python 3.11+
 - 可以访问当前配置所需的 LLM provider
-- 准备好 B 站 Cookie，或能在交互式终端里现场输入
+- B 站登录态：v0.3.12+ 推荐**装浏览器扩展自动同步**（[下载](https://github.com/whiteguo233/OpenBiliClaw/releases)），不再需要 F12 贴 Cookie。也可以用交互式终端现场粘
 - 如果走 Docker 路径，目标机器上还需要可用的 Docker / Docker Compose
 
 ## 方案 A：Docker 优先
@@ -73,7 +73,12 @@ docker exec -it openbiliclaw-backend openbiliclaw init
 3. **Phase 3 — Embedding（独立提问）**：4 选 1（跟随主 LLM / Ollama bge-m3 / 自定义 OpenAI 兼容 / 其他 provider）。
 4. **Phase 4 — Per-module 覆盖**（高级，默认跳过）。
 
-接着引导你贴 B 站 Cookie（向导内有 F12 → Network 取 cookie 的 5 步教程），最后才进入真正的 init 阶段：
+接着 B 站登录态走 **2 选 1**（v0.3.12+）：
+
+- 装浏览器扩展自动同步（推荐，零配置）—— 选这条向导先退出，等扩展同步后再 `openbiliclaw init` 跑剩下的
+- 现场手动贴 Cookie —— 向导附 F12 → Network 取 cookie 的 5 步教程
+
+最后进入真正的 init 阶段：
 
 1. 拉取 B 站历史 / 收藏 / 关注（≈ 20–60s）
 2. 分析偏好（LLM 调用，≈ 30–90s）

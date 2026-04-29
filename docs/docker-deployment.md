@@ -59,7 +59,12 @@ docker compose ps
 3. **Phase 3 — Embedding（独立提问）**：跟随主 LLM / 本地 Ollama bge-m3 / 自定义 OpenAI 兼容 / 指定其他 provider，4 选 1。
 4. **Phase 4 — Per-module 覆盖（高级，默认跳过）**：可单独给 soul / discovery / recommendation / evaluation 指定不同模型。
 
-接着会引导你贴 B 站 Cookie（向导内有 F12 → Network 取 cookie 的 5 步教程），最后才进入真正的 init 阶段：拉历史、生成画像、跑首轮发现。整个流程会打印进度，不要以为卡住了——LLM 单次响应可能就要 10–30s。
+接着 B 站登录态有 **2 种方式**（v0.3.12+）：
+
+- **A.** 装浏览器扩展（推荐，零配置）—— [下载](https://github.com/whiteguo233/OpenBiliClaw/releases) 装好登录 B 站后，扩展会几秒内把 Cookie 自动推到 `http://127.0.0.1:8420/api/bilibili/cookie`。这条路向导会先退出，等同步好再 `docker exec -it openbiliclaw-backend openbiliclaw init` 完成 init
+- **B.** 手动贴 Cookie —— 向导内附 F12 → Network 取 cookie 的 5 步教程
+
+最后才进入真正的 init 阶段：拉历史、生成画像、跑首轮发现。整个流程会打印进度，不要以为卡住了——LLM 单次响应可能就要 10–30s。
 
 > 💡 **AI agent 一句话部署**：把下面这句粘到 Claude Code / Codex CLI / Cursor / OpenClaw：
 > ```

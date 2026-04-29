@@ -331,6 +331,20 @@ print(f"MISSING={','.join(missing)}")
         Write-Host '  1. Choose your LLM provider (default: openai):'
         Write-Host '     Supported: openai | gemini | claude | deepseek | openrouter | ollama'
         Write-Host ''
+        if ($missing -match 'bilibili.cookie') {
+            Write-Host '     For the Bilibili cookie you have TWO options (pick ONE):'
+            Write-Host ''
+            Write-Host '     (A) [recommended] Install the browser extension and let it'
+            Write-Host '         auto-sync — no F12, no copy/paste.'
+            Write-Host '         Download: https://github.com/whiteguo233/OpenBiliClaw/releases'
+            Write-Host '         Log in to bilibili.com if you are not already; the extension'
+            Write-Host '         pushes the cookie to this backend within seconds. You can then'
+            Write-Host '         SKIP step 2 below for the cookie part — just install the'
+            Write-Host '         extension and run "openbiliclaw init" once it syncs.'
+            Write-Host ''
+            Write-Host '     (B) Paste the cookie manually via --bilibili-cookie below.'
+            Write-Host ''
+        }
         Write-Host '  2. Prepare missing values, then run with values filled in (DO NOT add --skip-init):'
         Write-Host ''
         Write-Host "     python $InstallDir\scripts\agent_bootstrap.py ``"
