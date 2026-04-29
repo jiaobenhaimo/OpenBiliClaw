@@ -181,18 +181,18 @@ def test_feedback_dislike_franchise_penalty_propagates_to_same_ip() -> None:
     """Regression for the user-reported case: disliking ONE 原神
     摄影 video used to only block that exact bvid; the related_chain
     strategy then surfaced 5 other 原神 / 提瓦特 / 蒙德 candidates
-    untouched. Now the curator extracts a franchise key from the
-    disliked title, and any candidate whose own title resolves to
-    the same franchise eats a soft penalty so it ranks below
-    untouched alternatives.
+    untouched. Now the curator pulls the LLM-tagged ``franchise_key``
+    from each candidate's content_cache row, and any candidate whose
+    franchise_key matches a disliked one takes a soft penalty.
     """
     feedback = FeedbackSignals(disliked_franchises=frozenset({"原神"}))
-    # Different topic_key, different up_mid — only the title shares the
-    # franchise. Pre-fix, this would get adj == 0.
+    # Different topic_key, different up_mid — only the franchise_key
+    # links them. Pre-fix this got adj == 0.
     item = DiscoveredContent(
         bvid="BV2",
         title="提瓦特 摄影 集锦",
         topic_key="游戏摄影",
+        franchise_key="原神",
         up_mid=99,
     )
     adj = PoolCurator._feedback_adjustment(item, feedback)
@@ -201,12 +201,30 @@ def test_feedback_dislike_franchise_penalty_propagates_to_same_ip() -> None:
 
 def test_feedback_dislike_franchise_does_not_penalize_unrelated_ip() -> None:
     """Counterpart: a 原神 dislike must NOT down-rank a 塞尔达 video.
-    Without this check the franchise penalty would over-fire."""
+    The franchise penalty is keyed strictly on franchise_key equality;
+    different IPs are unaffected."""
     feedback = FeedbackSignals(disliked_franchises=frozenset({"原神"}))
     item = DiscoveredContent(
         bvid="BV3",
         title="塞尔达传说 王国之泪 速通",
         topic_key="游戏",
+        franchise_key="塞尔达传说",
+    )
+    adj = PoolCurator._feedback_adjustment(item, feedback)
+    assert adj == 0.0
+
+
+def test_feedback_dislike_franchise_no_penalty_when_franchise_key_empty() -> None:
+    """Items the LLM didn't tag (general-interest content) must pass
+    through with zero franchise penalty even if any franchise is
+    currently disliked. Otherwise we'd silently penalize untagged rows
+    when the LLM hadn't yet processed them — wrong default."""
+    feedback = FeedbackSignals(disliked_franchises=frozenset({"原神"}))
+    item = DiscoveredContent(
+        bvid="BV4",
+        title="番茄炒蛋 5 分钟教程",
+        topic_key="美食",
+        franchise_key="",  # general interest, not an IP
     )
     adj = PoolCurator._feedback_adjustment(item, feedback)
     assert adj == 0.0

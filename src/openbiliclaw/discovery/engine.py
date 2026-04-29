@@ -138,6 +138,17 @@ class DiscoveredContent:
     topic_key: str = ""
     topic_group: str = ""  # Coarse semantic category (e.g. "强化学习") for diversity
     style_key: str = ""
+    # Franchise / IP / series key tagged by the LLM at evaluation time
+    # (e.g. "原神", "崩坏:星穹铁道", "ChatGPT", "塞尔达传说"). Empty
+    # for general-interest content. Lets the curator down-rank items
+    # in the same IP after a single dislike, and lets the
+    # ``/api/recommendations`` endpoint cap how many same-franchise
+    # items appear in a single response window. Better than the
+    # heuristic title-substring approach (which v0.3.17 briefly tried)
+    # because the LLM already saw title + description + topic and can
+    # infer the IP correctly even when the title is bilingual or coded
+    # ("提瓦特摄影" → 原神, "宝可梦" → 精灵宝可梦, etc.).
+    franchise_key: str = ""
     description: str = ""
     source_strategy: str = ""  # Which strategy found this
     relevance_score: float = 0.0  # 0.0 - 1.0 (based on user soul)
@@ -180,6 +191,7 @@ class DiscoveredContent:
             "topic_key": self.topic_key,
             "topic_group": self.topic_group,
             "style_key": self.style_key,
+            "franchise_key": self.franchise_key,
             "description": self.description,
             "cover_url": self.cover_url,
             "view_count": self.view_count,
@@ -638,6 +650,7 @@ class ContentDiscoveryEngine:
             reason = str(payload.get("reason", "")).strip()
             topic_group = str(payload.get("topic_group", "")).strip()
             style_key = str(payload.get("style_key", "")).strip().lower()
+            franchise_key = str(payload.get("franchise_key", "")).strip()
         except Exception:
             logger.exception("Failed to evaluate discovered content: %s", content.bvid)
             return 0.0
@@ -651,7 +664,11 @@ class ContentDiscoveryEngine:
             content.topic_group = topic_group
         if style_key in valid_styles:
             content.style_key = style_key
-        self._eval_cache[cache_key] = (score, reason, topic_group, style_key)
+        if franchise_key:
+            content.franchise_key = franchise_key
+        self._eval_cache[cache_key] = (
+            score, reason, topic_group, style_key, franchise_key,
+        )
         return score
 
     # Safety cap applied at the evaluator level regardless of caller.
@@ -700,13 +717,23 @@ class ContentDiscoveryEngine:
             cache_key = f"{content.bvid}:{id(profile)}"
             cached = self._eval_cache.get(cache_key)
             if cached is not None:
-                score, reason, topic_group, style_key = cached
+                # Cache tuple grew in v0.3.18 to carry franchise_key.
+                # Tolerate the legacy 4-tuple shape so an in-flight
+                # process holding pre-upgrade entries doesn't crash on
+                # the next eval call.
+                if len(cached) == 5:
+                    score, reason, topic_group, style_key, franchise_key = cached
+                else:
+                    score, reason, topic_group, style_key = cached
+                    franchise_key = ""
                 content.relevance_score = score
                 content.relevance_reason = reason
                 if topic_group:
                     content.topic_group = topic_group
                 if style_key:
                     content.style_key = style_key
+                if franchise_key:
+                    content.franchise_key = franchise_key
                 scores[i] = score
             else:
                 uncached_indices.append(i)
@@ -852,6 +879,7 @@ class ContentDiscoveryEngine:
             reason = str(item_result.get("reason", "")).strip()
             topic_group = str(item_result.get("topic_group", "")).strip()
             style_key = str(item_result.get("style_key", "")).strip().lower()
+            franchise_key = str(item_result.get("franchise_key", "")).strip()
 
             content.relevance_score = score
             content.relevance_reason = reason
@@ -859,9 +887,13 @@ class ContentDiscoveryEngine:
                 content.topic_group = topic_group
             if style_key in valid_styles:
                 content.style_key = style_key
+            if franchise_key:
+                content.franchise_key = franchise_key
 
             cache_key = f"{content.bvid}:{id(profile)}"
-            self._eval_cache[cache_key] = (score, reason, topic_group, style_key)
+            self._eval_cache[cache_key] = (
+                score, reason, topic_group, style_key, franchise_key,
+            )
             results.append(score)
 
         return results

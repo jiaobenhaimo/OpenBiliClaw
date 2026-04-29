@@ -66,6 +66,40 @@ SOURCE_LABELS = {
 }
 
 
+def _cap_by_franchise(
+    rows: list[dict[str, Any]],
+    *,
+    max_per_franchise: int = 2,
+) -> list[dict[str, Any]]:
+    """Drop later duplicates of the same ``franchise_key`` from a list.
+
+    ``franchise_key`` is the LLM-tagged IP / series column (set during
+    content evaluation, see ``llm/prompts.py`` and
+    ``discovery/engine.py``). Empty franchise = general-interest content
+    (科普 / 美食 / 通用资讯…) and passes through with no constraint —
+    only matched IPs are subject to the cap.
+
+    Why not in SQL: the recommendation pipeline orders by
+    ``created_at DESC`` and we want a stable preserve-newest-N filter
+    that's clearly testable. SQL window functions could do it, but the
+    in-Python pass is cheap (≤ 40 rows) and easy to audit.
+    """
+    if max_per_franchise <= 0:
+        return list(rows)
+    seen: dict[str, int] = {}
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        franchise = str(row.get("franchise_key", "") or "").strip()
+        if not franchise:
+            out.append(row)
+            continue
+        if seen.get(franchise, 0) >= max_per_franchise:
+            continue
+        seen[franchise] = seen.get(franchise, 0) + 1
+        out.append(row)
+    return out
+
+
 def _normalize_cognition_update(item: dict[str, object]) -> CognitionUpdateSummary:
     impact = str(item.get("impact", "")).strip()
     reasoning = str(item.get("reasoning", "")).strip()
@@ -603,15 +637,13 @@ def create_app(
 
     @app.get("/api/recommendations", response_model=RecommendationListResponse)
     async def recommendations() -> RecommendationListResponse:
-        from openbiliclaw.recommendation.franchise import dedup_by_franchise
-
-        # Pull a 2x window so dedup_by_franchise still has 20 survivors
-        # to return after dropping over-represented franchises. Without
-        # the wider pool, capping 原神 at 2 in a 20-row request would
-        # leave gaps when other items further back in time would have
-        # filled them.
+        # Pull a 2x window so the per-franchise cap below still has 20
+        # survivors to return after dropping over-represented IPs.
+        # Without the wider pool, capping 原神 at 2 in a 20-row request
+        # would leave gaps that other items further back in time would
+        # have filled.
         rows = ctx.database.get_recommendations(limit=40)
-        rows = dedup_by_franchise(rows, max_per_franchise=2)[:20]
+        rows = _cap_by_franchise(rows, max_per_franchise=2)[:20]
         return RecommendationListResponse(
             items=[
                 RecommendationOut(

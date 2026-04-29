@@ -143,11 +143,14 @@ class PoolCurator:
         feedback_rows = self._database.get_feedback_signals(
             limit=self._history_window,
         )
-        from openbiliclaw.recommendation.franchise import extract_franchise
-
         disliked_ups: set[int] = set()
         disliked_topics: set[str] = set()
         liked_topics: set[str] = set()
+        # ``franchise_key`` is the LLM-tagged IP / franchise / series
+        # column on content_cache (added in v0.3.18). When the user
+        # dislikes any item, every other candidate sharing the same
+        # franchise_key gets a soft penalty in _feedback_adjustment —
+        # so disliking one 原神 video also down-ranks 提瓦特, 蒙德, etc.
         disliked_franchises: set[str] = set()
         for row in feedback_rows:
             ftype = str(row.get("feedback_type", "")).strip()
@@ -158,15 +161,7 @@ class PoolCurator:
                 topic = str(row.get("topic_key", "")).strip()
                 if topic:
                     disliked_topics.add(topic)
-                # Extract a franchise key from the disliked item's title
-                # (and topic) so the penalty propagates to other items
-                # in the same IP. e.g. dislike on "原神 摄影 速通" should
-                # downweight any 原神 / 提瓦特 / 蒙德 candidate, not
-                # just blocking that exact bvid.
-                franchise = extract_franchise(
-                    str(row.get("title", "")),
-                    str(row.get("topic_key", "")),
-                )
+                franchise = str(row.get("franchise_key", "")).strip()
                 if franchise:
                     disliked_franchises.add(franchise)
             elif ftype in ("like", "save"):
@@ -331,14 +326,17 @@ class PoolCurator:
     ) -> float:
         """Additive score adjustment based on recent user feedback.
 
-        Franchise penalty (since v0.3.17): if the user disliked any
-        item that resolved to franchise X, every candidate whose title
-        / topic resolves to X takes a soft hit. Without this layer,
+        Franchise penalty (since v0.3.18): if the user disliked any
+        item whose ``franchise_key`` is X, every candidate with the
+        same ``franchise_key`` takes a soft hit. Without this layer,
         disliking one 原神 video only blocks that exact bvid; the
         related_chain strategy keeps surfacing other 原神 content.
-        """
-        from openbiliclaw.recommendation.franchise import extract_franchise
 
+        ``franchise_key`` is the LLM-tagged IP / series column on
+        ``content_cache`` (populated by the content evaluator). It's
+        empty for general-interest content (e.g. 番茄炒蛋 教程), so
+        most rows pay zero franchise penalty — only matched IPs do.
+        """
         adj = 0.0
         if item.up_mid and item.up_mid in feedback.disliked_up_mids:
             adj -= _FEEDBACK_DISLIKE_UP_PENALTY
@@ -347,14 +345,9 @@ class PoolCurator:
             adj -= _FEEDBACK_DISLIKE_TOPIC_PENALTY
         if topic and topic in feedback.liked_topic_keys:
             adj += _FEEDBACK_LIKE_TOPIC_BONUS
-        if feedback.disliked_franchises:
-            franchise = extract_franchise(
-                getattr(item, "title", "") or "",
-                topic,
-                getattr(item, "up_name", "") or "",
-            )
-            if franchise and franchise in feedback.disliked_franchises:
-                adj -= _FEEDBACK_DISLIKE_FRANCHISE_PENALTY
+        item_franchise = (getattr(item, "franchise_key", "") or "").strip()
+        if item_franchise and item_franchise in feedback.disliked_franchises:
+            adj -= _FEEDBACK_DISLIKE_FRANCHISE_PENALTY
         return adj
 
     async def score_candidates_async(

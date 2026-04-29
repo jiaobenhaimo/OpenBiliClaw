@@ -861,13 +861,23 @@ def build_content_evaluation_prompt(
         "fun_variety（搞笑/吐槽/整活/挑战）/ lifestyle（日常/vlog/生活分享）/ "
         "review_roundup（盘点/测评/推荐/合集）/ "
         "light_chat（闲聊/杂谈/其他）\n"
+        "8. franchise_key（可空）：内容如果明确属于某个具体 IP / 系列 / 作品 / 品牌，"
+        "填它的规范名（中文优先），用于跨 topic_group 的同 IP 去重。例：\n"
+        "   - 「AI 重绘原神地图」「提瓦特摄影」「蒙德角色真实化」 → \"原神\"\n"
+        "   - 「星穹铁道 1.6 实战」「崩铁 角色养成」 → \"崩坏:星穹铁道\"\n"
+        "   - 「ChatGPT 工作流」「OpenAI 新模型」 → \"ChatGPT\"\n"
+        "   - 「黑神话悟空 二周目」 → \"黑神话:悟空\"\n"
+        "   - 「番茄炒蛋 5 分钟教程」「读书博主 推荐书单」 → \"\""
+        "（一般科普 / 美食 / 通用资讯都填空字符串，不要硬凑）\n"
+        "   - 同一 IP 必须用相同写法，不要在「原神」「Genshin」「米哈游 原神」之间切换。\n"
         "</rules>\n\n"
         "<output_schema>\n"
         "{\n"
         '  "score": 0.78,\n'
         '  "reason": "这个视频的选题角度新颖，节奏轻快，契合你对该领域的好奇心。",\n'
         '  "topic_group": "生活方式",\n'
-        '  "style_key": "light_chat"\n'
+        '  "style_key": "light_chat",\n'
+        '  "franchise_key": ""\n'
         "}\n"
         "</output_schema>"
     )
@@ -914,7 +924,7 @@ def build_batch_content_evaluation_prompt(
         "1. 输出必须是严格 JSON 数组，不要附带解释。\n"
         "2. 数组长度必须与输入内容数量一致，顺序一一对应。\n"
         "3. 每项包含 score(0-1)、reason(一句中文)、topic_group(2-4词粗分类)、"
-        "style_key(11选1)。\n"
+        "style_key(11选1)、franchise_key（可空）。\n"
         "4. 根据发现路径调整评判宽容度：search 要求高度匹配；"
         "trending 基础分 >= 0.6；related_chain 允许适度偏移；"
         "explore 允许主题陌生，但内容仍需具备可看性，过于学术艰深的应适当降分。\n"
@@ -923,7 +933,18 @@ def build_batch_content_evaluation_prompt(
         "6. style_key 从 11 个选项中选：game_strategy / news_brief / "
         "practical_guide / story_doc / visual_showcase / tech_analysis / "
         "deep_dive / fun_variety / lifestyle / review_roundup / light_chat\n"
-        "7. 评分要尊重画像里的多样性诉求，双向保护：\n"
+        "7. franchise_key 规则：内容如果明确属于某个具体 IP / 系列 / 作品 / 品牌，"
+        "填它的规范名（中文优先），用于跨 topic_group 的同 IP 去重。例：\n"
+        "   - 「AI 重绘原神地图」「提瓦特摄影」「蒙德角色真实化」"
+        "→ franchise_key = \"原神\"\n"
+        "   - 「星穹铁道 1.6 实战」「崩铁 角色养成」"
+        "→ franchise_key = \"崩坏:星穹铁道\"\n"
+        "   - 「ChatGPT 工作流」「OpenAI 新模型」 → franchise_key = \"ChatGPT\"\n"
+        "   - 「黑神话悟空 二周目」 → franchise_key = \"黑神话:悟空\"\n"
+        "   - 「番茄炒蛋 5 分钟教程」「读书博主 推荐书单」 → franchise_key = \"\""
+        "（一般科普 / 美食 / 通用资讯都填空字符串，不要硬凑）\n"
+        "   - 同一 IP 必须用相同写法，不要在「原神」「Genshin」「米哈游 原神」之间切换。\n"
+        "8. 评分要尊重画像里的多样性诉求，双向保护：\n"
         "   - 如果 depth_preference 不高、preferred_duration 偏短，"
         "或 humor_preference 偏高，不要把学术艰深、入口很高的内容误判成高匹配；"
         "讲法轻松但不空的内容同样可以高分。\n"
@@ -938,9 +959,11 @@ def build_batch_content_evaluation_prompt(
         "<output_schema>\n"
         "[\n"
         '  {"score": 0.78, "reason": "...", "topic_group": "认知科学", '
-        '"style_key": "deep_dive"},\n'
+        '"style_key": "deep_dive", "franchise_key": ""},\n'
+        '  {"score": 0.72, "reason": "...", "topic_group": "游戏摄影", '
+        '"style_key": "visual_showcase", "franchise_key": "原神"},\n'
         '  {"score": 0.45, "reason": "...", "topic_group": "美食", '
-        '"style_key": "light_chat"}\n'
+        '"style_key": "light_chat", "franchise_key": ""}\n'
         "]\n"
         "</output_schema>"
     )

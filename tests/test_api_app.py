@@ -257,6 +257,45 @@ class TestBackendAPI:
         assert captured["engine_concurrency"] is captured["controller"]
         assert all(item is captured["controller"] for item in captured["strategy_concurrency"])
 
+    def test_cap_by_franchise_keeps_at_most_n_per_franchise(self) -> None:
+        """Regression for the 'one popup full of 原神' bug. The API
+        layer caps how many same-``franchise_key`` items reach the
+        client. franchise_key is the LLM-tagged IP column on
+        content_cache (NOT a heuristic from titles).
+
+        Items with empty franchise_key (general-interest content) must
+        always pass through — the cap only fires for tagged IPs.
+        """
+        from openbiliclaw.api.app import _cap_by_franchise
+
+        rows = [
+            {"id": 1, "title": "原神 4.0 须弥探索", "franchise_key": "原神"},
+            {"id": 2, "title": "提瓦特 摄影集锦", "franchise_key": "原神"},
+            {"id": 3, "title": "番茄炒蛋 5 分钟教程", "franchise_key": ""},
+            {"id": 4, "title": "蒙德角色真实化", "franchise_key": "原神"},
+            {"id": 5, "title": "塞尔达 王国之泪", "franchise_key": "塞尔达传说"},
+            {"id": 6, "title": "枫丹海域旅拍", "franchise_key": "原神"},
+            {"id": 7, "title": "原神 AI 重制 2024", "franchise_key": "原神"},
+        ]
+        out = _cap_by_franchise(rows, max_per_franchise=2)
+        # First two 原神 rows survive (id=1, 2); subsequent ones drop.
+        # 番茄炒蛋 has empty franchise_key so it always passes.
+        # 塞尔达 is a different franchise, also passes.
+        assert [r["id"] for r in out] == [1, 2, 3, 5]
+
+    def test_cap_by_franchise_zero_disables_cap(self) -> None:
+        """max_per_franchise=0 is the escape hatch for ops who want to
+        debug without re-deploying. Returns input unchanged."""
+        from openbiliclaw.api.app import _cap_by_franchise
+
+        rows = [
+            {"id": 1, "franchise_key": "原神"},
+            {"id": 2, "franchise_key": "原神"},
+            {"id": 3, "franchise_key": "原神"},
+        ]
+        out = _cap_by_franchise(rows, max_per_franchise=0)
+        assert len(out) == 3
+
     def test_health_endpoint_returns_ok(self) -> None:
         from fastapi.testclient import TestClient
 
@@ -506,7 +545,10 @@ class TestBackendAPI:
 
         class FakeDatabase:
             def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
-                assert limit == 20
+                # v0.3.18: the endpoint pulls 2x the visible window so
+                # the per-franchise cap still has 20 survivors after
+                # dropping over-represented IPs.
+                assert limit == 40
                 return [
                     {
                         "id": 7,
@@ -517,6 +559,7 @@ class TestBackendAPI:
                         "expression": "这条很对你最近的状态。",
                         "topic": "你最近那股想把结构想透的劲头",
                         "presented": 1,
+                        "franchise_key": "",  # general-interest content
                     }
                 ]
 
@@ -531,6 +574,56 @@ class TestBackendAPI:
         assert data["items"][0]["id"] == 7
         assert data["items"][0]["title"] == "讲透城市与建筑"
         assert data["items"][0]["cover_url"] == "https://i0.hdslb.com/bfs/archive/cover.jpg"
+
+    def test_recommendations_endpoint_caps_same_franchise(self) -> None:
+        """End-to-end: when the DB returns 5 同 IP rows in the
+        franchise_key column, the API trims down to ``max_per_franchise=2``
+        before serving."""
+        from fastapi.testclient import TestClient
+
+        class FakeDatabase:
+            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+                # Five 原神 rows + one 番茄炒蛋. Without the franchise
+                # cap, the response would carry all 5 原神; with cap=2,
+                # only 2 survive.
+                base: list[dict[str, object]] = []
+                for i in range(5):
+                    base.append({
+                        "id": i,
+                        "bvid": f"BV原神{i}",
+                        "title": f"原神 番外 {i}",
+                        "up_name": "某 UP",
+                        "cover_url": "",
+                        "expression": "",
+                        "topic": "游戏",
+                        "presented": 0,
+                        "franchise_key": "原神",
+                    })
+                base.append({
+                    "id": 99,
+                    "bvid": "BV番茄",
+                    "title": "番茄炒蛋 5 分钟",
+                    "up_name": "美食 UP",
+                    "cover_url": "",
+                    "expression": "",
+                    "topic": "美食",
+                    "presented": 0,
+                    "franchise_key": "",
+                })
+                return base
+
+        app = create_app(database=FakeDatabase())
+        client = TestClient(app)
+
+        response = client.get("/api/recommendations")
+        assert response.status_code == 200
+        items = response.json()["items"]
+        franchise_count = sum(
+            1 for it in items if str(it["title"]).startswith("原神")
+        )
+        # 5 同 IP 行被砍到 2，番茄炒蛋（无 franchise）仍保留
+        assert franchise_count == 2
+        assert any(it["title"].startswith("番茄炒蛋") for it in items)
 
     def test_runtime_status_endpoint_returns_runtime_summary(self) -> None:
         from fastapi.testclient import TestClient

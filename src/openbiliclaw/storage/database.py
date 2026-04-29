@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS content_cache (
     tags        TEXT,                 -- JSON array
     topic_key   TEXT DEFAULT '',
     style_key   TEXT DEFAULT '',
+    franchise_key TEXT DEFAULT '',  -- LLM IP/series; see _ensure_content_cache_topic_columns
     description TEXT,
     cover_url   TEXT,
     view_count  INTEGER DEFAULT 0,
@@ -304,6 +305,7 @@ class Database:
                 topic_key,
                 topic_group,
                 style_key,
+                franchise_key,
                 description,
                 cover_url,
                 view_count,
@@ -321,7 +323,7 @@ class Database:
                 author_name
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 CURRENT_TIMESTAMP, ?, ?, ?, ?, ?
             )
             ON CONFLICT(bvid) DO UPDATE SET
@@ -348,6 +350,11 @@ class Database:
                 style_key = COALESCE(
                     NULLIF(excluded.style_key, ''),
                     content_cache.style_key,
+                    ''
+                ),
+                franchise_key = COALESCE(
+                    NULLIF(excluded.franchise_key, ''),
+                    content_cache.franchise_key,
                     ''
                 ),
                 description = excluded.description,
@@ -407,6 +414,7 @@ class Database:
                 kwargs.get("topic_key", ""),
                 kwargs.get("topic_group", ""),
                 kwargs.get("style_key", ""),
+                kwargs.get("franchise_key", ""),
                 kwargs.get("description", ""),
                 kwargs.get("cover_url", ""),
                 kwargs.get("view_count", 0),
@@ -1339,18 +1347,19 @@ class Database:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_feedback_signals(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        """Return recent feedback with UP/topic info for score adjustment.
+        """Return recent feedback with UP/topic/franchise info for score
+        adjustment.
 
-        ``title`` is included so the curator can run franchise extraction
-        on disliked items (v0.3.17+). Without the title field, disliking
-        one 原神 video could only ever block its exact bvid; with it,
-        the curator down-weights any candidate whose own title resolves
-        to the same franchise.
+        ``franchise_key`` is the LLM-tagged IP / series column (added in
+        v0.3.18). Disliking one 原神 video used to only block its exact
+        bvid; now the curator collects ``franchise_key`` across recent
+        dislikes and down-ranks any candidate whose own ``franchise_key``
+        matches — without relying on title-string heuristics.
         """
         cursor = self.conn.execute(
             """
             SELECT r.feedback_type, c.up_mid, c.up_name, c.topic_key,
-                   c.source, c.title
+                   c.source, c.title, c.franchise_key
             FROM recommendations AS r
             JOIN content_cache AS c ON c.bvid = r.bvid
             WHERE r.feedback_type IS NOT NULL
@@ -1366,6 +1375,10 @@ class Database:
 
         xhs rows whose cached ``content_url`` is missing ``xsec_token``
         are filtered out — clicking them hits xhs's 300031 login wall.
+
+        ``franchise_key`` (v0.3.18) is exposed so /api/recommendations
+        can apply a final per-IP cap before returning to the client —
+        otherwise five 原神 / 提瓦特 items can land in one popup view.
         """
         self._ensure_fresh_read()
         cursor = self.conn.execute(
@@ -1377,7 +1390,8 @@ class Database:
                 c.cover_url AS cover_url,
                 c.content_id AS content_id,
                 c.content_url AS content_url,
-                c.source_platform AS source_platform
+                c.source_platform AS source_platform,
+                c.franchise_key AS franchise_key
             FROM recommendations AS r
             LEFT JOIN content_cache AS c ON c.bvid = r.bvid
             WHERE (
@@ -1603,6 +1617,16 @@ class Database:
             self.conn.execute("ALTER TABLE content_cache ADD COLUMN topic_group TEXT DEFAULT ''")
         if "style_key" not in existing_columns:
             self.conn.execute("ALTER TABLE content_cache ADD COLUMN style_key TEXT DEFAULT ''")
+        if "franchise_key" not in existing_columns:
+            # v0.3.18: LLM-tagged IP / franchise / series. Empty string for
+            # general-interest content; non-empty rows let the curator
+            # propagate dislikes within an IP and let
+            # /api/recommendations cap how many same-franchise items
+            # appear in a single response window — without relying on
+            # any title-string heuristic or hardcoded alias list.
+            self.conn.execute(
+                "ALTER TABLE content_cache ADD COLUMN franchise_key TEXT DEFAULT ''"
+            )
 
     def _ensure_content_cache_pool_copy_columns(self) -> None:
         """Backfill precomputed pool-copy fields for existing databases."""

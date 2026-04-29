@@ -4,6 +4,72 @@
 
 ---
 
+## v0.3.18: 把 franchise_key 升成一等字段，撤掉 v0.3.17 的标题黑名单（2026-04-30）
+
+v0.3.17 用了**硬编码 IP 别名表 + 标题子串匹配**做 franchise 判定。社区反馈说这种黑白名单做法在长期不可持续——覆盖不全、人工维护成本高、对 LLM 编出新写法（"提瓦特 重制"、"原神 4.5 须弥"）容易漏判或误判。这次撤掉，改成**让 LLM 在内容评估阶段直接打 IP 标签**，作为 `content_cache` 的一等字段持久化。
+
+### 撤掉的
+
+- `src/openbiliclaw/recommendation/franchise.py`（13 个 IP 的硬编码 alias 表 + `extract_franchise()` heuristic）
+- `tests/test_franchise.py`
+- `_FEEDBACK_DISLIKE_FRANCHISE_PENALTY` 在 curator 里依然保留，但实现底盘换了
+
+### 新增的：`franchise_key` 作为一等字段
+
+**Schema**（`storage/database.py`）：
+
+- `content_cache` 表新增 `franchise_key TEXT DEFAULT ''` 列
+- `_ensure_content_cache_topic_columns()` 加 `ALTER TABLE` 迁移，老库无痛升级
+- `cache_content` INSERT/UPDATE 把 `franchise_key` 纳入，`COALESCE(NULLIF(excluded.x, ''), content_cache.x)` 模式——避免被 0 值覆盖
+- `get_recommendations` SELECT 多带 `c.franchise_key` 出来，给 API dedup 用
+- `get_feedback_signals` SELECT 多带 `c.franchise_key`，给 curator dislike 传播用
+
+**LLM prompt**（`llm/prompts.py`）：
+
+`build_batch_content_evaluation_prompt` + 单 item 评估的 prompt 都加了 franchise_key 字段：
+
+```
+7. franchise_key 规则：内容如果明确属于某个具体 IP / 系列 / 作品 / 品牌，
+   填它的规范名（中文优先），用于跨 topic_group 的同 IP 去重。例：
+   - 「AI 重绘原神地图」「提瓦特摄影」「蒙德角色真实化」 → "原神"
+   - 「星穹铁道 1.6 实战」「崩铁 角色养成」 → "崩坏:星穹铁道"
+   - 「ChatGPT 工作流」「OpenAI 新模型」 → "ChatGPT"
+   - 「番茄炒蛋 5 分钟教程」 → ""（一般科普 / 美食 / 通用资讯都填空字符串，不要硬凑）
+   - 同一 IP 必须用相同写法。
+```
+
+LLM 已经看了 title + description + topic + style，让它顺手再标一个 IP 几乎零额外延迟。比 heuristic 准很多——「提瓦特摄影」这种隐性引用 LLM 能识别，硬编码表照不到。
+
+**Pipeline**（`discovery/engine.py`）：
+
+- `DiscoveredContent` 新增 `franchise_key: str = ""` field
+- `to_cache_kwargs()` 把它带过去
+- `_evaluate_batch` 解析 LLM 响应里的 `franchise_key`，写入 `content.franchise_key` + 评估缓存元组
+- 缓存元组从 4-tuple 升到 5-tuple，老 4-tuple 兼容降级（绕过升级期 in-flight 进程崩溃）
+- `evaluate_content`（单 item 版）同步处理
+
+**Curator**（`recommendation/curator.py`）：
+
+- `FeedbackSignals.disliked_franchises` 来源换成 `row.get("franchise_key")`（DB 里的真值），不再从 title 提
+- `_feedback_adjustment` 比较 `item.franchise_key`（也是 DB 里的真值），不再调 heuristic 抽取
+- 罚分常量保留 0.07（heuristic vs LLM 不影响这个值的合理性）
+
+**API**（`api/app.py`）：
+
+- `_cap_by_franchise()` 内联在 app.py，按 row 的 `franchise_key` 列做窗口内去重，不依赖标题
+- 空 `franchise_key` 永远透传——一般内容不被限流
+
+### 测试
+
+- `tests/test_pool_curator.py` 新增 3 个：`disliked_franchises={"原神"}` 时，candidate `franchise_key="原神"` 扣分；`franchise_key="塞尔达传说"` 不扣；`franchise_key=""` 不扣（保护 LLM 还没标的内容）
+- `tests/test_api_app.py` 新增 2 个：`_cap_by_franchise` 单元测；`/api/recommendations` 端到端——5 条 `franchise_key="原神"` 行 + 1 条 `""`，响应里只剩 2 条原神 + 番茄炒蛋
+
+### 致谢
+
+社区反馈「不要做黑白名单」，方向完全正确。把 franchise 升成一等字段是正解——后续还能让 `RelatedChainStrategy` 按 `franchise_key` 限制同 IP 链路深度、让 SQL 层 `trim_topic_group_overflow` 多加一个轴，全都靠这一列展开。
+
+---
+
 ## v0.3.17: 修推荐流过度泛化 IP（一屏 5 条原神 / 提瓦特）（2026-04-30）
 
 社区报告：点了一条「AI 重绘原神地图」之后，推荐弹窗连续出 5 条原神 / 提瓦特 / 蒙德视频。深度分析定位了 5 个层级的问题，本次先修最影响视觉体验的 3 个：
