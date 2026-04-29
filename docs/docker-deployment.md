@@ -8,6 +8,24 @@
 - [Docker Compose](https://docs.docker.com/compose/install/) V2（`docker compose` 命令）
 - 至少一个 LLM API Key（OpenAI / Claude / Gemini / DeepSeek / OpenRouter），或本地运行 Ollama
 
+### 平台支持（v0.3.4+）
+
+镜像基于 `python:3.11-slim`（多架构 manifest），同一份 `docker-compose.yml` 可以在以下平台直接跑：
+
+| 平台 | 架构 | 备注 |
+|------|------|------|
+| macOS Intel | linux/amd64 | Docker Desktop |
+| macOS Apple Silicon (M1/M2/M3) | linux/arm64 | Docker Desktop，自动选 arm64 |
+| Linux x86_64 | linux/amd64 | 直接 Docker Engine |
+| Linux ARM (Raspberry Pi 4/5) | linux/arm64 | 直接 Docker Engine |
+| Windows | linux/amd64 (默认) | Docker Desktop（默认 WSL2 backend）|
+
+`docker compose build` 会自动按主机架构选择正确的 base image 层。如果你要为发布构建跨架构镜像，用 buildx：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t openbiliclaw-backend:v0.3.4 .
+```
+
 ## 快速开始
 
 ```bash
@@ -15,14 +33,23 @@
 git clone https://github.com/whiteguo233/OpenBiliClaw.git
 cd OpenBiliClaw
 
-# 2. 启动容器
+# 2. 启动容器（首次会构建镜像，后续仅增量）
 docker compose up -d --build
 
 # 3. 一键初始化（交互式引导配置 + B 站认证 + 画像生成 + 首轮发现）
 docker exec -it openbiliclaw-backend openbiliclaw init
+
+# 4. 健康状态：HEALTHCHECK 会让 docker compose ps 在容器真正可服务后才显示 healthy
+docker compose ps
 ```
 
 `init` 命令会引导你完成所有必要的配置，包括设置 LLM API Key 和 B 站认证。
+
+> 💡 **AI agent 一句话部署**：把下面这句粘到 Claude Code / Codex CLI / Cursor / OpenClaw：
+> ```
+> 请按照 https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md 的说明帮我用 Docker Compose 部署 OpenBiliClaw 后端（务必用 Bash 的 curl 下载这个文档，不要用 WebFetch）
+> ```
+> 跨平台一致：Mac / Windows / Linux 上 AI 都按同一份文档执行。
 
 ## 配置
 
@@ -66,6 +93,9 @@ docker exec -it openbiliclaw-backend vi /app/runtime/config.toml
 ```bash
 # B 站认证登录
 docker exec -it openbiliclaw-backend openbiliclaw auth login
+
+# 可选：启用本地 Ollama 作为 embedding 兜底（v0.3.3+ 真实生效）
+docker exec -it openbiliclaw-backend openbiliclaw setup-embedding
 
 # 手动触发内容发现
 docker exec -it openbiliclaw-backend openbiliclaw discover

@@ -3,6 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # The Dockerfile only depends on python:3.11-slim, which is
+      # published as a multi-arch manifest. ``docker compose build``
+      # picks the architecture matching the host (amd64 on Intel,
+      # arm64 on Apple Silicon / Raspberry Pi). To explicitly cross-
+      # build a release image, use buildx:
+      #   docker buildx build --platform linux/amd64,linux/arm64 \
+      #     -t openbiliclaw-backend:vX.Y.Z .
     container_name: openbiliclaw-backend
     environment:
       OPENBILICLAW_PROJECT_ROOT: /app/runtime
@@ -21,6 +28,13 @@ services:
       - 0.0.0.0
       - --port
       - "8420"
+    # ``host.docker.internal`` resolves the host machine from inside
+    # the container. Used by:
+    #   - HTTP proxy auto-detect (OPENBILICLAW_PROXY_HOST)
+    #   - the optional Ollama embedding fallback at host:11434
+    # Required on Linux Docker; auto-provided by Docker Desktop on
+    # Mac / Windows. The ``host-gateway`` magic value tells the engine
+    # to inject the right address per platform.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -29,6 +43,15 @@ services:
       - openbiliclaw_config:/app/runtime
       - openbiliclaw_data:/app/runtime/data
       - openbiliclaw_logs:/app/runtime/logs
+    # Compose-level healthcheck mirrors the Dockerfile HEALTHCHECK so
+    # ``docker compose ps`` shows ``healthy`` only when /api/health
+    # returns 200, not just when the container process is alive.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8420/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
 
 volumes:
