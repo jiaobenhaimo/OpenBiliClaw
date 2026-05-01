@@ -15,13 +15,18 @@ import {
   buildBootstrapPartialPayload,
   bootstrapProfileTabLabels,
   bootstrapScrollShouldContinue,
+  clickOwnProfileAnchorFromDocument,
+  collectBootstrapScrollCandidates,
   countBootstrapStateNotesByScope,
   describeBootstrapScrollTarget,
   extractOwnProfileUrlFromDocument,
   extractOwnProfileUrlFromState,
+  findOwnProfileAnchorFromDocument,
   findBootstrapScrollContainer,
   hasDifferentProfileDocumentNotes,
+  hasBootstrapProfileContent,
   isActiveBootstrapProfileTab,
+  limitBootstrapNewNotesToRemainingCapacity,
   normalizeBootstrapScrollRounds,
   normalizeBootstrapScrollWaitMs,
   normalizeBootstrapStagnantScrollRounds,
@@ -397,6 +402,130 @@ test("findBootstrapScrollContainer ignores zero-height feed wrappers", () => {
   assert.equal(findBootstrapScrollContainer(doc), actualScroller);
 });
 
+test("findBootstrapScrollContainer falls back to generic scrollable elements", () => {
+  const genericScroller = {
+    id: "root-scroll",
+    className: "layout-shell",
+    tagName: "DIV",
+    scrollTop: 0,
+    scrollHeight: 4200,
+    clientHeight: 760,
+    querySelectorAll: () => [],
+  };
+  const doc = {
+    querySelectorAll: (selector: string) => (selector === "body *" ? [genericScroller] : []),
+  } as unknown as Document;
+
+  assert.equal(findBootstrapScrollContainer(doc), genericScroller);
+});
+
+test("findBootstrapScrollContainer ignores overflowing wrappers without scroll overflow style", () => {
+  const hiddenWrapper = {
+    id: "tab-panel",
+    className: "tab-content-item",
+    tagName: "DIV",
+    scrollTop: 0,
+    scrollHeight: 500,
+    clientHeight: 300,
+    querySelectorAll: (selector: string) => (selector.includes("/explore/") ? [{}, {}] : []),
+  };
+  const realScroller = {
+    id: "real-scroll",
+    className: "layout-shell",
+    tagName: "DIV",
+    scrollTop: 0,
+    scrollHeight: 3000,
+    clientHeight: 700,
+    querySelectorAll: () => [],
+  };
+  const doc = {
+    defaultView: {
+      getComputedStyle: (element: unknown) => ({
+        overflowY: element === realScroller ? "auto" : "hidden",
+      }),
+    },
+    querySelectorAll: () => [hiddenWrapper, realScroller],
+  } as unknown as Document;
+  Object.assign(hiddenWrapper, { ownerDocument: doc });
+  Object.assign(realScroller, { ownerDocument: doc });
+
+  assert.equal(findBootstrapScrollContainer(doc), realScroller);
+});
+
+test("findBootstrapScrollContainer ignores Xiaohongshu channel sidebar scrollers", () => {
+  const channelList = {
+    id: "",
+    className: "channel-list",
+    tagName: "UL",
+    scrollTop: 0,
+    scrollHeight: 964,
+    clientHeight: 675,
+    querySelectorAll: () => [],
+  };
+  const doc = {
+    defaultView: {
+      getComputedStyle: () => ({ overflowY: "scroll" }),
+    },
+    querySelectorAll: () => [channelList],
+  } as unknown as Document;
+  Object.assign(channelList, { ownerDocument: doc });
+
+  assert.equal(findBootstrapScrollContainer(doc), null);
+  assert.deepEqual(collectBootstrapScrollCandidates(doc), []);
+});
+
+test("collectBootstrapScrollCandidates exposes ranked scroll diagnostics", () => {
+  const first = {
+    id: "first",
+    className: "layout-shell",
+    tagName: "DIV",
+    scrollTop: 10,
+    scrollHeight: 2000,
+    clientHeight: 700,
+    querySelectorAll: () => [],
+  };
+  const second = {
+    id: "second",
+    className: "feeds-container",
+    tagName: "DIV",
+    scrollTop: 5,
+    scrollHeight: 1200,
+    clientHeight: 700,
+    querySelectorAll: (selector: string) => (selector.includes("/explore/") ? [{}] : []),
+  };
+  const doc = {
+    defaultView: {
+      getComputedStyle: () => ({ overflowY: "auto" }),
+    },
+    querySelectorAll: () => [first, second],
+  } as unknown as Document;
+  Object.assign(first, { ownerDocument: doc });
+  Object.assign(second, { ownerDocument: doc });
+
+  assert.deepEqual(
+    collectBootstrapScrollCandidates(doc, 2).map((candidate) => ({
+      target: candidate.target,
+      overflow_y: candidate.overflow_y,
+      note_count: candidate.note_count,
+      scroll_top: candidate.scroll_top,
+    })),
+    [
+      {
+        target: "div#second.feeds-container",
+        overflow_y: "auto",
+        note_count: 1,
+        scroll_top: 5,
+      },
+      {
+        target: "div#first.layout-shell",
+        overflow_y: "auto",
+        note_count: 0,
+        scroll_top: 10,
+      },
+    ],
+  );
+});
+
 test("buildBootstrapPartialPayload emits a small partial result", () => {
   assert.deepEqual(
     buildBootstrapPartialPayload({
@@ -435,6 +564,33 @@ test("buildBootstrapPartialPayload emits a small partial result", () => {
       debug: { xhs_bootstrap_partial: { scope: "saved", round: 2, count: 1 } },
     },
   );
+});
+
+test("limitBootstrapNewNotesToRemainingCapacity clips partial batches at the scope cap", () => {
+  const currentNotes: XhsBootstrapNote[] = Array.from({ length: 191 }, (_, index) => ({
+    scope: "saved",
+    url: `https://www.xiaohongshu.com/explore/current-${index}`,
+    title: `current ${index}`,
+    author: "",
+    cover_url: "",
+    note_id: `current-${index}`,
+    xsec_token: "",
+  }));
+  const newNotes: XhsBootstrapNote[] = Array.from({ length: 10 }, (_, index) => ({
+    scope: "saved",
+    url: `https://www.xiaohongshu.com/explore/new-${index}`,
+    title: `new ${index}`,
+    author: "",
+    cover_url: "",
+    note_id: `new-${index}`,
+    xsec_token: "",
+  }));
+
+  const clipped = limitBootstrapNewNotesToRemainingCapacity(currentNotes, newNotes, 200);
+
+  assert.equal(clipped.length, 9);
+  assert.equal(clipped.at(-1)?.note_id, "new-8");
+  assert.deepEqual(limitBootstrapNewNotesToRemainingCapacity(currentNotes, newNotes, 191), []);
 });
 
 test("extractBootstrapNotesFromProfileDocument reads visible saved or liked cards only", () => {
@@ -482,6 +638,41 @@ test("extractBootstrapNotesFromProfileDocument reads visible saved or liked card
       "https://www.xiaohongshu.com/user/profile/current-user",
     ),
     [],
+  );
+});
+
+test("hasBootstrapProfileContent waits for profile state tabs or cards", () => {
+  assert.equal(
+    hasBootstrapProfileContent({
+      defaultView: null,
+      body: { textContent: "" },
+      querySelector: () => null,
+    } as unknown as Document),
+    false,
+  );
+  assert.equal(
+    hasBootstrapProfileContent({
+      defaultView: { __INITIAL_STATE__: { user: { notes: [] } } },
+      body: { textContent: "" },
+      querySelector: () => null,
+    } as unknown as Document),
+    true,
+  );
+  assert.equal(
+    hasBootstrapProfileContent({
+      defaultView: null,
+      body: { textContent: "笔记 收藏 赞过" },
+      querySelector: () => null,
+    } as unknown as Document),
+    true,
+  );
+  assert.equal(
+    hasBootstrapProfileContent({
+      defaultView: null,
+      body: { textContent: "" },
+      querySelector: (selector: string) => (selector.includes("/explore/") ? {} : null),
+    } as unknown as Document),
+    true,
   );
 });
 
@@ -591,6 +782,45 @@ test("extractOwnProfileUrlFromDocument reads the logged-in nav profile link", ()
     extractOwnProfileUrlFromDocument(doc, "https://www.xiaohongshu.com/explore"),
     "https://www.xiaohongshu.com/user/profile/current-user?xsec_token=own",
   );
+});
+
+test("findOwnProfileAnchorFromDocument returns and clicks the logged-in nav profile link", () => {
+  const events: string[] = [];
+  class FakeMouseEvent {
+    type: string;
+
+    constructor(type: string) {
+      this.type = type;
+    }
+  }
+  const anchor = {
+    textContent: "我",
+    className: "link-wrapper",
+    getAttribute: (name: string) =>
+      name === "href" ? "/user/profile/current-user?xsec_token=own" : "",
+    closest: () => ({}),
+    scrollIntoView: () => events.push("scrollIntoView"),
+    dispatchEvent: (event: { type: string }) => {
+      events.push(event.type);
+      return true;
+    },
+    click: () => events.push("click"),
+  };
+  const doc = {
+    querySelector: () => null,
+    querySelectorAll: () => [anchor],
+  } as unknown as Document;
+  const win = { MouseEvent: FakeMouseEvent } as unknown as Window;
+
+  assert.equal(findOwnProfileAnchorFromDocument(doc, "https://www.xiaohongshu.com/explore"), anchor);
+  assert.deepEqual(
+    clickOwnProfileAnchorFromDocument(doc, "https://www.xiaohongshu.com/explore", win),
+    {
+      url: "https://www.xiaohongshu.com/user/profile/current-user?xsec_token=own",
+      clicked: true,
+    },
+  );
+  assert.deepEqual(events, ["scrollIntoView", "mousedown", "mouseup", "click"]);
 });
 
 test("extractOwnProfileUrlFromDocument ignores feed author profile links", () => {

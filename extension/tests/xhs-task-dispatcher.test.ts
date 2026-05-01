@@ -133,7 +133,8 @@ interface TabUpdatedListener {
 interface ChromeMock {
   tabs: {
     create: (opts: { url: string; active?: boolean }) => Promise<{ id: number }>;
-    update: (tabId: number, opts: { url: string }) => Promise<void>;
+    query: (opts: { active?: boolean; currentWindow?: boolean }) => Promise<Array<{ id?: number; url?: string; status?: string }>>;
+    update: (tabId: number, opts: { url?: string; active?: boolean }) => Promise<void>;
     remove: (tabId: number) => Promise<void>;
     sendMessage: (tabId: number, message: unknown) => Promise<void>;
     onUpdated: {
@@ -151,7 +152,10 @@ interface MockState {
   sentMessages: { tabId: number; message: unknown }[];
   sendMessageImpl: (tabId: number, message: unknown) => Promise<void>;
   fetchCalls: { url: string; body?: unknown }[];
-  updatedTabs: { tabId: number; url: string }[];
+  updatedTabs: { tabId: number; url?: string; active?: boolean }[];
+  removedTabs: number[];
+  queriedTabs: { active?: boolean; currentWindow?: boolean }[];
+  queryResult: Array<{ id?: number; url?: string; status?: string }>;
 }
 
 function installChromeMock(): MockState {
@@ -161,6 +165,9 @@ function installChromeMock(): MockState {
     sendMessageImpl: async () => {},
     fetchCalls: [],
     updatedTabs: [],
+    removedTabs: [],
+    queriedTabs: [],
+    queryResult: [],
   };
 
   const listeners: TabUpdatedListener[] = [];
@@ -170,10 +177,16 @@ function installChromeMock(): MockState {
         state.createdTabs.push({ url, active });
         return { id: 42 };
       },
-      update: async (tabId, { url }) => {
-        state.updatedTabs.push({ tabId, url });
+      query: async (opts) => {
+        state.queriedTabs.push(opts);
+        return state.queryResult;
       },
-      remove: async () => {},
+      update: async (tabId, opts) => {
+        state.updatedTabs.push({ tabId, ...opts });
+      },
+      remove: async (tabId) => {
+        state.removedTabs.push(tabId);
+      },
       sendMessage: (tabId, message) => {
         state.sentMessages.push({ tabId, message });
         return state.sendMessageImpl(tabId, message);
@@ -264,6 +277,63 @@ test("executeTask sends XHS_TASK_EXECUTE once the tab finishes loading", async (
     status: "ok",
   });
   await flush();
+});
+
+test("executeTask opens explore active and waits after clicked profile navigation", async () => {
+  const state = installChromeMock();
+  const chrome = (globalThis as unknown as { chrome: ChromeMock }).chrome;
+
+  const task: XhsTask = {
+    id: "t-bootstrap-active",
+    type: "bootstrap_profile",
+    max_scroll_rounds: 30,
+  };
+  await executeTask(task);
+
+  assert.deepEqual(state.createdTabs, [
+    {
+      url: "https://www.xiaohongshu.com/explore",
+      active: true,
+    },
+  ]);
+  assert.deepEqual(state.queriedTabs, []);
+
+  chrome.tabs.onUpdated._emit(42, { status: "complete" });
+  await flush();
+  assert.equal(state.sentMessages.length, 1);
+
+  await handleTaskResult({
+    task_id: "t-bootstrap-active",
+    urls: [],
+    notes: [],
+    status: "empty",
+    next_url: "https://www.xiaohongshu.com/user/profile/current-user",
+    debug: {
+      xhs_bootstrap: {
+        steps: [
+          {
+            page_url: "https://www.xiaohongshu.com/explore",
+            next_url_clicked: true,
+          },
+        ],
+      },
+    },
+  });
+  await flush();
+
+  assert.deepEqual(state.updatedTabs, [], "clicked profile navigation must not call tabs.update");
+
+  chrome.tabs.onUpdated._emit(42, { status: "complete" });
+  await flush();
+  assert.equal(state.sentMessages.length, 2);
+
+  await handleTaskResult({
+    task_id: "t-bootstrap-active",
+    urls: [],
+    status: "empty",
+  });
+  await flush();
+  assert.deepEqual(state.removedTabs, [42]);
 });
 
 test("executeTask reports sendMessage_failed when content script is absent", async () => {

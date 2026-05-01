@@ -291,7 +291,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Chrome Extension                   │
-│ (Behavior Collection · Recs · Chat · XHS Init Import)│
+│ (Behavior Collection · Recs · Chat · XHS FG Init)       │
 └────────────────────────┬────────────────────────────┘
                          │ REST API
 ┌────────────────────────▼────────────────────────────┐
@@ -319,7 +319,7 @@ Four Bilibili strategies work in coordination, each with independent API quota, 
 
 Results go through multi-dimensional diversity selection: per-source reservation → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations.
 
-For first-run profiling, `openbiliclaw init` can also enqueue an XHS `bootstrap_profile` task. The extension opens Xiaohongshu in the user's logged-in browser session, navigates to the current user's profile, parses rendered profile state / DOM for saved / liked notes, and only imports Xiaohongshu-page history when the site exposes an explicit history/footprint state. Explicit scrolling tasks return `partial` batches as new notes appear, then finish with a final result. The backend converts those notes into normal `favorite / like / view` events and still does not crawl or log into Xiaohongshu directly.
+For first-run profiling, `openbiliclaw init` can also enqueue an XHS `bootstrap_profile` task. The extension opens Xiaohongshu in the user's logged-in browser session; explicit scrolling tasks open `/explore` in the foreground and click the page's own "Me" profile entry instead of directly jumping to the profile URL. It then parses rendered profile state / DOM for saved / liked notes, and only imports Xiaohongshu-page history when the site exposes an explicit history/footprint state. Explicit scrolling tasks return `partial` batches as new notes appear, then finish with a final result. The backend converts those notes into normal `favorite / like / view` events and still does not crawl or log into Xiaohongshu directly.
 
 ### Soul Engine
 
@@ -358,7 +358,7 @@ OpenBiliClaw/
 | Browser Extension | TypeScript + Chrome Extension (Manifest V3) |
 | LLM | Built-in Gemini / DeepSeek / OpenAI / Claude / OpenRouter / Ollama; any OpenAI-compatible endpoint works via custom base_url |
 | Bilibili API | Custom client (WBI signing · v_voucher auto-recovery · rate control) |
-| Xiaohongshu | Extension DOM/state extraction + background-tab task dispatch + init-profile import with optional bounded scrolling and partial batches; no backend crawling |
+| Xiaohongshu | Extension DOM/state extraction + task dispatch; scrolling init imports open `/explore` in the foreground, click the page's profile entry, then use bounded scrolling and partial batches; no backend crawling |
 | Storage | SQLite + Embedding vector index |
 | Agent Framework | Lightweight custom framework |
 
@@ -378,7 +378,7 @@ OpenBiliClaw/
 | Version | Date | Key changes |
 |---|---|---|
 | **[v0.3.20](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.20)** | 2026-05-01 | Install-flow UX fixes + embedding fallback chain: silent-failure bug when Claude / DeepSeek / OpenRouter is the primary LLM and embedding "follows" it — `LLMProvider.supports_embedding` flag drives a fallback chain (ollama → gemini → openai) instead of returning None · `--provider openai` without `--llm-base-url` now clears any stale gateway URL written by a previous run · agent-install.md trims the user's main menu to 3 LLM options (gateway moved to Advanced) · embedding question redesigned with a clear default + tradeoff explanation (recommended: local Ollama bge-m3 — free, offline; alternative: cloud Gemini for higher recall on multilingual / long-form content) · install.sh status block shows green "backend ready — waiting for browser extension" instead of yellow "partial / missing" when only the B站 cookie is pending · README adds an AI-agent prerequisite callout |
-| [v0.3.19](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.19) | 2026-05-01 | `openbiliclaw init` now best-effort mixes Xiaohongshu saved / liked / explicit page-history signals into the first profile. The extension runs `bootstrap_profile` in the user's logged-in Xiaohongshu session, follows the current user's profile, uses `partial` batches for explicit scrolling tasks, and the backend converts notes to normal `favorite / like / view` events without directly crawling Xiaohongshu. |
+| [v0.3.19](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.19) | 2026-05-01 | `openbiliclaw init` now best-effort mixes Xiaohongshu saved / liked / explicit page-history signals into the first profile. The extension runs `bootstrap_profile` in the user's logged-in Xiaohongshu session; scrolling tasks open `/explore` in the foreground and click the page's own profile entry before using `partial` batches. The backend converts notes to normal `favorite / like / view` events without directly crawling Xiaohongshu. |
 | **[v0.3.18](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.18)** | 2026-04-30 | Promotes `franchise_key` to a first-class column on `content_cache`, populated directly by the LLM at evaluation time. Downstream curator dislike propagation and `/api/recommendations` IP dedup now read from the real column instead of the title heuristic that v0.3.17 briefly tried. The hardcoded alias list is gone. |
 | [v0.3.17](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.17) | 2026-04-30 | Fixes a recommendation pipeline IP over-generalisation bug ("5 Genshin clips in one popup"): adds a heuristic franchise extractor; `/api/recommendations` now caps each franchise at 2 per response window; disliking one Genshin video soft-down-weights all same-franchise candidates instead of just blocking that exact bvid |
 | [v0.3.16](https://github.com/whiteguo233/OpenBiliClaw/releases/tag/backend-v0.3.16) | 2026-04-30 | README backend-install order reshuffled: one-liner / Docker / direct script come first, the unsigned desktop package is moved into a `<details>` block at the end · adds a "log into every source you want to use" pre-install section explaining why Xiaohongshu specifically requires being logged in in the same browser the extension is installed (CDP mode strongly recommended) |

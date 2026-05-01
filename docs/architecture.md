@@ -69,7 +69,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 `openbiliclaw init` 的首轮信号现在由两条路径合流：
 
 1. B 站 API 直连拉取观看历史、收藏夹和关注列表。
-2. 后端在 `xhs_tasks` 表入队 `bootstrap_profile`，由浏览器插件在用户已登录的小红书页面中先定位当前用户 profile，再解析 profile state / DOM 中的 `saved / liked` notes 和页面显式暴露的 `xhs_history` notes，回写 `/api/sources/xhs/task-result`。当任务显式传入 `max_scroll_rounds` 时，插件会在 profile tab 内优先探测 feed / waterfall / masonry 滚动容器做有限滚动，并先用 `status="partial"` 分批回传新增 notes，最终再用 `status="ok"` 完成任务；`scroll_wait_ms` 和 `max_stagnant_scroll_rounds` 也由任务 payload 控制，并由插件端裁剪到安全范围。
+2. 后端在 `xhs_tasks` 表入队 `bootstrap_profile`，由浏览器插件在用户已登录的小红书页面中先打开 `/explore` 定位当前用户 profile。滚动任务会以前台 tab 触发页面内“我”入口的 anchor click，background 只等待同一 tab 完成导航；只有找不到可点击入口时才回退到直接导航。到 profile 后，插件解析 profile state / DOM 中的 `saved / liked` notes 和页面显式暴露的 `xhs_history` notes，回写 `/api/sources/xhs/task-result`。当任务显式传入 `max_scroll_rounds` 时，插件会在 profile tab 内优先探测 feed / waterfall / masonry 滚动容器做有限滚动，并先用 `status="partial"` 分批回传新增 notes，最终再用 `status="ok"` 完成任务；`scroll_wait_ms` 和 `max_stagnant_scroll_rounds` 也由任务 payload 控制，并由插件端裁剪到安全范围。
 
 回写后的 notes 会转成普通事件层 payload：`saved -> favorite`、`liked -> like`、`xhs_history -> view`，并带 `metadata.source_platform="xiaohongshu"`。CLI 只短暂等待该任务结果；插件未连接、未登录或小红书页面不暴露对应数据时，初始化继续使用 B 站数据完成。
 

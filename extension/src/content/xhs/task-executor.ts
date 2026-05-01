@@ -23,6 +23,8 @@ import {
   buildBootstrapPartialPayload,
   bootstrapScrollShouldContinue,
   bootstrapProfileTabLabels,
+  clickOwnProfileAnchorFromDocument,
+  collectBootstrapScrollCandidates,
   countBootstrapStateNotesByScope,
   extractBootstrapNotesFromProfileDocument,
   extractBootstrapNotesFromState,
@@ -31,7 +33,9 @@ import {
   extractOwnProfileUrlFromState,
   findBootstrapScrollContainer,
   hasDifferentProfileDocumentNotes,
+  hasBootstrapProfileContent,
   isActiveBootstrapProfileTab,
+  limitBootstrapNewNotesToRemainingCapacity,
   mergeBootstrapNotes,
   normalizeBootstrapScrollRounds,
   normalizeBootstrapScrollWaitMs,
@@ -47,6 +51,8 @@ import {
 const MAX_URLS = 20;
 const RENDER_WAIT_MS = 5_000;
 const CHECK_INTERVAL_MS = 300;
+const PROFILE_CLICK_DELAY_MS = 150;
+const PROFILE_CONTENT_WAIT_MS = 8_000;
 const ANCHOR_SELECTOR = 'a[href*="/explore/"], a[href*="/discovery/item/"]';
 
 export interface TaskExecuteMessage {
@@ -162,6 +168,47 @@ function waitForCards(doc: Document): Promise<boolean> {
   });
 }
 
+function waitForBootstrapProfileContent(doc: Document): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (hasBootstrapProfileContent(doc)) {
+      resolve(true);
+      return;
+    }
+
+    let settled = false;
+    let observer: MutationObserver | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const finish = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      observer?.disconnect();
+      if (interval !== null) clearInterval(interval);
+      resolve(ready);
+    };
+
+    try {
+      observer = new MutationObserver(() => {
+        if (hasBootstrapProfileContent(doc)) finish(true);
+      });
+      observer.observe(doc.body ?? doc.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    } catch {
+      observer = null;
+    }
+
+    interval = setInterval(() => {
+      if (hasBootstrapProfileContent(doc)) finish(true);
+    }, CHECK_INTERVAL_MS);
+
+    setTimeout(() => {
+      finish(hasBootstrapProfileContent(doc));
+    }, PROFILE_CONTENT_WAIT_MS);
+  });
+}
+
 function isProfilePage(url: string): boolean {
   try {
     return new URL(url).pathname.startsWith("/user/profile/");
@@ -185,6 +232,15 @@ function buildEmptyStateCounts(scopes: readonly XhsBootstrapScope[]): Record<str
   const counts: Record<string, number> = {};
   for (const scope of scopes) counts[scope] = 0;
   return counts;
+}
+
+function scheduleOwnProfileNavigationClick(doc: Document, win: Window, baseUrl: string): boolean {
+  const profileUrl = extractOwnProfileUrlFromDocument(doc, baseUrl);
+  if (!profileUrl) return false;
+  win.setTimeout(() => {
+    clickOwnProfileAnchorFromDocument(doc, baseUrl, win);
+  }, PROFILE_CLICK_DELAY_MS);
+  return true;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -272,6 +328,27 @@ function documentScrollMetrics(win: Window, doc: Document): BootstrapScrollMetri
   };
 }
 
+function dispatchWheelLikeScroll(win: Window, target: EventTarget, deltaY: number): void {
+  try {
+    target.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY,
+        deltaMode: 0,
+        clientX: Math.floor((win.innerWidth || 1200) / 2),
+        clientY: Math.floor((win.innerHeight || 900) * 0.75),
+      }),
+    );
+  } catch {
+    try {
+      target.dispatchEvent(new Event("wheel", { bubbles: true, cancelable: true }));
+    } catch {
+      // Ignore synthetic event failures; direct scroll calls below are fallback.
+    }
+  }
+}
+
 function scrollProfilePage(win: Window, doc: Document): Omit<ProfileScrollRoundDebug, "round" | "added_count" | "total_count"> {
   const scrollContainer = findBootstrapScrollContainer(doc);
   const scrolling = scrollContainer ?? (doc.scrollingElement as HTMLElement | null) ?? doc.documentElement;
@@ -280,12 +357,24 @@ function scrollProfilePage(win: Window, doc: Document): Omit<ProfileScrollRoundD
     : documentScrollMetrics(win, doc);
   const currentTop = before.scroll_top;
   const viewportHeight = win.innerHeight || 900;
-  const step = Math.max(Math.floor(viewportHeight * 0.9), 800);
+  const step = Math.max(Math.floor(viewportHeight * 0.8), 640);
   const clientHeight = before.client_height || viewportHeight;
   const nextTop = Math.min(currentTop + step, Math.max(before.scroll_height - clientHeight, 0));
+  const wheelTarget = scrollContainer ?? doc.body ?? doc.documentElement;
+  const wheelSteps = scrollContainer ? [step] : [220, 260, 240, 280];
+
+  for (const deltaY of wheelSteps) {
+    dispatchWheelLikeScroll(win, wheelTarget, deltaY);
+    dispatchWheelLikeScroll(win, doc, deltaY);
+    dispatchWheelLikeScroll(win, win, deltaY);
+  }
+
   scrolling.scrollTop = nextTop;
   if (!scrollContainer) {
-    win.scrollTo({ top: nextTop, behavior: "auto" });
+    for (const deltaY of wheelSteps) {
+      win.scrollBy({ top: deltaY, behavior: "auto" });
+    }
+    win.scrollTo({ top: Math.max(nextTop, win.scrollY || 0), behavior: "auto" });
   }
   if (scrollContainer) {
     scrollContainer.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -405,8 +494,13 @@ async function scrollForMoreProfileNotes(
     await sleep(scrollWaitMs);
     const nextNotes = extractProfilePageNotes(doc, scope, baseUrl, maxItemsPerScope);
     const previousKeys = new Set(notes.map((note) => note.note_id || note.url || note.title));
-    const newlyAdded = nextNotes.filter(
+    const newlyAddedCandidates = nextNotes.filter(
       (note) => !previousKeys.has(note.note_id || note.url || note.title),
+    );
+    const newlyAdded = limitBootstrapNewNotesToRemainingCapacity(
+      notes,
+      newlyAddedCandidates,
+      maxItemsPerScope,
     );
     notes = mergeBootstrapNotes([...notes, ...nextNotes], [scope], { maxItemsPerScope });
     if (newlyAdded.length > 0) {
@@ -582,8 +676,11 @@ export async function executeBootstrapTaskInPage(
     msg.max_stagnant_scroll_rounds,
   );
   const baseUrl = win.location.href || "https://www.xiaohongshu.com/explore";
-  let state = extractBootstrapStateFromDocument(doc);
   const is_profile_page = isProfilePage(baseUrl);
+  const profileContentReady = is_profile_page
+    ? await waitForBootstrapProfileContent(doc)
+    : undefined;
+  let state = extractBootstrapStateFromDocument(doc);
   const requested_scopes = [...scopes];
   const initialStateCounts = state
     ? countBootstrapStateNotesByScope(state, scopes, { baseUrl, maxItemsPerScope })
@@ -594,6 +691,10 @@ export async function executeBootstrapTaskInPage(
     const profileUrlFromState = state ? extractOwnProfileUrlFromState(state, baseUrl) : "";
     const profileUrl = profileUrlFromDocument || profileUrlFromState;
     if (profileUrl) {
+      const clickedProfileLink =
+        maxScrollRounds > 0 && profileUrlFromDocument
+          ? scheduleOwnProfileNavigationClick(doc, win, baseUrl)
+          : false;
       return {
         task_id: msg.task_id,
         urls: [],
@@ -610,6 +711,7 @@ export async function executeBootstrapTaskInPage(
           profile_url_found: true,
           profile_url_source: profileUrlFromDocument ? "document" : "state",
           next_url_requested: true,
+          next_url_clicked: clickedProfileLink,
         }) as unknown as Record<string, unknown>,
       };
     }
@@ -655,14 +757,16 @@ export async function executeBootstrapTaskInPage(
     notes,
     scope_counts,
     status: notes.length > 0 ? "ok" : "empty",
-    debug: buildBootstrapDebugPayload({
-      page_url: baseUrl,
-      is_profile_page,
-      has_initial_state: state !== null,
-      requested_scopes,
-      state_counts: finalStateCounts,
+      debug: buildBootstrapDebugPayload({
+        page_url: baseUrl,
+        is_profile_page,
+        has_initial_state: state !== null,
+        profile_content_ready: profileContentReady,
+        requested_scopes,
+        state_counts: finalStateCounts,
       dom_counts: is_profile_page ? buildScopeCounts(scopes, domNotes) : undefined,
       tab_candidate_texts: is_profile_page ? collectProfileTabCandidateTexts(doc) : undefined,
+      scroll_candidates: is_profile_page ? collectBootstrapScrollCandidates(doc, 12) : undefined,
       tab_load_results: is_profile_page ? tabResults : undefined,
       profile_url_found: is_profile_page ? undefined : false,
       profile_url_source: is_profile_page ? undefined : "",

@@ -45,8 +45,11 @@
 - 收藏 / 点赞导入对齐开源实现：profile 页 `user.notes` 的 `[1]` 作为收藏、`[2]` 作为赞过；如果分组尚未加载，插件会点击 profile 页对应 tab 等待页面自己补齐 state
 - profile state 解析补齐小红书 noteCard 字段：`displayTitle`、`user.nickName`、`cover.urlDefault`；受控滚动每轮会合并 state + DOM，再发送新增 partial，减少虚拟列表导致的漏采
 - `bootstrap_profile` 支持显式 `max_scroll_rounds` 的受控滚动；content script 会把首批和滚动新增 notes 以 `status="partial"` 分批回传，background 等后端 `/task-result` 确认后再继续滚动，最后用 `status="ok"` 完成任务
+- 滚动型 `bootstrap_profile` 会以前台 tab 打开 `/explore`，由 content script 在页面内点击导航栏“我”进入 profile；background 收到 `next_url_clicked=true` 后不再 `tabs.update(profileUrl)`，只等待同一 tab 导航完成并重新下发任务，避免直接跳 profile 触发验证码。不滚动任务仍保持后台执行；只有找不到可点击入口、只能从 state 推出 profile URL 时才回退到直接导航
+- profile 二次执行前会等待小红书 React 页面真正渲染出 profile state、收藏/赞过 tab 文案或 note 卡片，避免 `tabs.onUpdated complete` 早于页面内容加载时直接返回 0 条
 - 后端任务 payload 可控制滚动节奏：`scroll_wait_ms` 控制每轮滚动后的停留等待，`max_stagnant_scroll_rounds` 控制连续无新增多少轮后停止；插件端会做上下限裁剪，dispatcher 会按更长等待放宽任务 timeout
-- profile 滚动目标从固定 `document/window` 升级为优先探测小红书 feed / waterfall / masonry 容器，并排除零高度 feed wrapper；每轮滚动 debug 会记录 target、scrollTop、scrollHeight、clientHeight、before/after top 和新增数，便于判断是否真正触发瀑布流加载
+- 滚动 partial 批次现在会按 `max_items_per_scope` 的剩余名额裁剪，避免最后一轮页面一次新增多条时分批回传超过 scope 上限
+- profile 滚动目标从固定 `document/window` 升级为优先探测小红书 feed / waterfall / masonry 容器，并排除零高度、`overflow-y` 非滚动式的普通 wrapper 和 `channel-list` / sidebar 这类非内容侧栏；没有内容容器时会退回到窗口级小步 `wheel` / `scrollBy`，贴近用户手动前台滚动。debug 会同时记录排名靠前的 `scroll_candidates` 和每轮 target、scrollTop、scrollHeight、clientHeight、before/after top、新增数，便于判断是否真正触发瀑布流加载
 - `openbiliclaw init` 会把 XHS bootstrap 事件加入 `SoulEngine.analyze_events()` 的同批输入，并把对应 notes 追加到 `build_initial_profile()` 的 history
 
 ### 约束

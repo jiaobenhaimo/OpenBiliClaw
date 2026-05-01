@@ -27,14 +27,17 @@ export interface XhsBootstrapDebugStep {
   page_url: string;
   is_profile_page: boolean;
   has_initial_state: boolean;
+  profile_content_ready?: boolean;
   requested_scopes: XhsBootstrapScope[];
   state_counts: Record<string, number>;
   dom_counts?: Record<string, number>;
   profile_url_found?: boolean;
   profile_url_source?: "document" | "state" | "";
   next_url_requested?: boolean;
+  next_url_clicked?: boolean;
   tab_candidates?: Partial<Record<XhsBootstrapScope, boolean>>;
   tab_candidate_texts?: string[];
+  scroll_candidates?: BootstrapScrollCandidateDebug[];
   tab_load_results?: Record<string, unknown>;
 }
 
@@ -68,6 +71,12 @@ export interface BootstrapScrollMetrics {
   client_height: number;
 }
 
+export interface BootstrapScrollCandidateDebug extends BootstrapScrollMetrics {
+  overflow_y: string;
+  note_count: number;
+  score: number;
+}
+
 const DEFAULT_BASE_URL = "https://www.xiaohongshu.com";
 const DEFAULT_MAX_ITEMS_PER_SCOPE = 20;
 const MAX_BOOTSTRAP_SCROLL_ROUNDS = 30;
@@ -78,6 +87,12 @@ const DEFAULT_BOOTSTRAP_STAGNANT_SCROLL_ROUNDS = 5;
 const MIN_BOOTSTRAP_STAGNANT_SCROLL_ROUNDS = 1;
 const MAX_BOOTSTRAP_STAGNANT_SCROLL_ROUNDS = 10;
 const BOOTSTRAP_SCOPES: XhsBootstrapScope[] = ["saved", "liked", "xhs_history"];
+const OWN_PROFILE_EXACT_SELECTORS = [
+  ".main-container .user .link-wrapper a.link-wrapper[href*='/user/profile/']",
+  ".main-container .user a[href*='/user/profile/']",
+  "nav .user a[href*='/user/profile/']",
+  "aside .user a[href*='/user/profile/']",
+];
 const ANCHOR_SELECTOR = 'a[href*="/explore/"], a[href*="/discovery/item/"]';
 const SCROLL_CONTAINER_SELECTOR = [
   ".feeds-container",
@@ -141,14 +156,34 @@ function countNoteAnchors(element: Element): number {
   }
 }
 
+function readOverflowY(element: HTMLElement): string {
+  const win = element.ownerDocument?.defaultView;
+  if (!win?.getComputedStyle) return "unknown";
+  return win.getComputedStyle(element).overflowY.toLowerCase();
+}
+
+function hasScrollableOverflowStyle(element: HTMLElement): boolean {
+  const overflowY = readOverflowY(element);
+  if (overflowY === "unknown") return true;
+  return overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
+}
+
 function scrollContainerScore(element: HTMLElement): number {
   const clientHeight = element.clientHeight || 0;
   if (clientHeight < 120) return 0;
+  if (!hasScrollableOverflowStyle(element)) return 0;
 
   const overflow = Math.max(0, (element.scrollHeight || 0) - (element.clientHeight || 0));
   if (overflow < 120) return 0;
 
   const descriptor = `${element.id || ""} ${elementClassName(element)}`.toLowerCase();
+  if (
+    descriptor.includes("channel-list") ||
+    descriptor.includes("side-bar") ||
+    descriptor.includes("sidebar")
+  ) {
+    return 0;
+  }
   const keywordScore =
     descriptor.includes("feed") ||
     descriptor.includes("waterfall") ||
@@ -160,28 +195,58 @@ function scrollContainerScore(element: HTMLElement): number {
 }
 
 export function findBootstrapScrollContainer(doc: Document): HTMLElement | null {
-  const seen = new Set<HTMLElement>();
-  const candidates: HTMLElement[] = [];
-  try {
-    doc.querySelectorAll<HTMLElement>(SCROLL_CONTAINER_SELECTOR).forEach((element) => {
-      if (seen.has(element)) return;
-      seen.add(element);
-      candidates.push(element);
-    });
-  } catch {
-    return null;
-  }
+  const candidates = collectBootstrapScrollCandidates(doc, Number.POSITIVE_INFINITY);
 
-  let best: HTMLElement | null = null;
+  if (candidates.length === 0) return null;
+
+  let bestElement: HTMLElement | null = null;
   let bestScore = 0;
-  for (const candidate of candidates) {
-    const score = scrollContainerScore(candidate);
+  const elements = bootstrapScrollCandidateElements(doc);
+  for (const element of elements) {
+    const score = scrollContainerScore(element);
     if (score > bestScore) {
-      best = candidate;
+      bestElement = element;
       bestScore = score;
     }
   }
-  return best;
+  return bestElement;
+}
+
+function bootstrapScrollCandidateElements(doc: Document): HTMLElement[] {
+  const seen = new Set<HTMLElement>();
+  const candidates: HTMLElement[] = [];
+  const addCandidate = (element: HTMLElement) => {
+    if (seen.has(element)) return;
+    seen.add(element);
+    candidates.push(element);
+  };
+
+  try {
+    doc.querySelectorAll<HTMLElement>(SCROLL_CONTAINER_SELECTOR).forEach(addCandidate);
+    doc.querySelectorAll<HTMLElement>("body *").forEach(addCandidate);
+  } catch {
+    return [];
+  }
+  return candidates;
+}
+
+export function collectBootstrapScrollCandidates(
+  doc: Document,
+  limit: number = 10,
+): BootstrapScrollCandidateDebug[] {
+  return bootstrapScrollCandidateElements(doc)
+    .map((element) => {
+      const metrics = readBootstrapScrollMetrics(element);
+      return {
+        ...metrics,
+        overflow_y: readOverflowY(element),
+        note_count: countNoteAnchors(element),
+        score: scrollContainerScore(element),
+      };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, Math.floor(limit)));
 }
 
 function unwrapReactive(value: unknown): unknown {
@@ -330,6 +395,27 @@ function normalizeProfileUrl(url: string, baseUrl: string): string {
   }
 }
 
+function anchorHref(anchor: HTMLAnchorElement): string {
+  return anchor.getAttribute("href") || anchor.href || "";
+}
+
+function normalizedAnchorProfileUrl(anchor: HTMLAnchorElement, baseUrl: string): string {
+  return normalizeProfileUrl(anchorHref(anchor), baseUrl);
+}
+
+function isOwnProfileNavAnchor(anchor: HTMLAnchorElement): boolean {
+  const text = anchor.textContent?.trim() ?? "";
+  const aria = anchor.getAttribute("aria-label")?.trim() ?? "";
+  const title = anchor.getAttribute("title")?.trim() ?? "";
+  const className = String(anchor.className ?? "");
+  return (
+    text === "我" ||
+    aria === "我" ||
+    title === "我" ||
+    (className.includes("link-wrapper") && anchor.closest(".user, nav, aside") !== null)
+  );
+}
+
 function firstBoolean(...values: unknown[]): boolean | null {
   for (const value of values) {
     const raw = unwrapReactive(value);
@@ -361,38 +447,76 @@ export function extractOwnProfileUrlFromState(
 }
 
 export function extractOwnProfileUrlFromDocument(doc: Document, baseUrl: string): string {
-  const exactSelectors = [
-    ".main-container .user .link-wrapper a.link-wrapper[href*='/user/profile/']",
-    ".main-container .user a[href*='/user/profile/']",
-    "nav .user a[href*='/user/profile/']",
-    "aside .user a[href*='/user/profile/']",
-  ];
+  const anchor = findOwnProfileAnchorFromDocument(doc, baseUrl);
+  return anchor ? normalizedAnchorProfileUrl(anchor, baseUrl) : "";
+}
 
-  for (const selector of exactSelectors) {
-    const url = normalizeProfileUrl(
-      doc.querySelector<HTMLAnchorElement>(selector)?.getAttribute("href") ?? "",
-      baseUrl,
-    );
-    if (url) return url;
+export function findOwnProfileAnchorFromDocument(
+  doc: Document,
+  baseUrl: string,
+): HTMLAnchorElement | null {
+  for (const selector of OWN_PROFILE_EXACT_SELECTORS) {
+    const anchor = doc.querySelector<HTMLAnchorElement>(selector);
+    const url = anchor ? normalizedAnchorProfileUrl(anchor, baseUrl) : "";
+    if (url && anchor) return anchor;
   }
 
   const anchors = Array.from(doc.querySelectorAll<HTMLAnchorElement>("a[href*='/user/profile/']"));
   for (const anchor of anchors) {
-    const text = anchor.textContent?.trim() ?? "";
-    const aria = anchor.getAttribute("aria-label")?.trim() ?? "";
-    const title = anchor.getAttribute("title")?.trim() ?? "";
-    const className = String(anchor.className ?? "");
-    const isOwnNav =
-      text === "我" ||
-      aria === "我" ||
-      title === "我" ||
-      (className.includes("link-wrapper") && anchor.closest(".user, nav, aside"));
-    if (!isOwnNav) continue;
-    const url = normalizeProfileUrl(anchor.getAttribute("href") ?? "", baseUrl);
-    if (url) return url;
+    if (!isOwnProfileNavAnchor(anchor)) continue;
+    if (normalizedAnchorProfileUrl(anchor, baseUrl)) return anchor;
   }
 
-  return "";
+  return null;
+}
+
+function dispatchOwnProfileMouseEvent(
+  anchor: HTMLAnchorElement,
+  win: Window,
+  type: "mousedown" | "mouseup",
+): void {
+  try {
+    const MouseEventCtor =
+      (win as unknown as { MouseEvent?: typeof MouseEvent }).MouseEvent ??
+      (typeof MouseEvent === "function" ? MouseEvent : null);
+    if (!MouseEventCtor) throw new Error("MouseEvent unavailable");
+    anchor.dispatchEvent(
+      new MouseEventCtor(type, { bubbles: true, cancelable: true, view: win }),
+    );
+  } catch {
+    try {
+      anchor.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+    } catch {
+      // Ignore synthetic event failures; anchor.click() below is the real fallback.
+    }
+  }
+}
+
+export function clickOwnProfileAnchorFromDocument(
+  doc: Document,
+  baseUrl: string,
+  win: Window,
+): { url: string; clicked: boolean } {
+  const anchor = findOwnProfileAnchorFromDocument(doc, baseUrl);
+  if (!anchor) return { url: "", clicked: false };
+
+  const url = normalizedAnchorProfileUrl(anchor, baseUrl);
+  if (!url) return { url: "", clicked: false };
+
+  try {
+    anchor.scrollIntoView({ block: "center", inline: "center" });
+  } catch {
+    // Non-critical; the click can still activate the link.
+  }
+
+  dispatchOwnProfileMouseEvent(anchor, win, "mousedown");
+  dispatchOwnProfileMouseEvent(anchor, win, "mouseup");
+  try {
+    anchor.click();
+  } catch {
+    return { url, clicked: false };
+  }
+  return { url, clicked: true };
 }
 
 function normalizeStateNote(
@@ -670,6 +794,30 @@ export function extractBootstrapNotesFromProfileDocument(
   return extractBootstrapNotesFromDocument(doc, scope, baseUrl, options);
 }
 
+export function hasBootstrapProfileContent(doc: Document): boolean {
+  try {
+    if (extractBootstrapStateFromDocument(doc) !== null) return true;
+  } catch {
+    // Some tests and early-loading documents do not expose the full Document API yet.
+  }
+
+  const text = doc.body?.textContent?.replace(/\s+/g, "") ?? "";
+  if (
+    text.includes("收藏") ||
+    text.includes("赞过") ||
+    text.includes("喜欢") ||
+    text.includes("点赞")
+  ) {
+    return true;
+  }
+
+  try {
+    return doc.querySelector(ANCHOR_SELECTOR) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function profileDocumentNoteKeys(doc: Document, baseUrl: string): string[] {
   return extractBootstrapNotesFromDocument(doc, "saved", baseUrl).map(
     (note) => note.note_id || note.url || note.title,
@@ -684,6 +832,19 @@ export function hasDifferentProfileDocumentNotes(
   if (previousKeys.length === 0) return true;
   const previous = new Set(previousKeys);
   return notes.some((note) => !previous.has(note.note_id || note.url || note.title));
+}
+
+export function limitBootstrapNewNotesToRemainingCapacity(
+  currentNotes: readonly XhsBootstrapNote[],
+  newNotes: readonly XhsBootstrapNote[],
+  maxItemsPerScope: number,
+): XhsBootstrapNote[] {
+  if (newNotes.length === 0) return [];
+  const scope = newNotes[0].scope;
+  const currentCount = currentNotes.filter((note) => note.scope === scope).length;
+  const remaining = Math.max(0, Math.floor(maxItemsPerScope) - currentCount);
+  if (remaining <= 0) return [];
+  return newNotes.slice(0, remaining);
 }
 
 export function isActiveBootstrapProfileTab(tab: HTMLElement): boolean {

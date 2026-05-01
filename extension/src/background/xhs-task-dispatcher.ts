@@ -22,6 +22,7 @@ const BOOTSTRAP_MAX_TASK_TIMEOUT_MS = 180_000;
 const BOOTSTRAP_MAX_EXTENDED_TASK_TIMEOUT_MS = 360_000;
 const MIN_BOOTSTRAP_SCROLL_WAIT_MS = 500;
 const MAX_BOOTSTRAP_SCROLL_WAIT_MS = 5_000;
+const BOOTSTRAP_CLICKED_NAVIGATION_FALLBACK_MS = 2_500;
 const POLL_ALARM_NAME = "openbiliclaw-xhs-task-poll";
 
 export type XhsBootstrapScope = "saved" | "liked" | "xhs_history";
@@ -51,12 +52,14 @@ export interface XhsTaskResult {
 
 let taskInFlight = false;
 let taskTabId: number | null = null;
+let ownsTaskTab = false;
 let taskTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let currentTaskId: string | null = null;
 let currentTask: XhsTask | null = null;
 let bootstrapNavigationCount = 0;
 let bootstrapDebugSteps: unknown[] = [];
 let taskUpdateListener: ((tabId: number, changeInfo: { status?: string }) => void) | null = null;
+let taskNavigationFallbackId: ReturnType<typeof setTimeout> | null = null;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (testable without chrome)
@@ -107,6 +110,12 @@ export function computeTaskTimeoutMs(task: XhsTask): number {
   );
 }
 
+function shouldActivateBeforeExecute(task: XhsTask): boolean {
+  if (task.type !== "bootstrap_profile") return false;
+  if (bootstrapNavigationCount <= 0) return false;
+  return isScrollableBootstrapTask(task);
+}
+
 function buildExecuteMessageData(task: XhsTask): Record<string, unknown> {
   const data: Record<string, unknown> = { task_id: task.id, type: task.type };
   if (task.scopes !== undefined) data.scopes = task.scopes;
@@ -119,6 +128,15 @@ function buildExecuteMessageData(task: XhsTask): Record<string, unknown> {
     data.max_stagnant_scroll_rounds = task.max_stagnant_scroll_rounds;
   }
   return data;
+}
+
+function isScrollableBootstrapTask(task: XhsTask): boolean {
+  return (
+    task.type === "bootstrap_profile" &&
+    typeof task.max_scroll_rounds === "number" &&
+    Number.isFinite(task.max_scroll_rounds) &&
+    task.max_scroll_rounds > 0
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,6 +161,12 @@ function mergeBootstrapDebugIntoResult(result: XhsTaskResult): XhsTaskResult {
   bootstrap.steps = steps;
   debug.xhs_bootstrap = bootstrap;
   return { ...result, debug };
+}
+
+function bootstrapClickedNextUrl(result: XhsTaskResult): boolean {
+  const steps = extractBootstrapDebugSteps(result.debug);
+  const last = steps[steps.length - 1];
+  return isRecord(last) && last.next_url_clicked === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,10 +206,15 @@ function cleanupTask(): void {
     chrome.tabs.onUpdated.removeListener(taskUpdateListener);
     taskUpdateListener = null;
   }
-  if (taskTabId !== null) {
-    void chrome.tabs.remove(taskTabId).catch(() => {});
-    taskTabId = null;
+  if (taskNavigationFallbackId !== null) {
+    clearTimeout(taskNavigationFallbackId);
+    taskNavigationFallbackId = null;
   }
+  if (taskTabId !== null && ownsTaskTab) {
+    void chrome.tabs.remove(taskTabId).catch(() => {});
+  }
+  taskTabId = null;
+  ownsTaskTab = false;
   currentTaskId = null;
   currentTask = null;
   bootstrapNavigationCount = 0;
@@ -206,6 +235,47 @@ function armTaskTimeout(task: XhsTask): void {
   }, computeTaskTimeoutMs(task));
 }
 
+async function sendExecuteMessageToTab(tabId: number, task: XhsTask): Promise<void> {
+  if (shouldActivateBeforeExecute(task)) {
+    await chrome.tabs.update(tabId, { active: true });
+  }
+  await chrome.tabs.sendMessage(tabId, {
+    action: "XHS_TASK_EXECUTE",
+    data: buildExecuteMessageData(task),
+  });
+}
+
+function handleExecuteMessageFailure(task: XhsTask): void {
+  if (currentTaskId !== task.id) return;
+  void reportTaskResult({
+    task_id: task.id,
+    urls: [],
+    status: "error",
+    error: "sendMessage_failed",
+  });
+  cleanupTask();
+}
+
+function clearNavigationFallback(): void {
+  if (taskNavigationFallbackId !== null) {
+    clearTimeout(taskNavigationFallbackId);
+    taskNavigationFallbackId = null;
+  }
+}
+
+function armClickedNavigationFallback(task: XhsTask, tabId: number): void {
+  clearNavigationFallback();
+  taskNavigationFallbackId = setTimeout(() => {
+    taskNavigationFallbackId = null;
+    if (currentTaskId !== task.id || taskTabId !== tabId) return;
+    if (taskUpdateListener !== null) {
+      chrome.tabs.onUpdated.removeListener(taskUpdateListener);
+      taskUpdateListener = null;
+    }
+    void sendExecuteMessageToTab(tabId, task).catch(() => handleExecuteMessageFailure(task));
+  }, BOOTSTRAP_CLICKED_NAVIGATION_FALLBACK_MS);
+}
+
 function armTaskLoadListener(task: XhsTask): void {
   if (taskUpdateListener !== null) {
     chrome.tabs.onUpdated.removeListener(taskUpdateListener);
@@ -218,21 +288,10 @@ function armTaskLoadListener(task: XhsTask): void {
     // Detach immediately so intra-page navigations don't re-trigger the handshake.
     chrome.tabs.onUpdated.removeListener(listener);
     if (taskUpdateListener === listener) taskUpdateListener = null;
-    chrome.tabs
-      .sendMessage(updatedTabId, {
-        action: "XHS_TASK_EXECUTE",
-        data: buildExecuteMessageData(task),
-      })
-      .catch(() => {
-        if (currentTaskId !== task.id) return;
-        void reportTaskResult({
-          task_id: task.id,
-          urls: [],
-          status: "error",
-          error: "sendMessage_failed",
-        });
-        cleanupTask();
-      });
+    clearNavigationFallback();
+    void sendExecuteMessageToTab(updatedTabId, task).catch(() =>
+      handleExecuteMessageFailure(task),
+    );
   };
   taskUpdateListener = listener;
   chrome.tabs.onUpdated.addListener(listener);
@@ -252,8 +311,9 @@ export async function executeTask(task: XhsTask): Promise<void> {
   }
 
   try {
-    const tab = await chrome.tabs.create({ url, active: false });
+    const tab = await chrome.tabs.create({ url, active: isScrollableBootstrapTask(task) });
     taskTabId = tab.id ?? null;
+    ownsTaskTab = taskTabId !== null;
   } catch {
     await reportTaskResult({ task_id: task.id, urls: [], status: "error", error: "tab_create_failed" });
     cleanupTask();
@@ -281,10 +341,15 @@ export async function handleTaskResult(result: XhsTaskResult): Promise<void> {
   ) {
     const task = currentTask;
     const tabId = taskTabId;
+    const clickedNextUrl = bootstrapClickedNextUrl(result);
     bootstrapDebugSteps.push(...extractBootstrapDebugSteps(result.debug));
     bootstrapNavigationCount += 1;
     armTaskLoadListener(task);
     armTaskTimeout(task);
+    if (clickedNextUrl) {
+      armClickedNavigationFallback(task, tabId);
+      return;
+    }
     chrome.tabs.update(tabId, { url: result.next_url }).catch(() => {
       if (currentTaskId !== task.id) return;
       void reportTaskResult({
