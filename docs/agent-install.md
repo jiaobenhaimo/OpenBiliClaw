@@ -420,6 +420,18 @@ hung. The bootstrap streams init's stdout so progress is visible.
 - **非交互式终端(管道 / CI)**:不弹提问,默认启用,bootstrap 任务
   自带 graceful 降级——扩展没连上时 30s 超时后跳过
 
+**关键:接入会前台抢焦点**。`max_scroll_rounds=3`(v0.3.22+ CLI 默认)
+触发滚动模式,扩展会在用户浏览器里 `chrome.tabs.create({active: true})`
+打开一个前台 tab(URL: https://www.xiaohongshu.com/explore),自动跳到
+用户 profile 页向下滚动加载收藏 / 点赞,10-30s 完成后自动关闭。
+**这不是隐藏 tab**——背景 tab 在小红书上只渲染浅层 wrapper,触发不到
+瀑布流懒加载,所以必须前台。告诉用户:
+  - 装机过程中会被切走一次焦点,正常,完成后焦点还回来
+  - 期间不要关那个 tab
+  - 如果不想被抢焦点(比如在演示 / 录屏),让他设
+    `OPENBILICLAW_XHS_BOOTSTRAP_SCROLL_ROUNDS=0` 改用浅层模式
+    (只读初始 state,后台 tab,但只能拿 ~10-20 条)
+
 AI agent 视角:**绝大多数情况你不应该手工传任何 flag**。让用户自己
 回答 init 的问题——如果用户说 "我没装扩展也不想用小红书",那时再
 建议他用 `openbiliclaw init --no-xhs` 跳过提问。

@@ -1876,12 +1876,25 @@ def _ask_xhs_inclusion() -> bool:
     console.print("[bold]准备小红书接入[/bold]")
     console.print("请确认以下三件事都做了:")
     console.print("  [cyan]☐[/cyan] 装好了 OpenBiliClaw 浏览器扩展")
-    console.print("  [cyan]☐[/cyan] 浏览器目前是打开的(扩展需要在前台轮询任务)")
+    console.print(
+        "  [cyan]☐[/cyan] 浏览器目前是打开的且是当前 [bold]活跃窗口[/bold]"
+        "(扩展需要前台 tab 才能触发小红书的瀑布流懒加载)"
+    )
     console.print("  [cyan]☐[/cyan] 已经登录了 https://www.xiaohongshu.com")
     console.print()
     console.print(
-        "[dim]扩展会自动在隐藏 tab 里打开你的小红书 profile 页解析收藏/点赞,"
-        "整个过程 10-30 秒,不需要你做任何事。[/dim]"
+        "[bold yellow]⚠[/bold yellow]  接下来扩展会[bold]在你的浏览器里自动打开"
+        "一个新 tab[/bold]并切到那个 tab(会抢一次焦点),进到你的小红书 profile 页"
+        "向下滚动加载收藏/点赞。整个过程 10-30 秒。"
+    )
+    console.print(
+        "[dim]   — 期间不要关那个 tab、不要切走太久(可能影响滚动加载)。"
+        "完成后扩展会自动关闭它,焦点还回来。[/dim]"
+    )
+    console.print(
+        "[dim]   — 想跳过焦点抢占的话:Ctrl-C 退出,改用 "
+        "`OPENBILICLAW_XHS_BOOTSTRAP_SCROLL_ROUNDS=0 openbiliclaw init` "
+        "拿浅层数据(只读初始 state,无前台 tab,但只能拿到 ~10-20 条)。[/dim]"
     )
     console.print()
     if not typer.confirm("准备好了吗,可以开始吗?", default=True):
