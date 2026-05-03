@@ -950,7 +950,11 @@ def _ollama_is_running(host: str = "http://localhost:11434") -> bool:
     import httpx
 
     try:
-        with httpx.Client(timeout=2.0) as client:
+        # trust_env=False — same rationale as OllamaProvider.embed: a
+        # localhost Ollama probe must not be hijacked by the user's
+        # HTTP_PROXY env (e.g. 127.0.0.1:7897 VPN client), or the CLI
+        # falsely concludes "Ollama isn't running" while it's healthy.
+        with httpx.Client(timeout=2.0, trust_env=False) as client:
             response = client.get(f"{host}/api/version")
             return response.status_code == 200
     except Exception:
@@ -962,7 +966,7 @@ def _ollama_has_model(model: str, host: str = "http://localhost:11434") -> bool:
     import httpx
 
     try:
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, trust_env=False) as client:
             response = client.get(f"{host}/api/tags")
             response.raise_for_status()
             tags = response.json().get("models", [])
@@ -982,7 +986,7 @@ def _ollama_pull_model(model: str, host: str = "http://localhost:11434") -> bool
 
     try:
         with (
-            httpx.Client(timeout=600.0) as client,
+            httpx.Client(timeout=600.0, trust_env=False) as client,
             client.stream(
                 "POST",
                 f"{host}/api/pull",
@@ -2149,9 +2153,7 @@ def cost(
     show_all = by == "all"
 
     if show_all or by == "day":
-        daily_table = Table(
-            show_header=True, header_style="bold cyan", title="按天 (cost by day)"
-        )
+        daily_table = Table(show_header=True, header_style="bold cyan", title="按天 (cost by day)")
         daily_table.add_column("日期", no_wrap=True)
         daily_table.add_column("调用数", justify="right")
         daily_table.add_column("input tokens", justify="right")
@@ -2247,9 +2249,7 @@ def cost(
             f"({total_cached:,}/{total_prompt:,} input tokens served from cache)"
         )
     elif total_prompt > 0:
-        cache_summary = (
-            "\ncache 命中: [dim]0%(还没命中或 provider 不上报 cache 字段)[/dim]"
-        )
+        cache_summary = "\ncache 命中: [dim]0%(还没命中或 provider 不上报 cache 字段)[/dim]"
     _print_status_panel(
         "info",
         f"近 {days} 天合计",
@@ -2331,19 +2331,23 @@ def logs_prune(
             actions.append(("keep", f"{path.name}  [{tag}]", st.st_size))
             continue
         if truncate_mb > 0 and st.st_size >= truncate_bytes:
-            actions.append((
-                "truncate",
-                f"{path.name}  [{tag}, > {truncate_mb} MB]",
-                st.st_size,
-            ))
+            actions.append(
+                (
+                    "truncate",
+                    f"{path.name}  [{tag}, > {truncate_mb} MB]",
+                    st.st_size,
+                )
+            )
             continue
         if max_age_days > 0 and st.st_mtime < age_cutoff:
             age_days = (_time.time() - st.st_mtime) / 86400
-            actions.append((
-                "delete (age)",
-                f"{path.name}  [{tag}, {age_days:.0f} days old]",
-                st.st_size,
-            ))
+            actions.append(
+                (
+                    "delete (age)",
+                    f"{path.name}  [{tag}, {age_days:.0f} days old]",
+                    st.st_size,
+                )
+            )
             continue
         actions.append(("keep", f"{path.name}  [{tag}]", st.st_size))
 
@@ -2372,25 +2376,25 @@ def logs_prune(
             )
             running -= size
 
-    table = Table(show_header=True, header_style="bold cyan", title=f"Plan ({'APPLY' if apply else 'DRY-RUN'})")
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        title=f"Plan ({'APPLY' if apply else 'DRY-RUN'})",
+    )
     table.add_column("Action", no_wrap=True)
     table.add_column("File", overflow="fold")
     table.add_column("Size", justify="right")
     for action, label, size in actions:
         size_h = f"{size / (1024 * 1024):.1f} MB"
-        style = (
-            "green" if action == "keep"
-            else "yellow" if action == "truncate"
-            else "red"
-        )
+        style = "green" if action == "keep" else "yellow" if action == "truncate" else "red"
         table.add_row(f"[{style}]{action}[/{style}]", label, size_h)
     console.print(table)
 
     will_change = [a for a in actions if a[0] != "keep"]
-    freed = sum(
-        s for action, _, s in actions if action.startswith("delete")
-    ) + sum(
-        s - 1 for action, _, s in actions if action == "truncate"  # leaves ~1 byte stub
+    freed = sum(s for action, _, s in actions if action.startswith("delete")) + sum(
+        s - 1
+        for action, _, s in actions
+        if action == "truncate"  # leaves ~1 byte stub
     )
     console.print(
         f"\n会释放约 [bold]{freed / (1024 * 1024):.1f} MB[/bold] 磁盘"
@@ -2398,13 +2402,12 @@ def logs_prune(
     )
 
     if not apply:
-        console.print(
-            "\n[yellow]这是 dry-run。加上 --apply 才会真的改文件。[/yellow]"
-        )
+        console.print("\n[yellow]这是 dry-run。加上 --apply 才会真的改文件。[/yellow]")
         return
 
     # Apply
     import time as _time2
+
     actually_freed = 0
     for action, label, size in actions:
         name = label.split("  ")[0]

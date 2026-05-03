@@ -176,6 +176,32 @@ class DelightScorer:
         exploration = self._exploration_match(candidate, profile, novelty)
         dislike = await self._dislike_penalty(content_text, profile)
 
+        # Surface "embedding subsystem dead" cascades. When the embedding
+        # provider is broken (proxy hijack, Ollama OOM, network glitch),
+        # every embedding-driven signal silently returns 0.0 and the
+        # final score collapses below threshold for ALL candidates,
+        # which previously looked indistinguishable from "user just has
+        # narrow tastes". Embedding-driven signals are likes/deep_need/
+        # insight/dislike — if all four are exactly 0.0 there's a near-
+        # zero chance that's a legitimate scoring outcome (it would
+        # require empty user likes + empty deep_needs + empty insights +
+        # empty disliked_topics simultaneously). Log a single WARN per
+        # such candidate so a stuck embedding pipeline becomes visible
+        # at the recommendation layer, not just the embedding layer.
+        if (
+            self._embedding is not None
+            and deep_need == 0.0
+            and insight == 0.0
+            and likes == 0.0
+            and dislike == 0.0
+        ):
+            logger.warning(
+                "Delight scoring degraded for %s: all 4 embedding-driven "
+                "signals are 0.0 (likely embedding subsystem failure). "
+                "Score will be capped at non-embedding signals only.",
+                getattr(candidate, "bvid", "?"),
+            )
+
         return DelightSignals(
             deep_need_alignment=deep_need,
             insight_resonance=insight,
@@ -352,9 +378,7 @@ class DelightScorer:
         # Filter out generic phrases that don't carry a topical signal.
         skip_terms = {"低质内容", "虚假信息", "标题党", "低质", "虚假"}
         topical = [
-            str(t).strip()
-            for t in disliked
-            if str(t).strip() and str(t).strip() not in skip_terms
+            str(t).strip() for t in disliked if str(t).strip() and str(t).strip() not in skip_terms
         ]
         if not topical:
             return 0.0
@@ -449,7 +473,11 @@ class DelightScorer:
             prefs = getattr(profile, "preferences", None)
             interests = getattr(prefs, "interests", []) if prefs is not None else []
             top_like = next(
-                (str(getattr(t, "name", "")).strip() for t in interests if str(getattr(t, "name", "")).strip()),
+                (
+                    str(getattr(t, "name", "")).strip()
+                    for t in interests
+                    if str(getattr(t, "name", "")).strip()
+                ),
                 "",
             )
             if top_like:
