@@ -60,7 +60,7 @@ class ExploreStrategy(DiscoveryStrategy):
     # generator suggesting domains that mapped to already-covered
     # topic_groups by the time the eval LLM labeled them.
     database: _SupportsTopicCoverage | None = None
-    score_threshold: float = 0.65
+    score_threshold: float = 0.70
     queries_per_domain: int = 3
     max_domains: int = 5
     last_intermediates: dict[str, object] = field(default_factory=dict)

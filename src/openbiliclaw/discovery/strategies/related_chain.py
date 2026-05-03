@@ -41,7 +41,7 @@ class RelatedChainStrategy(DiscoveryStrategy):
     search_strategy: SupportsSeedStrategy | None = None
     trending_strategy: SupportsSeedStrategy | None = None
     concurrency: DiscoveryConcurrencyController | None = None
-    score_threshold: float = 0.65
+    score_threshold: float = 0.70
     max_seeds: int = 5
     related_per_seed: int = 8
     max_depth: int = 2

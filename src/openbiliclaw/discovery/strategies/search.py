@@ -44,7 +44,7 @@ class SearchStrategy(DiscoveryStrategy):
     page_size: int = 10
     max_pages: int = 1
     llm_evaluation: bool = True
-    score_threshold: float = 0.65
+    score_threshold: float = 0.70
     last_intermediates: dict[str, object] = field(default_factory=dict)
 
     @property

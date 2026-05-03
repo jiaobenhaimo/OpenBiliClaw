@@ -37,7 +37,7 @@ class TrendingStrategy(DiscoveryStrategy):
     bilibili_client: SupportsRankingClient
     llm_service: SupportsStructuredTask
     concurrency: DiscoveryConcurrencyController | None = None
-    score_threshold: float = 0.65
+    score_threshold: float = 0.70
     max_related_rids: int = 4
     # Broader default RIDs covering more top-level categories:
     # 36=科技, 188=资讯, 181=影视, 119=纪录片, 3=音乐, 129=舞蹈, 4=游戏, 160=生活
