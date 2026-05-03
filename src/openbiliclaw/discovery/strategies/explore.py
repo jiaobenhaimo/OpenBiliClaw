@@ -305,6 +305,14 @@ class ExploreStrategy(DiscoveryStrategy):
             response = await self.llm_service.complete_structured_task(
                 system_instruction=messages[0]["content"],
                 user_input=messages[1]["content"],
+                # v0.3.31+: bumped 4096 → 8192. With covered_topic_groups
+                # added to user msg + 5 domains × 3 queries +
+                # why_it_might_resonate text per domain, the JSON output
+                # was hitting the 4K cap mid-string (truncation observed
+                # at line 20 col 32 / char 736 in production logs),
+                # which made json.loads error out and the whole strategy
+                # return 0 items. 8K leaves comfortable headroom.
+                max_tokens=8192,
                 caller="discovery.explore.queries",
             )
             parsed = json.loads(str(getattr(response, "content", "")).strip())
