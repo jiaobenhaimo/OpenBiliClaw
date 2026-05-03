@@ -277,8 +277,11 @@ class ExploreStrategy(DiscoveryStrategy):
         covered_topic_groups: list[str] | None = None
         if self.database is not None:
             try:
+                # Match the prompt-side cap (12) — pulling more from DB
+                # would just be discarded by the prompt builder. min_count=2
+                # avoids stuffing one-off long-tail topics into the avoid list.
                 covered_topic_groups = self.database.get_active_pool_topic_groups(
-                    limit=30,
+                    limit=12,
                     min_count=2,
                 )
             except Exception:

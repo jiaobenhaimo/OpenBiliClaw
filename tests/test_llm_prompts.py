@@ -180,10 +180,11 @@ def test_build_explore_domains_prompt_omits_block_when_no_covered_groups() -> No
         assert "<covered_topic_groups>" not in m[1]["content"]
 
 
-def test_build_explore_domains_prompt_caps_covered_groups_at_30() -> None:
-    """Defensive: don't blow up the prompt size when the active pool has
-    hundreds of distinct topic_groups. Cap at 30 so the most-covered
-    ones always get into the avoidance signal."""
+def test_build_explore_domains_prompt_caps_covered_groups_at_12() -> None:
+    """Defensive: don't over-constrain the model. Cap at 12 so the most-
+    saturated topic_groups make it into the avoidance signal but the
+    model still has room to maneuver. Larger caps (e.g. 30) caused
+    DeepSeek to return empty content on ~half of explore cycles."""
     covered = [f"topic_{i}" for i in range(100)]
     messages = build_explore_domains_prompt(
         profile_summary={"interests": []},
@@ -191,10 +192,10 @@ def test_build_explore_domains_prompt_caps_covered_groups_at_30() -> None:
     )
     user_prompt = messages[1]["content"]
 
-    # First 30 included, anything past 30 is dropped to keep prompt sane
+    # First 12 included, anything past 12 dropped to keep model unboxed
     assert "topic_0" in user_prompt
-    assert "topic_29" in user_prompt
-    assert "topic_50" not in user_prompt
+    assert "topic_11" in user_prompt
+    assert "topic_30" not in user_prompt
     assert "topic_99" not in user_prompt
 
 
