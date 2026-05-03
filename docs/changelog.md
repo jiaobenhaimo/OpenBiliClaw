@@ -4,6 +4,22 @@
 
 ---
 
+## v0.3.34: 惊喜推荐改用 LLM 评分（2026-05-04）
+
+### 改动
+
+- **`DelightScorer` 从 embedding-cosine 升级为 LLM batch 评分**:之前的实现用 `likes_alignment` / `deep_need_alignment` / `dislike_penalty` 等 embedding 余弦相似度——但「惊喜」语义上跟「相似度高」对立(用户不喜欢「又一条 DeepSeek 测评」),embedding 越高越像反而越不惊喜。新增 `LLMDelightScorer` 类:每个 batch (默认 5 条) 一次 LLM 调用,LLM 直接按预设 rubric 判分(0-1)+ 给出 rationale + hook,**惊喜的核心判据从「相似」变成「跨域呼应 / 隐藏需求 / 概念桥接」**。
+- **省掉二次 reason generation 调用**:LLM 评分时已经返回 80-180 字的 rationale 和 2-4 字 hook,直接当 `delight_reason` / `delight_hook` 写入数据库,不再单独调 `_generate_delight_reason`。
+- **成本**:稳态每 cycle ~6 batch call × ¥0.01 = ¥0.06/cycle,8 cycle/day = **~¥0.48/天**;省下来的 reason generation 是 ¥0.6/天,**净改善 -¥0.12/天**。首次池子完整重打分一次性 ¥1-2。
+- **`build_delight_score_batch_prompt` 在 `llm/prompts.py` 新增**:静态 system prompt(cache-friendly,符合 v0.3.28+ 规约),user payload 用 sort_keys 保证 deterministic prefix。
+- **数据迁移**:删掉所有 `pool_status='fresh'/'shown'` 的老 delight_score(都是 embedding-era 标定的不可信值),让 LLM scorer 全量重判。
+
+### 测试
+
+- 重写 `test_precompute_delight_scores_*` 用例反映新 LLM-batch 形态,LLM mock 返回 `[{bvid, score, rationale, hook}]` 数组。
+
+---
+
 ## v0.3.33: Delight 候选过滤修复（2026-05-04）
 
 ### 修复

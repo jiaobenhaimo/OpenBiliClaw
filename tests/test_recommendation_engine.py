@@ -166,7 +166,8 @@ def test_select_diversified_batch_keeps_one_accessible_entry_when_available() ->
     batch = RecommendationEngine._select_diversified_batch(candidates, limit=5)
 
     assert any(
-        item.style_key in {
+        item.style_key
+        in {
             "story_doc",
             "review_roundup",
             "lifestyle",
@@ -201,11 +202,14 @@ async def test_generate_recommendations_ranks_discovered_and_records_history() -
         db.initialize()
         engine = RecommendationEngine(llm=_DummyLLM(), database=db)
 
-        _seed_pool(db, [
-            DiscoveredContent(bvid="BV1A", title="A", relevance_score=0.71),
-            DiscoveredContent(bvid="BV1B", title="B", relevance_score=0.92),
-            DiscoveredContent(bvid="BV1C", title="C", relevance_score=0.83),
-        ])
+        _seed_pool(
+            db,
+            [
+                DiscoveredContent(bvid="BV1A", title="A", relevance_score=0.71),
+                DiscoveredContent(bvid="BV1B", title="B", relevance_score=0.92),
+                DiscoveredContent(bvid="BV1C", title="C", relevance_score=0.83),
+            ],
+        )
 
         recommendations = await engine.generate_recommendations(
             discovered=None,
@@ -257,29 +261,32 @@ async def test_generate_recommendations_prefers_primary_then_relevance_then_rece
         db.initialize()
         engine = RecommendationEngine(llm=_DummyLLM(), database=db)
 
-        _seed_pool(db, [
-            DiscoveredContent(
-                bvid="BV1BACK",
-                title="补货高分",
-                relevance_score=0.96,
-                candidate_tier="backfill",
-                last_scored_at="2026-03-10T08:00:00",
-            ),
-            DiscoveredContent(
-                bvid="BV1OLD",
-                title="主候选旧",
-                relevance_score=0.87,
-                candidate_tier="primary",
-                last_scored_at="2026-03-09T08:00:00",
-            ),
-            DiscoveredContent(
-                bvid="BV1NEW",
-                title="主候选新",
-                relevance_score=0.87,
-                candidate_tier="primary",
-                last_scored_at="2026-03-10T08:00:00",
-            ),
-        ])
+        _seed_pool(
+            db,
+            [
+                DiscoveredContent(
+                    bvid="BV1BACK",
+                    title="补货高分",
+                    relevance_score=0.96,
+                    candidate_tier="backfill",
+                    last_scored_at="2026-03-10T08:00:00",
+                ),
+                DiscoveredContent(
+                    bvid="BV1OLD",
+                    title="主候选旧",
+                    relevance_score=0.87,
+                    candidate_tier="primary",
+                    last_scored_at="2026-03-09T08:00:00",
+                ),
+                DiscoveredContent(
+                    bvid="BV1NEW",
+                    title="主候选新",
+                    relevance_score=0.87,
+                    candidate_tier="primary",
+                    last_scored_at="2026-03-10T08:00:00",
+                ),
+            ],
+        )
 
         recommendations = await engine.generate_recommendations(
             discovered=None,
@@ -331,56 +338,59 @@ async def test_generate_recommendations_limits_single_topic_dominance() -> None:
         db.initialize()
         engine = RecommendationEngine(llm=_DummyLLM(), database=db)
 
-        _seed_pool(db, [
-            *[
-                DiscoveredContent(
-                    bvid=f"RBUF{index}",
-                    title=f"同一 related 主题 {index}",
-                    source_strategy="related_chain",
-                    topic_key="related:bv1bufdz9eyb",
-                    topic_group="强化学习",
-                    style_key="practical_guide",
-                    relevance_score=0.95 - index * 0.001,
-                )
-                for index in range(5)
+        _seed_pool(
+            db,
+            [
+                *[
+                    DiscoveredContent(
+                        bvid=f"RBUF{index}",
+                        title=f"同一 related 主题 {index}",
+                        source_strategy="related_chain",
+                        topic_key="related:bv1bufdz9eyb",
+                        topic_group="强化学习",
+                        style_key="practical_guide",
+                        relevance_score=0.95 - index * 0.001,
+                    )
+                    for index in range(5)
+                ],
+                *[
+                    DiscoveredContent(
+                        bvid=f"RALT{index}",
+                        title=f"另一 related 主题 {index}",
+                        source_strategy="related_chain",
+                        topic_key="related:bv18xzjbbegz",
+                        topic_group="博弈论",
+                        style_key="light_chat",
+                        relevance_score=0.94 - index * 0.001,
+                    )
+                    for index in range(3)
+                ],
+                *[
+                    DiscoveredContent(
+                        bvid=f"TREND{index}",
+                        title=f"热榜内容 {index}",
+                        source_strategy="trending",
+                        topic_key="trending",
+                        topic_group="时事",
+                        style_key="news_brief",
+                        relevance_score=0.84 - index * 0.001,
+                    )
+                    for index in range(2)
+                ],
+                *[
+                    DiscoveredContent(
+                        bvid=f"SEARCH{index}",
+                        title=f"搜索内容 {index}",
+                        source_strategy="search",
+                        topic_key="ai",
+                        topic_group="人工智能",
+                        style_key="deep_dive",
+                        relevance_score=0.83 - index * 0.001,
+                    )
+                    for index in range(2)
+                ],
             ],
-            *[
-                DiscoveredContent(
-                    bvid=f"RALT{index}",
-                    title=f"另一 related 主题 {index}",
-                    source_strategy="related_chain",
-                    topic_key="related:bv18xzjbbegz",
-                    topic_group="博弈论",
-                    style_key="light_chat",
-                    relevance_score=0.94 - index * 0.001,
-                )
-                for index in range(3)
-            ],
-            *[
-                DiscoveredContent(
-                    bvid=f"TREND{index}",
-                    title=f"热榜内容 {index}",
-                    source_strategy="trending",
-                    topic_key="trending",
-                    topic_group="时事",
-                    style_key="news_brief",
-                    relevance_score=0.84 - index * 0.001,
-                )
-                for index in range(2)
-            ],
-            *[
-                DiscoveredContent(
-                    bvid=f"SEARCH{index}",
-                    title=f"搜索内容 {index}",
-                    source_strategy="search",
-                    topic_key="ai",
-                    topic_group="人工智能",
-                    style_key="deep_dive",
-                    relevance_score=0.83 - index * 0.001,
-                )
-                for index in range(2)
-            ],
-        ])
+        )
 
         recommendations = await engine.generate_recommendations(
             discovered=None,
@@ -550,15 +560,18 @@ async def test_generate_recommendations_populates_expression_and_updates_history
         db.initialize()
         engine = RecommendationEngine(llm=_DummyLLM(), database=db)
 
-        _seed_pool(db, [
-            DiscoveredContent(
-                bvid="BV1EXP",
-                title="讲透摄影构图的底层逻辑",
-                up_name="构图实验室",
-                description="从原理出发解释构图。",
-                relevance_score=0.91,
-            ),
-        ])
+        _seed_pool(
+            db,
+            [
+                DiscoveredContent(
+                    bvid="BV1EXP",
+                    title="讲透摄影构图的底层逻辑",
+                    up_name="构图实验室",
+                    description="从原理出发解释构图。",
+                    relevance_score=0.91,
+                ),
+            ],
+        )
 
         recommendations = await engine.generate_recommendations(
             discovered=None,
@@ -951,8 +964,9 @@ async def test_reshuffle_recommendations_caps_topic_and_style_for_larger_batches
 
 
 @pytest.mark.asyncio
-async def test_reshuffle_recommendations_backfills_to_requested_limit_when_style_is_dominant(
-) -> None:
+async def test_reshuffle_recommendations_backfills_to_requested_limit_when_style_is_dominant() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as tmpdir:
         db = Database(Path(tmpdir) / "test.db")
         db.initialize()
@@ -1225,7 +1239,8 @@ def test_content_diversity_treats_platforms_equally() -> None:
     ]
 
     picked = RecommendationEngine._select_diversified_batch(
-        rich_xhs + rich_bili, limit=10,
+        rich_xhs + rich_bili,
+        limit=10,
     )
 
     # Both platforms should be represented because content is diverse enough
@@ -1285,23 +1300,25 @@ def test_unclassified_xhs_items_not_collapsed_by_source_strategy() -> None:
             style_key="",
             tags=[],
         )
-        for i, title in enumerate([
-            "莫氏鸡煲在家轻松复刻",
-            "工地十块自助盒饭",
-            "宝可梦PVP配队思路",
-            "咒术回战深度解析",
-            "DeepSeek本地部署教程",
-            "Mac Studio搭建AI工作流",
-            "顺德美食探店攻略",
-            "洛克王国世界吐槽",
-            "国际局势深度推演",
-            "React Native性能优化",
-            "独居女生的日常vlog",
-            "摄影构图原理讲解",
-            "上海工地烟火气",
-            "宝可梦冠军建模吐槽",
-            "AI自动化工作流实战",
-        ])
+        for i, title in enumerate(
+            [
+                "莫氏鸡煲在家轻松复刻",
+                "工地十块自助盒饭",
+                "宝可梦PVP配队思路",
+                "咒术回战深度解析",
+                "DeepSeek本地部署教程",
+                "Mac Studio搭建AI工作流",
+                "顺德美食探店攻略",
+                "洛克王国世界吐槽",
+                "国际局势深度推演",
+                "React Native性能优化",
+                "独居女生的日常vlog",
+                "摄影构图原理讲解",
+                "上海工地烟火气",
+                "宝可梦冠军建模吐槽",
+                "AI自动化工作流实战",
+            ]
+        )
     ]
 
     picked = RecommendationEngine._select_diversified_batch(candidates, limit=10)
@@ -1360,29 +1377,35 @@ async def test_classify_pool_backlog_fills_metadata() -> None:
             # or an expression-generation call
             if "批量评估" in system_instruction or "score" in system_instruction:
                 return LLMResponse(
-                    content=json.dumps([
-                        {
-                            "score": 0.85,
-                            "reason": "美食烹饪类内容",
-                            "topic_group": "美食烹饪",
-                            "style_key": "lifestyle",
-                        },
-                        {
-                            "score": 0.72,
-                            "reason": "游戏攻略",
-                            "topic_group": "游戏攻略",
-                            "style_key": "game_strategy",
-                        },
-                    ], ensure_ascii=False),
+                    content=json.dumps(
+                        [
+                            {
+                                "score": 0.85,
+                                "reason": "美食烹饪类内容",
+                                "topic_group": "美食烹饪",
+                                "style_key": "lifestyle",
+                            },
+                            {
+                                "score": 0.72,
+                                "reason": "游戏攻略",
+                                "topic_group": "游戏攻略",
+                                "style_key": "game_strategy",
+                            },
+                        ],
+                        ensure_ascii=False,
+                    ),
                     provider="test",
                     model="dummy",
                     usage={},
                 )
             return LLMResponse(
-                content=json.dumps({
-                    "expression": "这条给你找的。",
-                    "topic_label": "test",
-                }, ensure_ascii=False),
+                content=json.dumps(
+                    {
+                        "expression": "这条给你找的。",
+                        "topic_label": "test",
+                    },
+                    ensure_ascii=False,
+                ),
                 provider="test",
                 model="dummy",
                 usage={},
@@ -1532,7 +1555,11 @@ def test_re_ingest_does_not_overwrite_classified_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_precompute_delight_scores_backfills_missing_copy_for_high_scored_rows() -> None:
+async def test_precompute_delight_scores_uses_llm_batch_scorer() -> None:
+    """v0.3.34+ — delight scoring is one batched LLM call returning
+    score + rationale + hook per candidate (no separate reason call).
+    """
+
     class _DelightLLM:
         async def complete_structured_task(
             self,
@@ -1546,10 +1573,14 @@ async def test_precompute_delight_scores_backfills_missing_copy_for_high_scored_
         ) -> LLMResponse:
             return LLMResponse(
                 content=json.dumps(
-                    {
-                        "delight_reason": "这条会把你最近那股想搞明白系统结构的劲头接住。",
-                        "delight_hook": "结构上头",
-                    },
+                    [
+                        {
+                            "bvid": "BV1BACKFILL",
+                            "score": 0.78,
+                            "rationale": "这条会把你最近那股想搞明白系统结构的劲头接住。",
+                            "hook": "结构上头",
+                        }
+                    ],
                     ensure_ascii=False,
                 ),
                 provider="test",
@@ -1569,12 +1600,6 @@ async def test_precompute_delight_scores_backfills_missing_copy_for_high_scored_
             description="从复杂系统角度解释结构之间如何互相作用。",
             view_count=50000,
             like_count=3200,
-        )
-        db.update_delight_score(
-            "BV1BACKFILL",
-            delight_score=0.72,
-            delight_reason="",
-            delight_hook="",
         )
         engine = RecommendationEngine(llm=_DelightLLM(), database=db)
 

@@ -729,15 +729,15 @@ class RecommendationEngine:
     ) -> int:
         """Score un-scored pool candidates for proactive delight potential.
 
-        Items scoring above the delight threshold get LLM-generated
-        delight_reason explanations persisted to the database.
+        v0.3.34+: switched from per-item embedding-cosine scoring (which
+        biased toward similarity, not surprise) to LLM batch scoring via
+        ``LLMDelightScorer``. Each batched call returns score + rationale
+        + hook in one shot, eliminating the secondary
+        ``_generate_delight_reason`` LLM hop for above-threshold items.
         """
-        from openbiliclaw.recommendation.delight import DelightScorer, DelightSignals
+        from openbiliclaw.recommendation.delight import LLMDelightScorer
 
-        scorer = DelightScorer(
-            embedding_service=self._embedding_service,
-            database=self._database,
-        )
+        scorer = LLMDelightScorer(llm_service=self._llm)
 
         prefs = getattr(profile, "preferences", None)
         exploration_openness = float(getattr(prefs, "exploration_openness", 0.5))
@@ -751,86 +751,58 @@ class RecommendationEngine:
 
         candidates = self._rows_to_discovered(rows)
 
+        # All ``rows`` returned here either lack a delight_score, or have
+        # a stale one from the embedding-era scorer (which we choose to
+        # re-judge with the LLM rather than trust). Send them all through
+        # one batched LLM scoring pass — no special-case backfill loop.
         scored_count = 0
-        for row, candidate in zip(rows, candidates, strict=True):
-            stored_delight_score = float(row.get("delight_score", 0.0) or 0.0)
-            needs_copy_backfill = stored_delight_score >= effective_threshold and (
-                not str(row.get("delight_reason", "")).strip()
-                or not str(row.get("delight_hook", "")).strip()
-            )
-            if needs_copy_backfill:
-                reason_stub = scorer._build_reason_stub(
-                    DelightSignals(),
-                    candidate,
-                    profile,
-                )
-                delight_reason, delight_hook = await self._generate_delight_reason(
-                    candidate,
-                    profile,
-                    reason_stub,
-                )
+        to_score: list[Any] = list(candidates)
+
+        try:
+            scored = await scorer.score_batch(to_score, profile)
+        except Exception:
+            logger.exception("Delight LLM batch scoring failed for %d candidates", len(to_score))
+            return 0
+
+        for candidate in to_score:
+            result = scored.get(candidate.bvid)
+            if result is None:
+                # LLM dropped this one — mark with sentinel score so it's
+                # not picked again next cycle, but record nothing positive.
                 self._database.update_delight_score(
                     candidate.bvid,
-                    delight_score=stored_delight_score,
-                    delight_reason=delight_reason,
-                    delight_hook=delight_hook,
-                )
-                scored_count += 1
-                logger.info(
-                    "Delight candidate backfilled: %s (score=%.3f, hook=%s)",
-                    candidate.bvid,
-                    stored_delight_score,
-                    delight_hook,
-                )
-                continue
-            try:
-                delight_score, signals, reason_stub = await scorer.score(
-                    candidate,
-                    profile,
-                )
-            except Exception:
-                logger.exception(
-                    "Delight scoring failed for %s, writing score=0.01 to skip next cycle",
-                    candidate.bvid,
-                )
-                delight_score = 0.01  # Mark as scored (non-zero) to skip next time
-                self._database.update_delight_score(
-                    candidate.bvid,
-                    delight_score=delight_score,
+                    delight_score=0.01,
                     delight_reason="",
                     delight_hook="",
                 )
                 continue
 
-            if delight_score < effective_threshold:
-                # Below threshold — persist score but no reason
+            persisted_score = max(0.01, result.score)
+            if result.score < effective_threshold:
+                # Below threshold — persist score but no reason/hook
                 self._database.update_delight_score(
                     candidate.bvid,
-                    delight_score=max(0.01, delight_score),
+                    delight_score=persisted_score,
                     delight_reason="",
                     delight_hook="",
                 )
                 scored_count += 1
                 continue
 
-            # Above threshold — generate delight reason via LLM
-            delight_reason, delight_hook = await self._generate_delight_reason(
-                candidate,
-                profile,
-                reason_stub,
-            )
+            # Above threshold — LLM already provided rationale + hook
+            # in the same call, no extra LLM trip needed.
             self._database.update_delight_score(
                 candidate.bvid,
-                delight_score=delight_score,
-                delight_reason=delight_reason,
-                delight_hook=delight_hook,
+                delight_score=persisted_score,
+                delight_reason=result.rationale or "",
+                delight_hook=result.hook or "意外契合",
             )
             scored_count += 1
             logger.info(
                 "Delight candidate found: %s (score=%.3f, hook=%s)",
                 candidate.bvid,
-                delight_score,
-                delight_hook,
+                persisted_score,
+                result.hook,
             )
 
         return scored_count
@@ -1692,8 +1664,7 @@ class RecommendationEngine:
         # is OUR guard against "5 different 原神 angle videos in one
         # batch" (same franchise, different topic_group).
         franchise_counts: Counter[str] = Counter(
-            (getattr(item, "franchise_key", "") or "").strip().lower()
-            for item in candidates
+            (getattr(item, "franchise_key", "") or "").strip().lower() for item in candidates
         )
         del franchise_counts[""]  # don't count non-franchise content
 
@@ -1722,9 +1693,7 @@ class RecommendationEngine:
             "top_topic_share": _share(topic_counts),
             "top_style_share": _share(style_counts),
             "top_franchise_share": _share(franchise_counts),
-            "top_franchise": (
-                franchise_counts.most_common(1)[0][0] if franchise_counts else ""
-            ),
+            "top_franchise": (franchise_counts.most_common(1)[0][0] if franchise_counts else ""),
             "carryover_from_prev": carryover,
             "unique_titles_ratio": round(unique_titles / n, 3),
             "sample_titles": [item.title for item in candidates[:5]],

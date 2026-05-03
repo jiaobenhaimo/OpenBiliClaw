@@ -12,9 +12,12 @@ diversity.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
+
+from openbiliclaw.llm.prompts import build_delight_score_batch_prompt
 
 if TYPE_CHECKING:
     from openbiliclaw.llm.embedding import SupportsEmbeddingService
@@ -106,6 +109,218 @@ DEFAULT_DELIGHT_THRESHOLD: float = 0.44
 CONSERVATIVE_DELIGHT_THRESHOLD: float = 0.54
 _LOW_EXPLORATION_OPENNESS: float = 0.3
 _DEFAULT_WEIGHTS = DelightWeights()
+
+
+# Default batch size for LLM delight scoring. 5 keeps each prompt small
+# (cache-friendly, fast) while still amortising the per-call HTTP/handshake
+# cost. With ~30 candidates per refresh tick, that's 6 batched calls.
+_DELIGHT_LLM_BATCH_SIZE: int = 5
+
+
+class _SupportsStructuredLLM(Protocol):
+    async def complete_structured_task(
+        self,
+        *,
+        system_instruction: str,
+        user_input: str,
+        max_tokens: int = ...,
+        caller: str = ...,
+    ) -> Any: ...
+
+
+@dataclass
+class DelightLLMResult:
+    """One LLM-judged delight result for a candidate."""
+
+    score: float = 0.0
+    rationale: str = ""
+    hook: str = ""
+
+
+class LLMDelightScorer:
+    """LLM-based delight scoring (replaces embedding-cosine pipeline).
+
+    Why LLM instead of embedding cosine: embedding similarity rewards
+    content that is *similar* to the user's existing likes, which is the
+    opposite of "surprise". The pre-2026-05-04 ``DelightScorer`` therefore
+    surfaced reinforcement content (more DeepSeek tutorials for an AI-heavy
+    user) instead of cross-domain delights. An LLM evaluating a rubric
+    can distinguish "concept-bridging" from "topic-repeating" in a way
+    cosine cannot.
+
+    Cost: at batch_size=5 and ~30 new candidates per refresh tick, that's
+    6 LLM calls per cycle × ~¥0.01 = ¥0.06/cycle, ¥0.48/day at 8 cycles.
+    Each call returns score + rationale + hook in one shot, eliminating
+    the secondary ``_generate_delight_reason`` LLM hop.
+    """
+
+    def __init__(
+        self,
+        llm_service: _SupportsStructuredLLM,
+        *,
+        threshold: float = DEFAULT_DELIGHT_THRESHOLD,
+        batch_size: int = _DELIGHT_LLM_BATCH_SIZE,
+    ) -> None:
+        self._llm_service = llm_service
+        self._threshold = threshold
+        self._batch_size = max(1, batch_size)
+
+    @property
+    def threshold(self) -> float:
+        return self._threshold
+
+    def effective_threshold(self, exploration_openness: float) -> float:
+        """Return a possibly raised threshold for conservative users."""
+        if exploration_openness < _LOW_EXPLORATION_OPENNESS:
+            return max(self._threshold, CONSERVATIVE_DELIGHT_THRESHOLD)
+        return self._threshold
+
+    async def score_batch(
+        self,
+        candidates: list[SupportsDelightCandidate],
+        profile: Any,
+    ) -> dict[str, DelightLLMResult]:
+        """Score a list of candidates via batched LLM calls.
+
+        Returns a mapping ``bvid -> DelightLLMResult``. Items the LLM
+        omits or mis-routes default to ``score=0.0``; callers should
+        treat missing entries as "below threshold" and not retry the
+        same batch (the LLM will keep dropping them — usually because
+        the title was empty or untranslatable).
+        """
+        if not candidates:
+            return {}
+
+        results: dict[str, DelightLLMResult] = {}
+        profile_summary = _build_delight_profile_summary(profile)
+
+        for batch_start in range(0, len(candidates), self._batch_size):
+            batch = candidates[batch_start : batch_start + self._batch_size]
+            content_batch = [
+                {
+                    "bvid": c.bvid,
+                    "title": (c.title or "")[:140],
+                    "description": (c.description or "")[:280],
+                    "topic_group": getattr(c, "topic_group", "") or "",
+                    "source_strategy": getattr(c, "source_strategy", "") or "",
+                    "relevance_score": round(float(c.relevance_score or 0.0), 3),
+                }
+                for c in batch
+            ]
+            messages = build_delight_score_batch_prompt(
+                profile_summary=profile_summary,
+                content_batch=content_batch,
+            )
+            try:
+                response = await self._llm_service.complete_structured_task(
+                    system_instruction=messages[0]["content"],
+                    user_input=messages[1]["content"],
+                    max_tokens=2048,
+                    caller="recommendation.delight_score",
+                )
+                parsed = json.loads(str(getattr(response, "content", "")).strip())
+            except Exception:
+                logger.warning(
+                    "Delight LLM batch scoring failed for %d candidates",
+                    len(batch),
+                    exc_info=True,
+                )
+                continue
+            if not isinstance(parsed, list):
+                logger.warning(
+                    "Delight LLM batch returned non-list payload: %s",
+                    type(parsed).__name__,
+                )
+                continue
+            for entry in parsed:
+                if not isinstance(entry, dict):
+                    continue
+                bvid = str(entry.get("bvid", "")).strip()
+                if not bvid:
+                    continue
+                results[bvid] = DelightLLMResult(
+                    score=max(0.0, min(1.0, float(entry.get("score", 0.0) or 0.0))),
+                    rationale=str(entry.get("rationale", "")).strip(),
+                    hook=str(entry.get("hook", "")).strip(),
+                )
+
+        return results
+
+
+def _build_delight_profile_summary(profile: Any) -> dict[str, object]:
+    """Compact profile shape for the delight LLM prompt.
+
+    Keeps only the fields the rubric actually uses:
+      - top likes (domain + weight + first 4 specifics)
+      - deep_needs
+      - active_insights (hypothesis + confidence)
+      - exploration_openness
+      - disliked_topics (top 8)
+    """
+    summary: dict[str, object] = {}
+
+    interest_layer = getattr(profile, "interest", None)
+    likes_src = getattr(interest_layer, "likes", []) if interest_layer is not None else []
+    likes_out: list[dict[str, object]] = []
+    for d in sorted(
+        likes_src,
+        key=lambda dom: float(getattr(dom, "weight", 0.0) or 0.0),
+        reverse=True,
+    )[:8]:
+        domain = str(getattr(d, "domain", "")).strip()
+        if not domain:
+            continue
+        specs = [
+            str(getattr(s, "name", "")).strip()
+            for s in (getattr(d, "specifics", []) or [])[:4]
+            if str(getattr(s, "name", "")).strip()
+        ]
+        likes_out.append(
+            {
+                "domain": domain,
+                "weight": round(float(getattr(d, "weight", 0.0) or 0.0), 2),
+                "specifics": specs,
+            }
+        )
+    summary["likes"] = likes_out
+
+    deep_needs = [
+        str(n).strip() for n in (getattr(profile, "deep_needs", []) or [])[:5] if str(n).strip()
+    ]
+    if not deep_needs:
+        core = getattr(profile, "core", None)
+        if core is not None:
+            deep_needs = [
+                str(n).strip()
+                for n in (getattr(core, "deep_needs", []) or [])[:5]
+                if str(n).strip()
+            ]
+    summary["deep_needs"] = deep_needs
+
+    insights_out: list[dict[str, object]] = []
+    for ins in (getattr(profile, "active_insights", []) or [])[:5]:
+        hyp = str(getattr(ins, "hypothesis", "")).strip()
+        if not hyp:
+            continue
+        insights_out.append(
+            {
+                "hypothesis": hyp[:200],
+                "confidence": round(float(getattr(ins, "confidence", 0.5) or 0.5), 2),
+            }
+        )
+    summary["active_insights"] = insights_out
+
+    prefs = getattr(profile, "preferences", None)
+    summary["exploration_openness"] = round(
+        float(getattr(prefs, "exploration_openness", 0.5) or 0.5), 2
+    )
+
+    disliked = [
+        str(t).strip() for t in (getattr(prefs, "disliked_topics", []) or [])[:8] if str(t).strip()
+    ]
+    summary["disliked_topics"] = disliked
+
+    return summary
 
 
 class DelightScorer:
