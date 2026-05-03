@@ -153,6 +153,25 @@ class EmbeddingService:
             logger.warning("Embedding failed for: %s", key[:50], exc_info=True)
             return []
 
+        # Never cache an empty vector. Empty means the provider failed
+        # transparently (e.g. swallowed timeout) and returned ``[]``;
+        # caching that pins the text to "no embedding" forever even
+        # after the upstream issue is fixed. v0.3.31 had ~170 keys
+        # poisoned this way before this guard existed — top user
+        # interests like 游戏攻略 / 洛克王国 / 金铲铲之战 were affected
+        # and the cascade silently zero'd DelightScorer's
+        # likes_alignment for the most relevant content. Surface a
+        # WARN per occurrence so the failure mode is visible at the
+        # service layer, not buried in provider-level logs.
+        if not vector:
+            logger.warning(
+                "Embedding service got empty vector for key=%r — "
+                "provider returned [] (likely transient failure). "
+                "Skipping cache write so the next call retries.",
+                key[:80],
+            )
+            return []
+
         # Store in both caches
         if len(self._l1_cache) >= self._cache_size:
             oldest_key = next(iter(self._l1_cache))
