@@ -4,6 +4,19 @@
 
 ---
 
+## v0.3.33: Delight 候选过滤修复（2026-05-04）
+
+### 修复
+
+- **`get_delight_candidates` 不再返回 `pool_status='suppressed'` 的 item**:之前 SQL 包含 `IN ('fresh', 'shown', 'suppressed')`,但 suppressed 是被 topic-group cap / 来源配额裁出活跃池的 item,delight 评分还挂在上面。结果 popup 每次刷新调 `/api/delight/pending-batch?limit=20` 都从 562 条 suppressed 历史评分（v0.3.32 dislike/threshold 改前打的）里捞 20 条出来,**用户每次重新加载扩展都看到 20 个看似惊喜的"幽灵推荐"**。改成 `IN ('fresh', 'shown')`,只保留活跃池。
+- **一次性清理 9991 条 suppressed 状态下的 delight 残留**:`UPDATE content_cache SET delight_score=0, delight_reason='', delight_hook='', delight_notified=0 WHERE pool_status='suppressed'`。修改 SQL 后这些数据本身已不会再 leak，但清掉避免 suppressed → reactivate 时再带着老 delight 漂回来。
+
+### 测试
+
+- 反转 `test_database_get_delight_candidate_allows_suppressed_delight_item` 的语义：原测试用注释「虽然普通池压掉了，但这条对你还是很可能是惊喜」固化了 bug 行为，现改名 `..._excludes_suppressed_pool_items` 并断言 None。
+
+---
+
 ## v0.3.32: Embedding 与 LLM Provider 解耦 + OpenAI 协议兼容 provider（2026-05-04）
 
 ### 改动

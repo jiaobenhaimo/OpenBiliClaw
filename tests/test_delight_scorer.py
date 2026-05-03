@@ -268,9 +268,22 @@ def test_database_get_delight_candidate_requires_ready_copy(tmp_path: Path) -> N
     assert candidate is None
 
 
-def test_database_get_delight_candidate_allows_suppressed_delight_item(
+def test_database_get_delight_candidate_excludes_suppressed_pool_items(
     tmp_path: Path,
 ) -> None:
+    """Suppressed items must NOT surface as delight.
+
+    A previous version of this test asserted the opposite (suppressed
+    delight items are still surfaced, with the rationale "虽然普通池压
+    掉了，但这条对你还是很可能是惊喜"). In practice this caused 20
+    stale "delights" to appear on every popup reload — items that had
+    been trimmed out by topic-group caps or source-quota balancing
+    months ago, with delight scores baked under earlier looser
+    calibrations. After the v0.3.32 dislike/threshold recalibration,
+    9991 such ghosts were sitting on the suppressed graveyard.
+    Restricting to ``pool_status IN ('fresh', 'shown')`` keeps delight
+    in lockstep with the active pool.
+    """
     database = _make_database(tmp_path)
     database.cache_content(
         "BV1SUPPRESS",
@@ -285,14 +298,13 @@ def test_database_get_delight_candidate_allows_suppressed_delight_item(
     database.update_delight_score(
         "BV1SUPPRESS",
         delight_score=0.91,
-        delight_reason="虽然普通池压掉了，但这条对你还是很可能是惊喜。",
+        delight_reason="历史评分残留，应当被新规则过滤。",
         delight_hook="压箱惊喜",
     )
 
     candidate = database.get_delight_candidate(min_delight_score=0.70)
 
-    assert candidate is not None
-    assert candidate["bvid"] == "BV1SUPPRESS"
+    assert candidate is None
 
 
 def test_database_mark_delight_notified(tmp_path: Path) -> None:

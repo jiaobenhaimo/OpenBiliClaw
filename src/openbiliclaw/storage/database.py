@@ -2339,7 +2339,17 @@ class Database:
         min_delight_score: float = 0.85,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        """Return up to ``limit`` un-notified delight candidates ordered by score."""
+        """Return up to ``limit`` un-notified delight candidates ordered by score.
+
+        Restricts to ``pool_status IN ('fresh', 'shown')`` —  ``suppressed``
+        items have been trimmed out of the active pool by topic-group cap
+        or source-share quota and shouldn't reappear as delights. Without
+        this guard, popup re-hydration would pull historical delight
+        scores baked under earlier (looser) calibrations from the
+        suppressed graveyard and surface 20 stale "surprises" on every
+        extension reload (observed 2026-05-04: 562 suppressed items
+        carried delight metadata vs 2 in fresh).
+        """
         cursor = self.conn.execute(
             """
             SELECT *
@@ -2348,7 +2358,7 @@ class Database:
               AND COALESCE(delight_notified, 0) = 0
               AND COALESCE(delight_reason, '') != ''
               AND COALESCE(delight_hook, '') != ''
-              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown', 'suppressed')
+              AND COALESCE(pool_status, 'fresh') IN ('fresh', 'shown')
             ORDER BY delight_score DESC, relevance_score DESC, discovered_at DESC
             LIMIT ?
             """,
