@@ -672,6 +672,20 @@ def create_app(
         if callable(refresh_after_event_ingest):
             with suppress(Exception):
                 await refresh_after_event_ingest()
+        # Notify popup that the activity feed has new entries so it can
+        # refresh its UI without polling. Throttled naturally to once per
+        # ingest call (extension batches 10+ events into a single POST).
+        if accepted > 0:
+            event_hub = getattr(ctx.runtime_controller, "event_hub", None)
+            publish = getattr(event_hub, "publish", None)
+            if callable(publish):
+                with suppress(Exception):
+                    await publish(
+                        {
+                            "type": "activity.added",
+                            "count": accepted,
+                        }
+                    )
         return EventIngestResponse(accepted=accepted)
 
     @app.get("/api/recommendations", response_model=RecommendationListResponse)
