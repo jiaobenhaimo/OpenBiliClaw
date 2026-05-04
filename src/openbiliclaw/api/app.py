@@ -722,6 +722,33 @@ def create_app(
         # would leave gaps that other items further back in time would
         # have filled.
         rows = ctx.database.get_recommendations(limit=40)
+
+        # Fresh-install bootstrap: ``recommendations`` table is the
+        # write-only history of items we've ever served. On first popup
+        # load nobody has called ``reshuffle`` / ``append`` / CLI
+        # ``recommend`` yet, so the table is empty even if the discovery
+        # pool already has 100+ scored candidates. Surface those by
+        # bootstrapping a single ``serve()`` call right here — it writes
+        # 10 fresh entries to the history table that the next ``rows =
+        # get_recommendations`` re-read will pick up. Failure is fully
+        # silent: any error returns the original empty list, leaving
+        # the popup's "正在补货" state intact and giving the regular
+        # refresh tick another chance.
+        if not rows and ctx.recommendation_engine is not None and ctx.soul_engine is not None:
+            with suppress(Exception):
+                pool_count_fn = getattr(ctx.database, "count_pool_candidates", None)
+                pool_count = int(pool_count_fn()) if callable(pool_count_fn) else 0
+                if pool_count > 0:
+                    profile = await ctx.soul_engine.get_profile()
+                    await ctx.recommendation_engine.serve(profile, limit=10)
+                    rows = ctx.database.get_recommendations(limit=40)
+                    logger.info(
+                        "GET /api/recommendations bootstrap: served from "
+                        "empty history (pool_count=%d → wrote %d to history)",
+                        pool_count,
+                        len(rows),
+                    )
+
         rows = _cap_by_franchise(rows, max_per_franchise=2)[:20]
         return RecommendationListResponse(
             items=[
