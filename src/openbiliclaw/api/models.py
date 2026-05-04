@@ -199,13 +199,25 @@ class BilibiliCookieIn(BaseModel):
 
 
 class BilibiliCookieResponse(BaseModel):
-    """Result of a cookie-sync attempt."""
+    """Result of a cookie-sync attempt.
+
+    ``error_code`` lets the extension pick a smart retry cadence
+    (network errors → quick retry, expired cookie → wait for next
+    login). Empty when ``ok=True``.
+    """
 
     ok: bool
     authenticated: bool
     username: str = ""
     user_id: int = 0
     message: str = ""
+    # v0.3.42+ machine-readable code for the extension to branch retry
+    # logic on. One of:
+    #   ""                       — success
+    #   "empty_cookie"           — payload was empty
+    #   "cookie_invalid"         — Bilibili says cookie is bad / expired
+    #   "validation_network"     — backend couldn't reach api.bilibili.com
+    error_code: str = ""
 
 
 class NotificationAckIn(BaseModel):

@@ -265,6 +265,7 @@ def create_app(
                 ok=False,
                 authenticated=False,
                 message="cookie payload is empty",
+                error_code="empty_cookie",
             )
 
         config, diagnostics = load_config_with_diagnostics()
@@ -274,10 +275,35 @@ def create_app(
         if payload.validate_with_bilibili:
             status = await auth_manager.validate_cookie(cookie_value)
             if not status.authenticated:
+                # Distinguish "network couldn't reach api.bilibili.com"
+                # (transient — extension should retry quickly) from
+                # "Bilibili rejected this cookie" (cookie expired —
+                # extension should back off until next login). The
+                # heuristic relies on AuthManager.validate_cookie's
+                # ``message`` field — connection / timeout / DNS errors
+                # surface as the underlying httpx exception text, while
+                # an actual logged-out cookie surfaces as the literal
+                # "当前 Cookie 未登录或已失效。" message we set in
+                # validate_cookie.
+                msg = (status.message or "").lower()
+                network_markers = (
+                    "timeout",
+                    "connect",
+                    "dns",
+                    "ssl",
+                    "proxy",
+                    "name or service",
+                    "connection",
+                    "网络",
+                    "代理",
+                )
+                is_network_error = any(m in msg for m in network_markers)
+                error_code = "validation_network" if is_network_error else "cookie_invalid"
                 return BilibiliCookieResponse(
                     ok=False,
                     authenticated=False,
                     message=status.message or "Cookie validation failed; not saved.",
+                    error_code=error_code,
                 )
             authenticated = True
             username = status.username or ""

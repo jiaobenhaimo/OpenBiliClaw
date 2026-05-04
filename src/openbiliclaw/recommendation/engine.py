@@ -199,10 +199,14 @@ class RecommendationEngine:
             List of personalized recommendations.
         """
         multiplier = 4 if excluded_bvids else 3
+        raw_pool_count = self._database.count_pool_candidates()
         candidates = self._load_pool_candidates(limit=max(limit * multiplier, 40))
+        loaded_count = len(candidates)
         if excluded_bvids:
             candidates = [c for c in candidates if c.bvid not in excluded_bvids]
+        after_exclude_count = len(candidates)
         candidates = self._exclude_recently_viewed(candidates)
+        after_viewed_count = len(candidates)
 
         # Online supergroup merging — collapses semantically-equivalent
         # topic_groups within this batch (e.g. 动漫/动漫产业/动漫文化) so
@@ -213,6 +217,37 @@ class RecommendationEngine:
 
         label = "realtime" if expression_mode == "realtime" else "pool"
         prev_bvids = self._last_served_bvids
+
+        # Surface "pool says 97 but serve loads 0" mismatches: count_pool
+        # counts items the user can theoretically reshuffle to, while
+        # _load_pool_candidates filters by candidate_tier / linkable
+        # source / etc. Without this log line, the popup's "还有 N 条"
+        # count rarely matches what serve() actually picks, which makes
+        # "popup shows empty even though pool has items" silent.
+        if raw_pool_count > 0 and after_viewed_count == 0:
+            logger.warning(
+                "serve(/%s) loaded 0 candidates from pool of %d — likely cause: "
+                "all items lack required fields (style_key/topic_group), filtered "
+                "by excluded_bvids (%d → %d), or already viewed (%d → 0). "
+                "Inspect content_cache rows directly: "
+                "SELECT count(*), source, source_platform FROM content_cache "
+                "WHERE pool_status='fresh' GROUP BY source, source_platform;",
+                label,
+                raw_pool_count,
+                loaded_count,
+                after_exclude_count,
+                after_viewed_count,
+            )
+        elif raw_pool_count != loaded_count:
+            logger.info(
+                "serve(/%s) pool/load mismatch: count=%d → loaded=%d → after_exclude=%d → after_viewed=%d",
+                label,
+                raw_pool_count,
+                loaded_count,
+                after_exclude_count,
+                after_viewed_count,
+            )
+
         logger.info(
             "Recommendation candidate summary (serve/%s): %s",
             label,

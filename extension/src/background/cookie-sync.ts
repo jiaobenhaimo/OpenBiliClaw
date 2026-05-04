@@ -20,7 +20,16 @@ const COOKIE_SYNC_URL = "http://127.0.0.1:8420/api/bilibili/cookie";
 const COOKIE_SYNC_ALARM = "openbiliclaw-cookie-sync";
 const COOKIE_SYNC_DEBOUNCE_MS = 2_000;
 const COOKIE_SYNC_REFRESH_MINUTES = 60;
+// HTTP-level failures (5xx, timeout, backend down): retry quickly.
 const COOKIE_SYNC_RETRY_MINUTES = 1;
+// Backend reachable but B站 validation network-failed (proxy / DNS):
+// retry every 5 min — usually clears once user's network calms down,
+// but don't hammer either.
+const COOKIE_SYNC_VALIDATION_NETWORK_RETRY_MINUTES = 5;
+// Backend says cookie itself is invalid / expired: only the user's
+// next bilibili.com login fixes this. Quiet hourly retry as
+// belt-and-braces in case the cookie was edited externally.
+const COOKIE_SYNC_COOKIE_INVALID_RETRY_MINUTES = 60;
 
 /** Critical cookie names — without these, the backend can't call B 站 API. */
 const REQUIRED_COOKIE_NAMES = ["SESSDATA", "bili_jct", "DedeUserID"];
@@ -117,6 +126,8 @@ export async function syncBilibiliCookieToBackend(
       ok: boolean;
       authenticated: boolean;
       username?: string;
+      error_code?: string;
+      message?: string;
     };
     if (result.ok && result.authenticated) {
       console.log(
@@ -124,8 +135,33 @@ export async function syncBilibiliCookieToBackend(
           (result.username ? ` (logged in as ${result.username})` : ""),
       );
       scheduleHourlyCookieSync();
+      return true;
     }
-    return result.ok;
+    // Backend returned 200 but rejected the cookie. Use error_code to
+    // pick a smart retry interval: validation network errors clear
+    // quickly, but expired cookies need a real bilibili.com re-login
+    // to fix.
+    const errorCode = String(result.error_code || "").toLowerCase();
+    const message = String(result.message || "");
+    if (errorCode === "validation_network") {
+      console.warn(
+        `[openbiliclaw] cookie validation network-failed (${source}): ${message} — retry in ${COOKIE_SYNC_VALIDATION_NETWORK_RETRY_MINUTES}min`,
+      );
+      scheduleCookieSyncAlarm(COOKIE_SYNC_VALIDATION_NETWORK_RETRY_MINUTES);
+    } else if (errorCode === "cookie_invalid") {
+      console.warn(
+        `[openbiliclaw] cookie invalid / expired (${source}): ${message} — waiting for next bilibili.com login (or hourly retry)`,
+      );
+      scheduleCookieSyncAlarm(COOKIE_SYNC_COOKIE_INVALID_RETRY_MINUTES);
+    } else {
+      // Unknown / legacy backend without error_code — fall back to a
+      // moderate 5-min retry so we don't sit on a 1-hour gap by accident.
+      console.warn(
+        `[openbiliclaw] cookie sync rejected (${source}): code=${errorCode || "(unset)"} message=${message} — retry in 5min`,
+      );
+      scheduleCookieSyncAlarm(COOKIE_SYNC_VALIDATION_NETWORK_RETRY_MINUTES);
+    }
+    return false;
   } catch (err) {
     // Backend not running, network blocked, etc — silent retry on next tick.
     console.warn("[openbiliclaw] cookie sync failed:", err);
