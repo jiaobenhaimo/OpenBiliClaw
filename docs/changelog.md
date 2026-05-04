@@ -4,6 +4,34 @@
 
 ---
 
+## v0.3.55: B 站 search v_voucher 退避 1 → 3 attempt（2026-05-05 spec wave 5）
+
+### 背景
+
+`docs/plans/2026-05-05-discovery-runtime-fix-spec.md` U3。
+
+production logs 43 分钟会话里 **141 次 `Search got v_voucher challenge`**，**9 次完整一轮 `Search: 8 queries, 0 API results, 0 unique candidates`**。原 retry 策略只 1 次重试 + 1.5s 固定延迟，命中两次连环挑战就放弃；keyword 已经付费 LLM 生成（每次 ~¥0.012）但拿不到结果。
+
+### 改动
+
+`src/openbiliclaw/bilibili/api.py:search_videos`：
+- retry attempts 2 → **3**
+- 退避从 fixed 1.5s 改成 **指数 (1.5s, 5s, 15s)** 三段
+- 总超时 ~21s 给 WBI key churn 时间稳定
+- 第 3 次仍 v_voucher → WARN log + return []，让上游知道是 storm 不是 query 不存在
+- 重试触发时打 INFO `Search v_voucher challenge (attempt N/3) ... retry in Xs`
+
+### 影响
+
+- 大多数 transient v_voucher 在第 2-3 次重试时会拿到结果（之前一律放弃）
+- 9 次 0-result rounds 预期降到 ~3 次（实际还需观察）
+- WBI storm 持续期间不再静默放弃——WARN 让 operator 看见
+- 不是 storm 的正常情况下：retries 不触发，无成本影响
+
+测试：830/830 通过，无新增（行为是 transient 重试，不易写单测）。
+
+---
+
 ## v0.3.54: Ollama 启动期 retry + MMR prewarm 重试（2026-05-05 spec wave 4）
 
 ### 背景

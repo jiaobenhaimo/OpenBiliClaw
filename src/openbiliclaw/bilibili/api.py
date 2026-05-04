@@ -379,7 +379,17 @@ class BilibiliAPIClient:
         Returns:
             List of search result dicts.
         """
-        for attempt in range(2):
+        # v0.3.55+: 3 attempts with exponential backoff (was 2 with 1.5s
+        # linear). Production logs (2026-05-05) showed 141 v_voucher
+        # challenges in 43 minutes; with only 1 retry, ~9 full search
+        # rounds returned 0 results because keywords got challenged twice
+        # and we gave up. The new schedule (1.5s / 5s / 15s = ~21s total
+        # per keyword) lets the WBI key churn settle without immediately
+        # surrendering. Steady-state cost is zero — retries don't fire
+        # when keys are healthy.
+        _MAX_ATTEMPTS = 3
+        _BACKOFF_SCHEDULE = (1.5, 5.0, 15.0)
+        for attempt in range(_MAX_ATTEMPTS):
             try:
                 img_key, sub_key = await self._get_wbi_keys()
                 data = await self._get_json(
@@ -415,11 +425,28 @@ class BilibiliAPIClient:
                 raise
 
             # Detect v_voucher-only response (stale WBI keys or rate limit)
-            if "v_voucher" in data and data.get("result") is None and attempt == 0:
-                logger.info("Search got v_voucher challenge, refreshing WBI keys for query=%r", keyword)
-                self._cached_wbi_keys = None
-                await asyncio.sleep(1.5)  # Cool down before retry
-                continue
+            if "v_voucher" in data and data.get("result") is None:
+                if attempt < _MAX_ATTEMPTS - 1:
+                    delay = _BACKOFF_SCHEDULE[attempt]
+                    logger.info(
+                        "Search v_voucher challenge (attempt %d/%d) for query=%r — "
+                        "refreshing WBI keys, retry in %.1fs",
+                        attempt + 1,
+                        _MAX_ATTEMPTS,
+                        keyword,
+                        delay,
+                    )
+                    self._cached_wbi_keys = None
+                    await asyncio.sleep(delay)
+                    continue
+                # Final attempt also got v_voucher — give up cleanly.
+                logger.warning(
+                    "Search exhausted %d v_voucher retries for query=%r — "
+                    "giving up (likely WBI storm or IP rate limit)",
+                    _MAX_ATTEMPTS,
+                    keyword,
+                )
+                return []
 
             results = _json_list(data.get("result", []))
             if not results:
