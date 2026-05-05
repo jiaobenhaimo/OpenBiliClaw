@@ -524,15 +524,17 @@ class ContinuousRefreshController:
 
         Architecture::
 
-            ┌─ _loop_refresh()       60s   LLM-heavy, may take minutes
-            ├─ _loop_soul_pipeline()  60s   profile updates, speculator
-            ├─ _loop_xhs_producer()   60s   keyword generation
-            └─ _loop_proactive_push() 60s   delight + interest probe
+            ┌─ _loop_refresh()           60s   LLM-heavy, may take minutes
+            ├─ _loop_pool_precompute()   60s   v0.3.60+ — drain pool_expression
+            ├─ _loop_soul_pipeline()     60s   profile updates, speculator
+            ├─ _loop_xhs_producer()      60s   keyword generation
+            └─ _loop_proactive_push()    60s   delight + interest probe
         """
         with suppress(Exception):
             await self.prepare_delight_candidates()
         tasks = [
             asyncio.create_task(self._loop_refresh()),
+            asyncio.create_task(self._loop_pool_precompute()),
             asyncio.create_task(self._loop_soul_pipeline()),
             asyncio.create_task(self._loop_xhs_producer()),
             asyncio.create_task(self._loop_proactive_push()),
@@ -551,18 +553,26 @@ class ContinuousRefreshController:
                 await self._on_profile_ready_if_first_time()
             with suppress(Exception):
                 await self.refresh_if_needed()
-            # v0.3.59+: drain the precompute backlog independently of
-            # discovery output. Previously precompute only fired
-            # per-strategy in ``_run_refresh_plan`` via
-            # ``if discovered: precompute_tasks.append(...)``, so when
-            # Bilibili search hit v_voucher rate limit and every strategy
-            # returned [], precompute never ran and pool stayed empty
-            # for 16+ minutes (production logs 2026-05-05 21:15-21:36
-            # showed pool_available=0 throughout despite 87 classified
-            # XHS items waiting for expression generation). Now we tick
-            # this once per refresh-loop iteration regardless of whether
-            # discovery produced anything — items needing copy are
-            # picked up on the next 60s tick.
+            await asyncio.sleep(self.check_interval_seconds)
+
+    async def _loop_pool_precompute(self) -> None:
+        """v0.3.60+: drain pool_expression / pool_topic_label independently.
+
+        v0.3.59 added ``_drain_pool_precompute_backlog`` to ``_loop_refresh``
+        but placed it AFTER ``await self.refresh_if_needed()``. Production
+        debugging on 2026-05-05 (PID 32644 daemon, started 22:35:12) found
+        runtime stuck at ``manual_refresh_state="running"`` because B 站
+        v_voucher rate limit kept refresh_if_needed pending for many
+        minutes — the drain queued behind it never executed, even with
+        184 fresh items in pool waiting for expression copy.
+
+        Splitting the drain into its own loop matches the ``run_forever``
+        contract every other ticker honours: a slow refresh must NEVER
+        block independent maintenance work. Engine's ``_precompute_lock``
+        still dedupes against per-strategy fire-and-forget tasks queued
+        by ``_run_refresh_plan`` so no LLM token double-spend.
+        """
+        while True:
             with suppress(Exception):
                 await self._drain_pool_precompute_backlog()
             await asyncio.sleep(self.check_interval_seconds)

@@ -4,6 +4,58 @@
 
 ---
 
+## v0.3.60: precompute drain 拆成独立 loop,不再被慢 refresh 卡 (2026-05-05)
+
+### 背景
+
+用户用 systematic-debugging 流程精确定位:
+
+```
+PID 32644(22:35:12 启动)
+内存版本 0.3.59 ✅
+_safe_classify_pool_backlog 方法存在 ✅
+content_cache fresh = 184(132 条满足 needing_copy)
+但 pool_expression=0、pool_topic_label=0
+llm_usage 没有 caller=recommendation.write_expression
+runtime status: manual_refresh_state="running" 长时间不返回
+```
+
+→ v0.3.59 的 `_drain_pool_precompute_backlog` 代码确实存在,但**挂在 `_loop_refresh` 里 `await self.refresh_if_needed()` 之后**。B 站 v_voucher 风控让 refresh 几分钟不结束 → drain 永远轮不到。
+
+### 修法
+
+按用户建议,把 drain 从 `_loop_refresh` 拆出来,做成 `_loop_pool_precompute()` 独立 loop:
+
+```python
+async def run_forever(self):
+    tasks = [
+        asyncio.create_task(self._loop_refresh()),
+        asyncio.create_task(self._loop_pool_precompute()),  # ← 新增
+        asyncio.create_task(self._loop_soul_pipeline()),
+        asyncio.create_task(self._loop_xhs_producer()),
+        asyncio.create_task(self._loop_proactive_push()),
+    ]
+
+async def _loop_pool_precompute(self):
+    while True:
+        with suppress(Exception):
+            await self._drain_pool_precompute_backlog()
+        await asyncio.sleep(self.check_interval_seconds)
+```
+
+引擎的 `_precompute_lock` 已经能去重 per-strategy fire-and-forget 触发的 precompute,所以独立 loop 不会与 `_run_refresh_plan` 里的触发 double-spend LLM。
+
+### 影响
+
+| 场景 | v0.3.59 | v0.3.60 |
+|------|---------|---------|
+| refresh 因 v_voucher 卡几分钟 | drain 跟着卡,永不执行 | drain 独立 60s tick,完全不受影响 |
+| 启动后第一次 popup 可见 | 不可预测(取决于 refresh 是否卡) | 60s 内 |
+
+致谢:用户用 superpowers:systematic-debugging 流程一步步排除假设(进程没换 → 内存版本对 → drain 代码存在 → 池子有 184 条 fresh → write_expression=0 → manual_refresh_state stuck)定位到这一行,我直接照修。
+
+---
+
 ## v0.3.59: precompute 解耦 classify + 定期主动 drain (2026-05-05)
 
 ### 背景
