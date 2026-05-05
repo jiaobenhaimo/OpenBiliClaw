@@ -77,6 +77,24 @@ but init has deliberately not run. Ask the listed init choices, then
 re-run the printed `agent_bootstrap.py` command with explicit
 `--embedding-*` and `--yes-xhs` / `--no-xhs`.
 
+### After init succeeds — relay the per-source signal counts
+
+When `openbiliclaw init` finishes, the CLI prints a "初始化摘要" key-
+value table with explicit B 站 + 小红书 breakdowns (v0.3.58+). The
+agent **must summarise these numbers in the user-facing reply** so
+the user knows what fed their soul profile. Render approximately:
+
+> 「初始化已完成 ✅
+>   - 📺 B 站:观看历史 N 条 / 收藏 M 条 / 关注 K 个 UP → **入库 X 条事件**
+>   - 📕 小红书:收藏 P 条 / 点赞 Q 条 / 浏览记录 R 条 → **入库 Y 条事件**
+>   - 📊 画像建模总事件:Z 条
+>   - 🔍 首轮发现内容池:D 条
+> 现在可以打开扩展 popup 看推荐了。」
+
+When 小红书 totals are 0 / 0 / 0 the CLI also prints a "ℹ️  小红书
+0 条信号入库" hint with likely causes — pass that note through to
+the user verbatim, don't drop it.
+
 ## HARD RULES (read first, follow every time)
 
 These are non-negotiable agent-side rules. Violating any of them

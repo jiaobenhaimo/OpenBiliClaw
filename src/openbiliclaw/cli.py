@@ -2891,18 +2891,49 @@ def init(
         "初始化完成" if not discovery_error else "初始化部分完成",
         "初始化摘要",
     )
-    _print_key_value_table(
-        "初始化摘要",
-        [
-            ("浏览历史", str(len(history))),
-            ("收藏", str(len(favorites_data))),
-            ("关注", str(len(following_data))),
-            ("小红书事件", str(len(xhs_events))),
-            ("总事件数", str(len(events))),
-            ("画像状态", "已生成"),
-            ("发现内容数", str(discovered_count)),
-        ],
-    )
+
+    # v0.3.58+: explicit per-platform breakdown so the user (and the
+    # AI agent driving the install) can see exactly what signals fed
+    # the soul profile. Previously the summary just said "小红书事件 N"
+    # which dropped to 0 when bootstrap_profile was async-pending —
+    # now we surface scope-level counts (saved / liked / xhs_history)
+    # AND the bilibili history / favorites / following breakdown,
+    # plus a total. xhs_scope_counts is set whether the task succeeded
+    # or returned empty, so this also surfaces "0 / 0 / 0" cases that
+    # suggest the user wasn't logged into XHS.
+    bilibili_events = len(events) - len(xhs_events)
+    xhs_saved = int(xhs_scope_counts.get("saved", 0))
+    xhs_liked = int(xhs_scope_counts.get("liked", 0))
+    xhs_history = int(xhs_scope_counts.get("xhs_history", 0))
+    summary_rows: list[tuple[str, str]] = [
+        ("📺 B 站观看历史", f"{len(history)} 条"),
+        ("📺 B 站收藏夹", f"{len(favorites_data)} 条"),
+        ("📺 B 站关注 UP", f"{len(following_data)} 人"),
+        ("🌐 B 站 入库事件", f"{bilibili_events} 条"),
+        ("📕 小红书 收藏(saved)", f"{xhs_saved} 条"),
+        ("📕 小红书 点赞(liked)", f"{xhs_liked} 条"),
+        ("📕 小红书 浏览记录", f"{xhs_history} 条"),
+        ("🌐 小红书 入库事件", f"{len(xhs_events)} 条"),
+        ("📊 画像建模总事件", f"{len(events)} 条"),
+        ("✅ 灵魂画像", "已生成"),
+        ("🔍 首轮发现内容", f"{discovered_count} 条"),
+    ]
+    _print_key_value_table("初始化摘要", summary_rows)
+
+    # If the XHS task didn't get any data, surface the likely cause
+    # so the user knows whether to re-run with the extension installed.
+    if (xhs_saved + xhs_liked + xhs_history) == 0 and xhs_status != "skipped":
+        console.print(
+            "[dim]ℹ️  小红书 0 条信号入库。最常见原因:扩展未装 / 浏览器没登录 "
+            "https://www.xiaohongshu.com / 任务仍在后台跑。装好扩展后重新跑 "
+            "[cyan]openbiliclaw init --yes-xhs[/cyan] 可补齐。[/dim]"
+        )
+    elif (xhs_saved + xhs_liked + xhs_history) > 0:
+        console.print(
+            f"[dim]ℹ️  本次画像综合了 [green]{bilibili_events}[/green] 条 B 站 + "
+            f"[green]{len(xhs_events)}[/green] 条小红书信号。"
+            "后续 daemon 会持续从两个平台增量补充。[/dim]"
+        )
 
     # Phase E (v0.3.28+): print cost breakdown for THIS init only,
     # scoped by the row-id snapshot taken before any LLM call ran.
