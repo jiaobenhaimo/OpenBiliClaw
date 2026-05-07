@@ -233,12 +233,17 @@ async function clickToScope(scope: DouyinScope): Promise<ClickToScopeReport> {
     if (profileLink) {
       profileLink.click();
     } else {
-      // Fallback: page-driven nav. window.location.href = "/user/self"
-      // is more natural than chrome.tabs.update because the source is
-      // the page itself (Douyin's React app sees a same-origin load
-      // initiated by a same-document context). Risk control treats
-      // it more leniently than an extension-driven URL change.
-      window.location.href = "/user/self";
+      // SPA-route fallback: pushState + popstate. We deliberately do
+      // NOT use window.location.href because that triggers a real
+      // document commit, which kills the runScope context (the
+      // content script gets re-injected at document_start of the
+      // new page, but the OLD runScope's promise resolves into the
+      // void and the dispatcher's DY_SCOPE_EXECUTE message is never
+      // re-sent). pushState + popstate stays inside the same
+      // document, so React Router routes to /user/self without
+      // unmounting our scope-runner.
+      window.history.pushState({}, "", "/user/self");
+      window.dispatchEvent(new PopStateEvent("popstate"));
     }
     // SPA route is async; let React mount the profile page.
     await sleep(2_500);
@@ -254,18 +259,17 @@ async function clickToScope(scope: DouyinScope): Promise<ClickToScopeReport> {
   if (subTab) {
     subTab.click();
   } else {
-    // Fallback: append the appropriate showTab query. Douyin's React
-    // app handles ?showTab=… changes via its own pushState handler
-    // — same SPA-route effect as a click on the sub-tab element,
-    // just driven by a same-page nav rather than a click event.
+    // pushState + popstate fallback (NOT window.location.href — see
+    // the profile-link fallback above for why; same reason: full
+    // reload kills the runScope context).
     const queryMap: Record<DouyinScope, string> = {
       dy_post: "",
       dy_collect: "?showTab=favorite_collection",
       dy_like: "?showTab=like",
       dy_follow: "?showTab=following",
     };
-    const baseUrl = location.pathname;
-    window.location.href = baseUrl + queryMap[scope];
+    window.history.pushState({}, "", location.pathname + queryMap[scope]);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
   await sleep(1_500); // allow the new sub-tab to fire its first /aweme/.../<scope>/
   report.page_url = location.href;
