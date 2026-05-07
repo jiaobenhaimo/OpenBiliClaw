@@ -16,6 +16,12 @@ import {
   type XhsTaskResult,
 } from "./xhs-task-dispatcher.js";
 import {
+  startDyTaskPolling,
+  handleDyTaskAlarm,
+  handleDyTaskResult,
+  type DyTaskResult,
+} from "./dy-task-dispatcher.js";
+import {
   openExtensionUi,
   parseDelightBvid,
   parseNotificationBvid,
@@ -259,6 +265,7 @@ chrome.runtime.onInstalled.addListener(() => {
   ensureFlushAlarm();
   connectRuntimeStream();
   startXhsTaskPolling();
+  startDyTaskPolling();
   startCookieSync();
 });
 
@@ -266,6 +273,7 @@ chrome.runtime.onStartup.addListener(() => {
   ensureFlushAlarm();
   connectRuntimeStream();
   startXhsTaskPolling();
+  startDyTaskPolling();
   startCookieSync();
 });
 
@@ -324,6 +332,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
     return true;
   }
+  if (message.action === "DY_TASK_RESULT") {
+    void handleDyTaskResult(message.data as DyTaskResult)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error: unknown) => {
+        sendResponse({ ok: false, error: String(error) });
+      });
+    return true;
+  }
   if (message.action !== "BEHAVIOR_EVENT") return;
 
   eventBuffer = enqueueBufferedEvent(eventBuffer, message.data as BehaviorEvent, BUFFER_MAX_SIZE);
@@ -335,6 +353,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   handleXhsTaskAlarm(alarm.name);
+  handleDyTaskAlarm(alarm.name);
   if (handleCookieSyncAlarm(alarm.name)) {
     return;
   }
