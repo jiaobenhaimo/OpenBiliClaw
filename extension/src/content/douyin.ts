@@ -30,6 +30,32 @@ function debugLog(event: string, data?: unknown): void {
   }).catch(() => {});
 }
 
+/**
+ * Re-inject the MAIN-world fetch-tap by appending a <script> element
+ * with src pointing at the extension's bundled dy-fetch-tap.js.
+ *
+ * Why this is needed: chrome.scripting.executeScript runs once at
+ * page load. After each click-driven SPA route, Douyin's React app
+ * may re-set window.fetch with its own wrapper — replacing our
+ * wrap and silently breaking aweme capture (e2e probe 2026-05-08:
+ * install_messages_received=3 but aweme_messages_received=0
+ * across all 4 scopes). Re-injecting the fetch-tap script after
+ * every nav guarantees we're wrapping the latest live fetch.
+ *
+ * The script element is inserted into documentElement (DOM is
+ * shared between isolated and MAIN worlds) and removed after
+ * onload to keep the DOM clean. dy-fetch-tap.js is in
+ * web_accessible_resources so chrome.runtime.getURL resolves it.
+ */
+function reinjectFetchTap(): void {
+  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.getURL) return;
+  const script = document.createElement("script");
+  script.src = chrome.runtime.getURL("dist/main/dy-fetch-tap.js");
+  script.onload = () => script.remove();
+  script.onerror = () => script.remove();
+  (document.head || document.documentElement).appendChild(script);
+}
+
 // Dynamic import for the chrome-lifecycle code path so node:test's
 // --experimental-strip-types resolver doesn't have to chase the
 // `.js → .ts` chain at module-load time. Pure helpers exported from
@@ -116,16 +142,20 @@ function sleep(ms: number): Promise<void> {
  */
 function findProfileLink(): HTMLElement | null {
   // Most direct: anchor whose href points at /user/self or any
-  // /user/<sec_uid> pattern.
-  const directHrefSelectors = [
-    'a[href="/user/self"]',
-    'a[href^="/user/MS4w"]',
-    'a[href*="/user/self"]',
-    'a[href*="/user/"]',
-  ];
-  for (const sel of directHrefSelectors) {
-    const el = document.querySelector(sel);
-    if (el && "click" in el) return el as HTMLElement;
+  // /user/<sec_uid> pattern. CRITICAL: skip anchors whose href
+  // includes "?showTab=" — Douyin's leftnav has direct shortcuts
+  // to "喜欢" / "收藏" / "关注" sub-tabs (e.g.
+  // <a href="/user/self?showTab=like">), and matching one of those
+  // sends us to the wrong tab. e2e probe 2026-05-08 caught this.
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>(
+      'a[href="/user/self"], a[href^="/user/MS4w"], a[href*="/user/self"], a[href*="/user/"]',
+    ),
+  );
+  for (const anchor of candidates) {
+    const href = anchor.getAttribute("href") ?? "";
+    if (href.includes("?showTab=")) continue; // skip sub-tab shortcuts
+    return anchor;
   }
   // Data-attribute selectors (e2e test selectors Douyin sometimes ships).
   const dataSelectors = [
@@ -144,12 +174,12 @@ function findProfileLink(): HTMLElement | null {
   // occasionally as part of a longer label like "我的关注"). Match
   // exactly to avoid clicking an unrelated string-containing element.
   const profileLabels = ["我", "我的", "个人主页"];
-  const candidates = Array.from(
+  const textCandidates = Array.from(
     document.querySelectorAll<HTMLElement>(
       'a, button, [role="link"], [role="button"], [data-e2e]',
     ),
   );
-  for (const el of candidates) {
+  for (const el of textCandidates) {
     const text = el.textContent?.trim() ?? "";
     if (profileLabels.includes(text)) return el;
   }
@@ -325,6 +355,13 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
     // the homepage→profile transition and the sub-tab switch.
     clickReport = await clickToScope(msg.scope);
     debugLog("runScope:clickToScope_done", { scope: msg.scope, clickReport });
+
+    // Re-inject MAIN-world fetch-tap after the click-driven SPA route.
+    // Douyin's React app sometimes re-sets window.fetch on URL change,
+    // which would silently bypass our wrap. Reinjecting guarantees
+    // the latest live fetch is wrapped.
+    reinjectFetchTap();
+    debugLog("runScope:reinjected_fetch_tap");
 
     // The MAIN-world fetch-tap auto-installs after waitForDouyinSdk
     // resolves. Give it a beat to settle so any pageload-time
