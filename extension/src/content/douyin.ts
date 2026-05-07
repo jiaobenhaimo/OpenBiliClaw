@@ -70,6 +70,12 @@ async function loadTaskExecutorHelpers(): Promise<{
   return await import("./dy/task-executor.js");
 }
 
+async function loadDomExtractor(): Promise<{
+  extractDouyinItemsFromDocument: typeof import("./dy/dom-extractor.js").extractDouyinItemsFromDocument;
+}> {
+  return await import("./dy/dom-extractor.js");
+}
+
 interface ScopeExecuteMessage {
   task_id: string;
   scope: DouyinScope;
@@ -97,6 +103,7 @@ interface ScopeResultPayload {
     fetch_tap_install_status: "unknown" | "installed" | "skipped_no_sdk";
     aweme_messages_received: number;
     install_messages_received: number;
+    dom_items_harvested?: number;
     inject_status?: string;
     page_url?: string;
     profile_link_found?: boolean;
@@ -338,6 +345,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
   });
   const { BootstrapItemSink, dyShouldContinueScroll, ingestMainWorldFetchMessage } =
     await loadTaskExecutorHelpers();
+  const { extractDouyinItemsFromDocument } = await loadDomExtractor();
   const sink = new BootstrapItemSink({ maxItemsPerScope: msg.max_items_per_scope });
   const allItems: DouyinBootstrapItem[] = [];
   // Per-scope counter: how many OPENBILICLAW_DOUYIN_AWEME_PAGE messages
@@ -346,6 +354,10 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
   // dedups away or items for the wrong scope, so a non-zero
   // aweme_messages_received with zero items is its own signature.
   let awemeMessagesReceived = 0;
+  // DOM-extractor counter — separate from XHR/fetch tap. The DOM path
+  // is the primary source for 喜欢/收藏/作品 because Douyin's React
+  // Router often re-renders without firing a fresh /aweme/ XHR.
+  let domItemsHarvested = 0;
 
   const onMessage = (event: MessageEvent): void => {
     const data = event?.data as { type?: unknown } | null;
@@ -358,6 +370,24 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
     }
   };
   window.addEventListener("message", onMessage);
+
+  // Snapshot the DOM at the current state and merge into the sink.
+  // The sink dedups by scope:id, so calling this multiple times during
+  // scroll is safe and cumulative.
+  const harvestDomSnapshot = (): void => {
+    const dom = extractDouyinItemsFromDocument(
+      document,
+      msg.scope,
+      location.origin,
+      msg.max_items_per_scope,
+    );
+    if (dom.length === 0) return;
+    const newOnes = sink.ingest(dom);
+    for (const item of newOnes) {
+      if (item.scope === msg.scope) allItems.push(item);
+    }
+    domItemsHarvested += newOnes.length;
+  };
 
   let clickReport: ClickToScopeReport = {
     page_url: location.href,
@@ -383,6 +413,10 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
     // /aweme/.../<scope>/ that fires AFTER our install gets captured.
     await sleep(POST_INSTALL_SETTLE_MS);
 
+    // Initial DOM harvest before scrolling — captures whatever
+    // Douyin's React Router rendered on landing.
+    harvestDomSnapshot();
+
     let stagnantRounds = 0;
     for (let round = 0; round < msg.max_scroll_rounds; round += 1) {
       const beforeCount = sink.scopeCounts()[msg.scope];
@@ -392,6 +426,10 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
       // multiple cards' worth per round.
       window.scrollBy({ top: window.innerHeight * 2, behavior: "auto" });
       await sleep(SCROLL_DELAY_MS);
+
+      // Harvest from DOM after each scroll — newly virtualized cards
+      // are now in the DOM whether or not Douyin re-fired an XHR.
+      harvestDomSnapshot();
 
       const afterCount = sink.scopeCounts()[msg.scope];
       stagnantRounds = afterCount > beforeCount ? 0 : stagnantRounds + 1;
@@ -410,6 +448,11 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
       }
     }
 
+    // Final DOM harvest pass after the scroll loop ends — picks up
+    // anything Douyin rendered in the very last scroll batch that
+    // we'd otherwise miss because the loop broke before re-scanning.
+    harvestDomSnapshot();
+
     return {
       task_id: msg.task_id,
       scope: msg.scope,
@@ -420,6 +463,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
         fetch_tap_install_status: _lastFetchTapInstallStatus,
         aweme_messages_received: awemeMessagesReceived,
         install_messages_received: _installMessagesReceived,
+        dom_items_harvested: domItemsHarvested,
         inject_status: msg.debug_inject_status,
         page_url: clickReport.page_url,
         profile_link_found: clickReport.profile_link_found,
@@ -438,6 +482,7 @@ async function runScope(msg: ScopeExecuteMessage): Promise<ScopeResultPayload> {
         fetch_tap_install_status: _lastFetchTapInstallStatus,
         aweme_messages_received: awemeMessagesReceived,
         install_messages_received: _installMessagesReceived,
+        dom_items_harvested: domItemsHarvested,
         inject_status: msg.debug_inject_status,
         page_url: clickReport.page_url,
         profile_link_found: clickReport.profile_link_found,
