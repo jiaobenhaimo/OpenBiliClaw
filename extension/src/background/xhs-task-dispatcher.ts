@@ -10,8 +10,46 @@
  *   5. Waits ``task_interval_seconds`` before asking for the next task.
  *
  * Only one task is in flight at a time (mutex). A hard 30s timeout per
- * task protects against hung pages.
+ * task protects against hung pages. Cross-source mutex (see
+ * ``dispatcher-mutex.ts``) ensures we don't race the Douyin dispatcher
+ * for browser focus when daemon's ``_loop_xhs_producer`` fires while
+ * the user's running ``fetch-douyin``.
  */
+
+// Cross-source mutex via globalThis. Both XHS and DY dispatchers
+// inline the same helper and write/read the same fields on
+// globalThis, so they coordinate without needing to import a
+// shared module — sidesteps the node:test ESM-resolver issue with
+// .js→.ts paths. See dispatcher-mutex.ts for the rationale and
+// the canonical Single-File reference (kept as documentation, not
+// an actual import target).
+const _MUTEX_STALE_MS = 6 * 60 * 1000;
+function tryAcquireDispatcherMutex(label: string): boolean {
+  const g = globalThis as unknown as {
+    __OBC_DISPATCHER_MUTEX_HOLDER__?: string;
+    __OBC_DISPATCHER_MUTEX_HELD_SINCE__?: number;
+  };
+  if (g.__OBC_DISPATCHER_MUTEX_HOLDER__) {
+    if (Date.now() - (g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ ?? 0) > _MUTEX_STALE_MS) {
+      g.__OBC_DISPATCHER_MUTEX_HOLDER__ = undefined;
+    } else {
+      return false;
+    }
+  }
+  g.__OBC_DISPATCHER_MUTEX_HOLDER__ = label;
+  g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ = Date.now();
+  return true;
+}
+function releaseDispatcherMutex(label: string): void {
+  const g = globalThis as unknown as {
+    __OBC_DISPATCHER_MUTEX_HOLDER__?: string;
+    __OBC_DISPATCHER_MUTEX_HELD_SINCE__?: number;
+  };
+  if (g.__OBC_DISPATCHER_MUTEX_HOLDER__ === label) {
+    g.__OBC_DISPATCHER_MUTEX_HOLDER__ = undefined;
+    g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ = undefined;
+  }
+}
 
 const NEXT_TASK_URL = "http://127.0.0.1:8420/api/sources/xhs/next-task";
 const TASK_RESULT_URL = "http://127.0.0.1:8420/api/sources/xhs/task-result";
@@ -224,6 +262,7 @@ function cleanupTask(): void {
   bootstrapNavigationCount = 0;
   bootstrapDebugSteps = [];
   taskInFlight = false;
+  releaseDispatcherMutex("xhs");
 }
 
 function armTaskTimeout(task: XhsTask): void {
@@ -303,6 +342,10 @@ function armTaskLoadListener(task: XhsTask): void {
 
 export async function executeTask(task: XhsTask): Promise<void> {
   if (taskInFlight) return;
+  // Cross-source mutex — bail if Douyin dispatcher is currently
+  // running a task. The XHS task remains in the queue and the next
+  // alarm tick (60s) retries. See dispatcher-mutex.ts for rationale.
+  if (!tryAcquireDispatcherMutex("xhs")) return;
   taskInFlight = true;
   currentTaskId = task.id;
   currentTask = task;

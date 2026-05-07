@@ -22,6 +22,37 @@
  */
 
 import type { DouyinBootstrapItem, DouyinScope } from "../main/dy-fetch-tap.js";
+// Cross-source mutex via globalThis. Mirror of the helper inlined
+// in xhs-task-dispatcher; both dispatchers coordinate by writing to
+// the same field on globalThis. See dispatcher-mutex.ts for the
+// canonical reference (kept as documentation, not an import target).
+const _MUTEX_STALE_MS = 6 * 60 * 1000;
+function tryAcquireDispatcherMutex(label: string): boolean {
+  const g = globalThis as unknown as {
+    __OBC_DISPATCHER_MUTEX_HOLDER__?: string;
+    __OBC_DISPATCHER_MUTEX_HELD_SINCE__?: number;
+  };
+  if (g.__OBC_DISPATCHER_MUTEX_HOLDER__) {
+    if (Date.now() - (g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ ?? 0) > _MUTEX_STALE_MS) {
+      g.__OBC_DISPATCHER_MUTEX_HOLDER__ = undefined;
+    } else {
+      return false;
+    }
+  }
+  g.__OBC_DISPATCHER_MUTEX_HOLDER__ = label;
+  g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ = Date.now();
+  return true;
+}
+function releaseDispatcherMutex(label: string): void {
+  const g = globalThis as unknown as {
+    __OBC_DISPATCHER_MUTEX_HOLDER__?: string;
+    __OBC_DISPATCHER_MUTEX_HELD_SINCE__?: number;
+  };
+  if (g.__OBC_DISPATCHER_MUTEX_HOLDER__ === label) {
+    g.__OBC_DISPATCHER_MUTEX_HOLDER__ = undefined;
+    g.__OBC_DISPATCHER_MUTEX_HELD_SINCE__ = undefined;
+  }
+}
 
 // buildScopeUrl is loaded lazily via dynamic import inside the
 // chrome-lifecycle code path (executeTask / navigateToCurrentScope).
@@ -199,6 +230,7 @@ function cleanupTask(): void {
   currentTask = null;
   progress = null;
   taskInFlight = false;
+  releaseDispatcherMutex("dy");
 }
 
 function emptyScopeCounts(): Record<DouyinScope, number> {
@@ -320,6 +352,12 @@ async function injectFetchTapInto(tabId: number): Promise<void> {
 
 export async function executeTask(task: DyTask): Promise<void> {
   if (taskInFlight) return;
+  // Cross-source mutex — bail if XHS dispatcher is currently
+  // holding the foreground-tab slot. The next alarm fires in 60s
+  // and we'll retry then. Without this guard, daemon's continuous
+  // _loop_xhs_producer can race with a user's manual fetch-douyin
+  // and both dispatchers fight for browser focus.
+  if (!tryAcquireDispatcherMutex("dy")) return;
   taskInFlight = true;
   currentTask = task;
 
