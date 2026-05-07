@@ -2072,6 +2072,170 @@ def _import_xhs_bootstrap_events() -> tuple[list[dict[str, Any]], dict[str, int]
     return events, counts
 
 
+def _enqueue_dy_bootstrap_task() -> str | None:
+    """Fire-and-forget enqueue of the Douyin bootstrap_profile task.
+
+    Mirror of ``_enqueue_xhs_bootstrap_task`` for the Douyin pipeline.
+    No code shared between the two — separate ``DyTaskQueue`` table,
+    separate env vars, separate user-visible messages. Soul-engine
+    consumes the resulting events through the unified
+    ``event_format.build_event`` contract, so the cross-source
+    analysis remains uniform downstream.
+
+    Defaults: ``max_scroll_rounds=15`` and ``max_items_per_scope=300``,
+    matching the XHS post-v0.3.64 conventions but independently
+    chosen — Douyin can diverge later without touching XHS. Both
+    can be overridden via env vars
+    ``OPENBILICLAW_DY_BOOTSTRAP_SCROLL_ROUNDS`` and
+    ``OPENBILICLAW_DY_BOOTSTRAP_MAX_ITEMS``.
+    """
+    from openbiliclaw.sources.dy_tasks import DyTaskQueue
+
+    try:
+        database = _get_runtime_database()
+    except Exception as exc:
+        console.print(f"  [yellow]抖音初始化信号未导入: 数据库不可用: {exc}[/yellow]")
+        return None
+    if not hasattr(database, "conn"):
+        return None
+
+    scroll_rounds = int(os.environ.get("OPENBILICLAW_DY_BOOTSTRAP_SCROLL_ROUNDS", "15"))
+    max_items = int(os.environ.get("OPENBILICLAW_DY_BOOTSTRAP_MAX_ITEMS", "300"))
+
+    try:
+        queue = DyTaskQueue(database)
+        task_id = queue.enqueue_with_id(
+            "bootstrap_profile",
+            {
+                "scopes": ["dy_post", "dy_collect", "dy_like", "dy_follow"],
+                "max_items_per_scope": max(1, max_items),
+                "max_scroll_rounds": max(0, scroll_rounds),
+            },
+            daily_budget=10,
+        )
+    except Exception as exc:
+        console.print(f"  [yellow]抖音初始化信号未导入: {exc}[/yellow]")
+        return None
+    if not task_id:
+        console.print("  [yellow]抖音初始化信号未导入: 今日任务预算已用完。[/yellow]")
+        return None
+    return task_id
+
+
+def _collect_dy_bootstrap_events(
+    task_id: str | None,
+    *,
+    max_wait_seconds: float | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int], str]:
+    """Wait for and harvest a previously-enqueued Douyin bootstrap task.
+
+    Returns ``(events, scope_counts, status_label)`` where
+    ``status_label`` is one of:
+      - ``"ok"``         — task completed with videos
+      - ``"empty"``      — task completed but extension returned 0 videos
+        (typical when the user is not logged in to douyin.com — the
+        soft anti-bot returns HTTP 200 + empty body, see design-doc
+        Risk #7)
+      - ``"timeout"``    — wait window expired, task still pending
+      - ``"failed"``     — extension or backend reported error
+      - ``"skipped"``    — no task_id (DB unavailable / budget exhausted)
+    """
+    import json
+    import time
+
+    from openbiliclaw.sources.dy_tasks import (
+        DyTaskQueue,
+        dy_bootstrap_videos_to_events,
+    )
+
+    if not task_id:
+        return [], {}, "skipped"
+
+    if max_wait_seconds is None:
+        max_wait_seconds = float(os.environ.get("OPENBILICLAW_DY_BOOTSTRAP_WAIT_SECONDS", "30"))
+
+    try:
+        database = _get_runtime_database()
+    except Exception:
+        return [], {}, "skipped"
+    if not hasattr(database, "conn"):
+        return [], {}, "skipped"
+
+    queue = DyTaskQueue(database)
+    deadline = time.monotonic() + max(0.0, max_wait_seconds)
+    poll_interval = 0.5
+    task: dict[str, Any] | None = None
+    while True:
+        task = queue.get(task_id)
+        status = str((task or {}).get("status", "")).strip()
+        if status in {"completed", "failed"}:
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(poll_interval)
+
+    if not task:
+        return [], {}, "timeout"
+    if task.get("status") == "failed":
+        return [], {}, "failed"
+    if task.get("status") != "completed":
+        return [], {}, "timeout"
+
+    try:
+        result = json.loads(str(task.get("result_json") or "{}"))
+    except json.JSONDecodeError:
+        return [], {}, "failed"
+    videos = [v for v in result.get("videos", []) if isinstance(v, dict)]
+    events = dy_bootstrap_videos_to_events(videos)
+    raw_counts = result.get("scope_counts", {})
+    scope_counts = {"dy_post": 0, "dy_collect": 0, "dy_like": 0, "dy_follow": 0}
+    if isinstance(raw_counts, dict):
+        for key in scope_counts:
+            with suppress(Exception):
+                scope_counts[key] = int(raw_counts.get(key, 0) or 0)
+    if not any(scope_counts.values()):
+        # Fall back to per-event count: dy_bootstrap_videos_to_events
+        # tags each event's metadata.import_source as
+        # "dy_bootstrap_<scope_short>" (post / collect / like / follow).
+        for event in events:
+            metadata = event.get("metadata", {})
+            if not isinstance(metadata, dict):
+                continue
+            source = str(metadata.get("import_source", ""))
+            for key in scope_counts:
+                short = key.removeprefix("dy_") if key.startswith("dy_") else key
+                if source == f"dy_bootstrap_{short}":
+                    scope_counts[key] += 1
+    status_label = "ok" if events else "empty"
+    return events, scope_counts, status_label
+
+
+def _dy_events_to_history_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Douyin bootstrap events into profile-builder history rows.
+
+    Mirror of ``_xhs_events_to_history_items`` — preserves the
+    natural-language ``context`` and tags ``source_platform=douyin``
+    so cross-source analysis remains uniform.
+    """
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        metadata = event.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        rows.append(
+            {
+                "title": str(event.get("title", "")).strip(),
+                "url": str(event.get("url", "")).strip(),
+                "author": str(metadata.get("author", "")).strip(),
+                "event_type": str(event.get("event_type", "")).strip(),
+                "context": str(event.get("context", "")).strip(),
+                "metadata": metadata,
+                "source_platform": "douyin",
+            }
+        )
+    return [row for row in rows if row.get("title") or row.get("url")]
+
+
 def _xhs_events_to_history_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert XHS bootstrap events into profile-builder history rows.
 
@@ -2570,6 +2734,87 @@ def _ask_xhs_inclusion() -> bool:
     return True
 
 
+def _ask_dy_inclusion() -> bool:
+    """Decide whether to enqueue the Douyin bootstrap task on this init.
+
+    Resolution order (first match wins):
+      1. ``OPENBILICLAW_NO_DOUYIN=1`` env var → False, silent
+      2. Non-interactive terminal (CI / piped stdin) → **False**, silent.
+         Conservative default for Douyin (different from XHS auto-on)
+         because Douyin hits more-aggressive risk-control if the user
+         isn't actually logged in, and the soft anti-bot returns
+         HTTP 200 + empty body (design-doc Risk #7) which we can only
+         detect after the bootstrap runs. Better to require explicit
+         opt-in for Douyin than auto-fire it on every CI run.
+      3. Interactive terminal → ask the user with default Y, then
+         (if Y) walk them through a prep checklist.
+    """
+    if os.environ.get("OPENBILICLAW_NO_DOUYIN", "").strip() == "1":
+        console.print("[dim]  跳过抖音数据接入(OPENBILICLAW_NO_DOUYIN=1)。[/dim]")
+        return False
+    if not _is_interactive_terminal():
+        return False
+
+    console.print()
+    console.print("[bold]🎵 抖音数据接入(可选)[/bold]")
+    console.print(
+        "把你的抖音[bold cyan]发布 / 收藏 / 点赞 / 关注[/bold cyan]混进画像,"
+        "系统能读懂你跨平台的口味——\n"
+        "你刷抖音常停留的领域(美食 / 历史 / 知识区…)也会反映到 B 站推荐里。"
+    )
+    console.print()
+    console.print("启用需要:")
+    console.print("  1. 装好 OpenBiliClaw 浏览器扩展")
+    console.print(
+        "     [link=https://github.com/whiteguo233/OpenBiliClaw/releases]"
+        "https://github.com/whiteguo233/OpenBiliClaw/releases[/link]"
+    )
+    console.print("  2. 浏览器登录 [link=https://www.douyin.com]https://www.douyin.com[/link]")
+    console.print()
+    console.print(
+        "[dim]说 N 也没关系,init 会用 B 站(+小红书,如启用)数据建画像;"
+        "以后想加随时再跑一次 init,或设 OPENBILICLAW_NO_DOUYIN=1 永久跳过。[/dim]"
+    )
+    console.print()
+
+    if not typer.confirm("加入抖音数据?", default=True):
+        console.print("[dim]  已选择跳过,本次 init 不会请求抖音数据。[/dim]")
+        return False
+
+    console.print()
+    console.print("[bold]准备抖音接入[/bold]")
+    console.print("请确认以下三件事都做了:")
+    console.print("  [cyan]☐[/cyan] 装好了 OpenBiliClaw 浏览器扩展")
+    console.print(
+        "  [cyan]☐[/cyan] 浏览器目前是打开的且是当前 [bold]活跃窗口[/bold]"
+        "(扩展需要前台 tab 才能让抖音的虚拟列表分页加载)"
+    )
+    console.print("  [cyan]☐[/cyan] 已经登录了 https://www.douyin.com")
+    console.print()
+    console.print(
+        "[bold yellow]⚠[/bold yellow]  接下来扩展会[bold]在你的浏览器里自动打开"
+        "一个新 tab[/bold]并切到那个 tab(会抢一次焦点),依次访问 4 个 profile sub-tab"
+        "(发布 / 收藏 / 点赞 / 关注)向下滚动加载。整个过程 30-90 秒。"
+    )
+    console.print(
+        "[dim]   — 期间不要关那个 tab、不要切走太久(可能影响虚拟列表分页)。"
+        "完成后扩展会自动关闭它,焦点还回来。[/dim]"
+    )
+    console.print(
+        "[dim]   — 想跳过焦点抢占的话:Ctrl-C 退出,改用 "
+        "`OPENBILICLAW_DY_BOOTSTRAP_SCROLL_ROUNDS=0 openbiliclaw init` "
+        "拿浅层数据。[/dim]"
+    )
+    console.print()
+    if not typer.confirm("准备好了吗,可以开始吗?", default=True):
+        console.print(
+            "[dim]  已暂缓抖音接入,本次 init 不会拉抖音数据。装好扩展+登录"
+            "抖音后随时再跑一次 init 就能补上。[/dim]"
+        )
+        return False
+    return True
+
+
 @app.command()
 def init(
     no_xhs: bool = typer.Option(
@@ -2581,6 +2826,16 @@ def init(
         False,
         "--yes-xhs",
         help="跳过小红书的 y/n 提问,直接启用(适合脚本化场景)。",
+    ),
+    no_douyin: bool = typer.Option(
+        False,
+        "--no-douyin",
+        help="跳过抖音数据接入(默认非交互模式下就是跳过)。",
+    ),
+    skip_dy_prompt: bool = typer.Option(
+        False,
+        "--yes-douyin",
+        help="跳过抖音的 y/n 提问,直接启用(适合脚本化场景)。",
     ),
 ) -> None:
     """首次运行：拉取历史、生成画像并补足首轮发现池."""
@@ -2685,6 +2940,19 @@ def init(
     else:
         include_xhs = _ask_xhs_inclusion()
 
+    # Same resolution order for the Douyin opt-in. Default is
+    # off-in-non-interactive (see _ask_dy_inclusion docstring) which
+    # diverges from the XHS auto-on default — Douyin's risk control
+    # is more aggressive and the empty-200 anti-bot makes blind
+    # opt-in less safe.
+    if no_douyin:
+        include_dy = False
+        console.print("[dim]  跳过抖音数据接入(命令行 --no-douyin)。[/dim]")
+    elif skip_dy_prompt:
+        include_dy = True
+    else:
+        include_dy = _ask_dy_inclusion()
+
     # Enqueue the XHS bootstrap task FIRST so the browser extension
     # can run it in parallel with the slow B站 history/favs/follows
     # fetches below (~10–30s). When _collect_xhs_bootstrap_events()
@@ -2695,6 +2963,11 @@ def init(
     xhs_task_id = _enqueue_xhs_bootstrap_task() if include_xhs else None
     if xhs_task_id:
         console.print("  [dim]已请求扩展拉小红书收藏 / 点赞（后台并行,不阻塞 B 站拉取）。[/dim]")
+    dy_task_id = _enqueue_dy_bootstrap_task() if include_dy else None
+    if dy_task_id:
+        console.print(
+            "  [dim]已请求扩展拉抖音发布 / 收藏 / 点赞 / 关注(后台并行,不阻塞 B 站拉取)。[/dim]"
+        )
 
     _print_section_title("1/4 拉取数据")
     history, favorites_data, following_data = asyncio.run(_fetch_all_data())
@@ -2733,6 +3006,30 @@ def init(
         console.print("  [yellow]小红书任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
     # status == "skipped" is silent (DB unavailable / budget exhausted —
     # already printed by _enqueue_xhs_bootstrap_task)
+
+    # Collect Douyin task — independent timeline from XHS, both ran
+    # in parallel with the B站 fetches.
+    dy_events, dy_scope_counts, dy_status = _collect_dy_bootstrap_events(dy_task_id)
+    if dy_status == "ok":
+        console.print(
+            "  抖音 "
+            f"发布 [green]{dy_scope_counts.get('dy_post', 0)}[/green] 条"
+            f" / 收藏 [green]{dy_scope_counts.get('dy_collect', 0)}[/green] 个"
+            f" / 点赞 [green]{dy_scope_counts.get('dy_like', 0)}[/green] 个"
+            f" / 关注 [green]{dy_scope_counts.get('dy_follow', 0)}[/green] 人"
+        )
+    elif dy_status == "empty":
+        console.print(
+            "  [yellow]抖音任务跑通但 0 条 videos —— "
+            "未登录抖音(常见,抖音对未登录返回 200+空 body),或个人主页隐私设置阻拦。[/yellow]"
+        )
+    elif dy_status == "timeout":
+        console.print(
+            "  [dim]抖音初始化信号未导入:扩展未连接或任务仍在后台跑。"
+            "可设 OPENBILICLAW_DY_BOOTSTRAP_WAIT_SECONDS=60 延长等待。[/dim]"
+        )
+    elif dy_status == "failed":
+        console.print("  [yellow]抖音任务失败 —— 检查扩展日志,或重试 init。[/yellow]")
 
     # Build events from all data sources via the unified event_format
     # builder (v0.3.22+) so B站 / 小红书 / future-source events all carry
@@ -2782,6 +3079,7 @@ def init(
         )
     events_to_persist = list(events)
     events.extend(xhs_events)
+    events.extend(dy_events)
     for event in events_to_persist:
         asyncio.run(memory.propagate_event(event))
 
@@ -2825,6 +3123,8 @@ def init(
         )
     if xhs_events:
         combined_history.extend(_xhs_events_to_history_items(xhs_events))
+    if dy_events:
+        combined_history.extend(_dy_events_to_history_items(dy_events))
 
     # Parallel: build_initial_profile (P3) and discover (P4) overlap.
     # Discover starts with a preference-only draft profile so trending /
@@ -2904,10 +3204,14 @@ def init(
     # plus a total. xhs_scope_counts is set whether the task succeeded
     # or returned empty, so this also surfaces "0 / 0 / 0" cases that
     # suggest the user wasn't logged into XHS.
-    bilibili_events = len(events) - len(xhs_events)
+    bilibili_events = len(events) - len(xhs_events) - len(dy_events)
     xhs_saved = int(xhs_scope_counts.get("saved", 0))
     xhs_liked = int(xhs_scope_counts.get("liked", 0))
     xhs_history = int(xhs_scope_counts.get("xhs_history", 0))
+    dy_post = int(dy_scope_counts.get("dy_post", 0))
+    dy_collect = int(dy_scope_counts.get("dy_collect", 0))
+    dy_like = int(dy_scope_counts.get("dy_like", 0))
+    dy_follow = int(dy_scope_counts.get("dy_follow", 0))
     summary_rows: list[tuple[str, str]] = [
         ("📺 B 站观看历史", f"{len(history)} 条"),
         ("📺 B 站收藏夹", f"{len(favorites_data)} 条"),
@@ -2917,6 +3221,11 @@ def init(
         ("📕 小红书 点赞(liked)", f"{xhs_liked} 条"),
         ("📕 小红书 浏览记录", f"{xhs_history} 条"),
         ("🌐 小红书 入库事件", f"{len(xhs_events)} 条"),
+        ("🎵 抖音 发布", f"{dy_post} 条"),
+        ("🎵 抖音 收藏", f"{dy_collect} 个"),
+        ("🎵 抖音 点赞", f"{dy_like} 个"),
+        ("🎵 抖音 关注", f"{dy_follow} 人"),
+        ("🌐 抖音 入库事件", f"{len(dy_events)} 条"),
         ("📊 画像建模总事件", f"{len(events)} 条"),
         ("✅ 灵魂画像", "已生成"),
         ("🔍 首轮发现内容", f"{discovered_count} 条"),

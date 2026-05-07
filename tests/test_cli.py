@@ -2477,3 +2477,225 @@ def test_save_runtime_provider_config_persists_triplet(
     assert reloaded2.llm.openai.api_key == "sk-new"
     assert reloaded2.llm.openai.base_url == "https://new.example.com/v1"
     assert reloaded2.llm.openai.model == "gpt-4o-mini"
+
+
+# ---------------------------------------------------------------------------
+# Douyin bootstrap CLI helpers (Task 6 of douyin import plan)
+# ---------------------------------------------------------------------------
+
+
+def test_enqueue_dy_bootstrap_task_uses_env_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies that OPENBILICLAW_DY_BOOTSTRAP_* env vars actually flow
+    through into the DyTaskQueue payload, mirroring the XHS variant."""
+    from openbiliclaw.cli import _enqueue_dy_bootstrap_task
+
+    captured: dict = {}
+
+    class FakeQueue:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        def enqueue_with_id(self, task_type: str, payload: dict, *, daily_budget: int) -> str:
+            captured["task_type"] = task_type
+            captured["payload"] = payload
+            captured["daily_budget"] = daily_budget
+            return "dy-task-xyz"
+
+    class FakeDatabase:
+        conn = object()
+
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: FakeDatabase())
+    monkeypatch.setattr("openbiliclaw.sources.dy_tasks.DyTaskQueue", FakeQueue)
+    monkeypatch.setenv("OPENBILICLAW_DY_BOOTSTRAP_SCROLL_ROUNDS", "8")
+    monkeypatch.setenv("OPENBILICLAW_DY_BOOTSTRAP_MAX_ITEMS", "120")
+
+    task_id = _enqueue_dy_bootstrap_task()
+    assert task_id == "dy-task-xyz"
+    assert captured["task_type"] == "bootstrap_profile"
+    assert captured["payload"]["max_scroll_rounds"] == 8
+    assert captured["payload"]["max_items_per_scope"] == 120
+    assert sorted(captured["payload"]["scopes"]) == [
+        "dy_collect",
+        "dy_follow",
+        "dy_like",
+        "dy_post",
+    ]
+
+
+def test_enqueue_dy_bootstrap_task_returns_none_when_db_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.cli import _enqueue_dy_bootstrap_task
+
+    def _raises() -> object:
+        raise RuntimeError("db not initialised")
+
+    monkeypatch.setattr(cli_module, "_get_runtime_database", _raises)
+    assert _enqueue_dy_bootstrap_task() is None
+
+
+def test_collect_dy_bootstrap_events_returns_skipped_for_no_task_id() -> None:
+    """No task_id (DB unavailable / budget exhausted) → silent skip."""
+    from openbiliclaw.cli import _collect_dy_bootstrap_events
+
+    events, counts, status = _collect_dy_bootstrap_events(None, max_wait_seconds=2)
+    assert events == []
+    assert counts == {}
+    assert status == "skipped"
+
+
+def test_collect_dy_bootstrap_events_extracts_videos_from_completed_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed task with a videos[] payload converts into events
+    using dy_bootstrap_videos_to_events and surfaces scope_counts."""
+    import json
+
+    from openbiliclaw.cli import _collect_dy_bootstrap_events
+
+    class FakeQueue:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        def get(self, task_id: str) -> dict:
+            assert task_id == "task-1"
+            return {
+                "id": "task-1",
+                "status": "completed",
+                "result_json": json.dumps(
+                    {
+                        "videos": [
+                            {
+                                "scope": "dy_collect",
+                                "title": "demo",
+                                "url": "https://www.douyin.com/video/a",
+                                "aweme_id": "a",
+                                "author": "u",
+                            },
+                            {
+                                "scope": "dy_like",
+                                "title": "liked one",
+                                "url": "https://www.douyin.com/video/b",
+                                "aweme_id": "b",
+                            },
+                        ],
+                        "scope_counts": {
+                            "dy_post": 0,
+                            "dy_collect": 1,
+                            "dy_like": 1,
+                            "dy_follow": 0,
+                        },
+                    }
+                ),
+            }
+
+    class FakeDatabase:
+        conn = object()
+
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: FakeDatabase())
+    monkeypatch.setattr("openbiliclaw.sources.dy_tasks.DyTaskQueue", FakeQueue)
+
+    events, counts, status = _collect_dy_bootstrap_events("task-1", max_wait_seconds=0)
+    assert status == "ok"
+    assert [e["event_type"] for e in events] == ["favorite", "like"]
+    assert all(e["metadata"]["source_platform"] == "douyin" for e in events)
+    assert counts["dy_collect"] == 1
+    assert counts["dy_like"] == 1
+    assert counts["dy_post"] == 0
+    assert counts["dy_follow"] == 0
+
+
+def test_collect_dy_bootstrap_events_returns_timeout_when_task_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.cli import _collect_dy_bootstrap_events
+
+    class FakeQueue:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        def get(self, task_id: str) -> dict:
+            return {"id": task_id, "status": "pending", "result_json": "{}"}
+
+    class FakeDatabase:
+        conn = object()
+
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: FakeDatabase())
+    monkeypatch.setattr("openbiliclaw.sources.dy_tasks.DyTaskQueue", FakeQueue)
+
+    _events, _counts, status = _collect_dy_bootstrap_events("task-1", max_wait_seconds=0.05)
+    assert status == "timeout"
+
+
+def test_collect_dy_bootstrap_events_surfaces_failed_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbiliclaw.cli import _collect_dy_bootstrap_events
+
+    class FakeQueue:
+        def __init__(self, _db: object) -> None:
+            pass
+
+        def get(self, task_id: str) -> dict:
+            return {
+                "id": task_id,
+                "status": "failed",
+                "result_json": '{"error": "captcha"}',
+            }
+
+    class FakeDatabase:
+        conn = object()
+
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: FakeDatabase())
+    monkeypatch.setattr("openbiliclaw.sources.dy_tasks.DyTaskQueue", FakeQueue)
+
+    _events, _counts, status = _collect_dy_bootstrap_events("task-1", max_wait_seconds=0)
+    assert status == "failed"
+
+
+def test_dy_events_to_history_items_preserves_context_and_source_platform() -> None:
+    """The history-item adapter must keep the natural-language context
+    field and tag rows with source_platform=douyin so cross-source
+    analysis stays uniform with the XHS / B站 paths."""
+    from openbiliclaw.cli import _dy_events_to_history_items
+    from openbiliclaw.sources.dy_tasks import dy_bootstrap_videos_to_events
+
+    events = dy_bootstrap_videos_to_events(
+        [
+            {
+                "scope": "dy_collect",
+                "title": "demo title",
+                "url": "https://www.douyin.com/video/zzz",
+                "aweme_id": "zzz",
+                "author": "作者",
+            }
+        ]
+    )
+    rows = _dy_events_to_history_items(events)
+    assert len(rows) == 1
+    assert rows[0]["title"] == "demo title"
+    assert rows[0]["source_platform"] == "douyin"
+    # The natural-language context was assembled by build_event when
+    # the source helper produced the event — must survive the trip
+    # through the history-row adapter.
+    assert "抖音收藏" in rows[0]["context"]
+
+
+def test_dy_events_to_history_items_drops_rows_with_no_title_or_url() -> None:
+    from openbiliclaw.cli import _dy_events_to_history_items
+
+    rows = _dy_events_to_history_items(
+        [
+            {
+                "event_type": "view",
+                "title": "",
+                "url": "",
+                "metadata": {"source_platform": "douyin"},
+            },
+            {"event_type": "favorite", "title": "ok", "url": "https://w/a", "metadata": {}},
+        ]
+    )
+    assert len(rows) == 1
+    assert rows[0]["title"] == "ok"
