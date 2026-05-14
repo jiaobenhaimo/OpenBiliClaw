@@ -558,6 +558,7 @@ class ContentDiscoveryEngine:
                 profile=profile,
                 limit=effective_limit,
                 existing=final_results,
+                pool_snapshot=pool_snapshot,
             )
             all_results = self._merge_and_rank([*final_results, *backfill_results])
             await self._normalize_topic_groups(all_results)
@@ -1448,6 +1449,7 @@ class ContentDiscoveryEngine:
         profile: SoulProfile,
         limit: int,
         existing: list[DiscoveredContent],
+        pool_snapshot: Any | None = None,
     ) -> list[DiscoveredContent]:
         remaining = limit - len(existing)
         if remaining <= 0:
@@ -1468,6 +1470,7 @@ class ContentDiscoveryEngine:
                     active_backfill,
                     profile=profile,
                     limit=remaining,
+                    pool_snapshot=pool_snapshot,
                 )
             )
 

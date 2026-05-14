@@ -363,6 +363,24 @@ class _PoolSnapshotStrategy(_RecordingStrategy):
         return await super().discover(profile, limit=limit)
 
 
+class _PoolSnapshotBackfillStrategy(_RecordingStrategy):
+    def __init__(self, backfill_strategy: _PoolSnapshotStrategy) -> None:
+        super().__init__(
+            "snapshot-primary",
+            [
+                DiscoveredContent(
+                    bvid="BV1PRIMARY",
+                    relevance_score=0.9,
+                    source_strategy="snapshot-primary",
+                )
+            ],
+        )
+        self._backfill_strategy = backfill_strategy
+
+    def create_backfill_strategy(self) -> _PoolSnapshotStrategy:
+        return self._backfill_strategy
+
+
 @pytest.mark.asyncio
 async def test_register_strategy_replaces_existing_strategy_with_same_name() -> None:
     started: list[str] = []
@@ -434,6 +452,24 @@ async def test_discovery_engine_keeps_legacy_strategy_signature() -> None:
 
     assert [item.bvid for item in results] == ["BV1LEGACY"]
     assert strategy.limits == [1]
+
+
+@pytest.mark.asyncio
+async def test_discovery_engine_passes_pool_snapshot_to_backfill_strategy() -> None:
+    pool_snapshot = object()
+    backfill_strategy = _PoolSnapshotStrategy()
+    engine = ContentDiscoveryEngine(target_primary_count=2)
+    engine.register_strategy(_PoolSnapshotBackfillStrategy(backfill_strategy))
+
+    results = await engine.discover(
+        _build_profile(),
+        strategies=["snapshot-primary"],
+        limit=2,
+        pool_snapshot=pool_snapshot,
+    )
+
+    assert [item.bvid for item in results] == ["BV1PRIMARY", "BV1SNAP"]
+    assert backfill_strategy.pool_snapshots == [pool_snapshot]
 
 
 def test_llm_eval_candidate_limit_uses_tighter_small_gap_window() -> None:
