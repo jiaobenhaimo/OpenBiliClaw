@@ -254,6 +254,30 @@ async def test_search_strategy_drops_unserializable_pool_hints_and_uses_llm_quer
 
 
 @pytest.mark.asyncio
+async def test_search_strategy_dedicated_client_preserves_auth_cookie() -> None:
+    from openbiliclaw.bilibili.api import BilibiliAPIClient
+    from openbiliclaw.discovery.strategies.strategies import SearchStrategy
+
+    shared_client = BilibiliAPIClient(cookie="SESSDATA=test-cookie")
+    strategy = SearchStrategy(
+        llm_service=FakeLLMService("{}"),
+        bilibili_client=shared_client,
+        llm_evaluation=False,
+    )
+
+    search_client = strategy._create_search_client()
+
+    try:
+        assert search_client is not shared_client
+        assert getattr(search_client, "is_authenticated", False) is True
+    finally:
+        close = getattr(search_client, "close", None)
+        if callable(close):
+            await close()
+        await shared_client.close()
+
+
+@pytest.mark.asyncio
 async def test_search_strategy_deduplicates_results_by_bvid() -> None:
     from openbiliclaw.discovery.strategies.strategies import SearchStrategy
 

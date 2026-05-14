@@ -221,20 +221,25 @@ class SearchStrategy(DiscoveryStrategy):
         )
 
     def _create_search_client(self) -> SupportsSearchClient:
-        """Create a fresh API client for search without cookie.
+        """Create a fresh API client for search while preserving auth.
 
-        B站 rate-limits search per cookie/session.  Other strategies
+        B站 rate-limits search per session. Other strategies
         (especially explore) exhaust the shared client's search quota,
-        so we use a cookie-free client here — search doesn't require auth.
-        Falls back to the shared client if creation fails or if the
-        bilibili_client is not the real API client (e.g. in tests).
+        so we use a dedicated client. Search currently returns
+        ``v_voucher`` for anonymous WBI requests, so the dedicated client
+        must carry over the runtime cookie when one exists. Falls back to
+        the shared client if creation fails or if the bilibili_client is
+        not the real API client (e.g. in tests).
         """
         from openbiliclaw.bilibili.api import BilibiliAPIClient
 
         if not isinstance(self.bilibili_client, BilibiliAPIClient):
             return self.bilibili_client
         try:
-            return BilibiliAPIClient(cookie="", min_request_interval=0.8)
+            return BilibiliAPIClient(
+                cookie=str(getattr(self.bilibili_client, "_cookie", "")),
+                min_request_interval=0.8,
+            )
         except Exception:
             logger.debug("Could not create dedicated search client, using shared")
         return self.bilibili_client

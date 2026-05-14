@@ -30,6 +30,7 @@
 - 修复 B 站 Cookie 自动同步后的后台循环丢失：`/api/bilibili/cookie` 热重载 runtime 后会重新启动 refresh / account sync / auto update 任务，避免扩展首次同步 Cookie 后把小红书与抖音 producer 停住，导致抖音配额长期为 0；重复同步相同 Cookie 时保持幂等，不再反复 hot-reload 打断抖音 discovery 等待。
 - 抖音插件 discovery 入队前会清理过期的 search / hot / feed pending 任务，避免旧版本重复 hot-reload 留下的陈旧队列挡住当前 producer，导致新任务等到超时才回退。
 - discovery engine 注册同名 strategy 时改为替换旧实例，避免 runtime `DouyinDiscoveryService(cache=True)` 每轮追加一个新的 `douyin_direct`，导致后续一次抖音 discovery 同时跑多个相同 search 任务、快速耗尽 `daily_search_budget`。
+- B 站 `SearchStrategy` 的专用 search client 现在会继承运行时 B 站 Cookie：真实 smoke 发现匿名 WBI search 稳定返回 `data.v_voucher`，而同一签名请求带有效 Cookie 可正常返回 `result`；保留独立 client 降低 session 串扰，但不再丢认证态。
 - 抖音扩展 search 任务的单关键词超时窗口从 60 秒放宽到 180 秒，后端 runtime / CLI 默认等待窗口同步为 180 秒；真实 smoke 显示搜索页导航到 `DY_SEARCH_EXECUTE` 可能已消耗 100s+，旧 120s 会在 search API bridge 返回前先触发 `task_timeout`。
 - runtime 抖音 producer 每轮只取 1 个画像关键词做 search，然后继续跑 hot / feed，避免后台补池在多个搜索关键词上串行等待插件超时并消耗过多 search budget；CLI `discover-douyin` 仍可按显式关键词调试多 search。
 - runtime 补池进一步收敛无效成本：B 站四策略共享同一个平台缺口预算并通过 `strategy_limits` 分摊到各策略，手动 refresh 也复用同一套平台缺口计划；小红书 producer 会按小红书缺口减少本轮关键词数；抖音 producer 在小缺口时优先 feed / hot，只有缺口较大才恢复 search；各策略送 LLM 评估前的窗口从 `max(12, limit*4)` 收紧到 `max(6, limit*2)`、上限 90。

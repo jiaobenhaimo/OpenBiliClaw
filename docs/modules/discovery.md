@@ -672,6 +672,7 @@ queries = strategy.last_intermediates.get("queries", [])
 - `pool_snapshot` 只是可选上下文：hint 构建失败、返回非 dict 或 hint 无法序列化时会丢弃这段上下文，继续走正常 LLM query 生成，不会直接退回本地 fallback query
 - LLM 返回坏 JSON 或空结果时，回退到本地兴趣标签 query
 - 正常模式默认抓每个 query 的第一页；backfill 变体会放大 query 数和页数
+- B 站搜索会使用独立 API client 执行，避免和其他策略共享同一请求 session；如果运行时存在有效 B 站 Cookie，独立 client 会继承该 Cookie，因为当前匿名 WBI search 容易直接返回 `v_voucher` 挑战而不给 `result`
 - 对多个 query 的搜索结果按 `bvid` 去重
 - 将结果映射为 `DiscoveredContent`
 - 高权重兴趣如果同时命中 query、标题或简介，会拿到更高的起始锚定分，避免核心兴趣搜索长期被宽泛 `explore` 候选压住
