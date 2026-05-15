@@ -150,7 +150,7 @@ class SchedulerConfig:
     """Scheduler configuration."""
 
     enabled: bool = True
-    discovery_cron: str = "0 */4 * * *"
+    discovery_cron: str = "0 */8 * * *"
     pool_target_count: int = 600
     pool_source_shares: dict[str, int] = field(
         default_factory=lambda: dict(_DEFAULT_POOL_SOURCE_SHARES)
@@ -713,6 +713,19 @@ def _render_config_toml(config: Config) -> str:
             f"discovery_cron = {_toml_string(config.scheduler.discovery_cron)}",
             f"pool_target_count = {config.scheduler.pool_target_count}",
             f"account_sync_interval_hours = {config.scheduler.account_sync_interval_hours}",
+            f"speculation_interval_minutes = {config.scheduler.speculation_interval_minutes}",
+            f"speculation_ttl_days = {config.scheduler.speculation_ttl_days}",
+            f"speculation_cooldown_days = {config.scheduler.speculation_cooldown_days}",
+            "speculation_confirmation_threshold = "
+            f"{config.scheduler.speculation_confirmation_threshold}",
+            f"speculation_max_active = {config.scheduler.speculation_max_active}",
+            "speculation_max_primary_interests = "
+            f"{config.scheduler.speculation_max_primary_interests}",
+            "speculation_max_secondary_interests = "
+            f"{config.scheduler.speculation_max_secondary_interests}",
+            f"auto_update_enabled = {_toml_bool(config.scheduler.auto_update_enabled)}",
+            "auto_update_check_interval_hours = "
+            f"{config.scheduler.auto_update_check_interval_hours}",
             "",
             "[scheduler.pool_source_shares]",
             f"bilibili = {int(config.scheduler.pool_source_shares.get('bilibili', 8))}",
@@ -729,6 +742,9 @@ def _render_config_toml(config: Config) -> str:
             f"filename = {_toml_string(config.logging.filename)}",
             f"max_file_size_mb = {config.logging.max_file_size_mb}",
             f"backup_count = {config.logging.backup_count}",
+            f"aggregate_budget_mb = {config.logging.aggregate_budget_mb}",
+            f"unmanaged_truncate_mb = {config.logging.unmanaged_truncate_mb}",
+            f"unmanaged_max_age_days = {config.logging.unmanaged_max_age_days}",
             "",
         ]
     )

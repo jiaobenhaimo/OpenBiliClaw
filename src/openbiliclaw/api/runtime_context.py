@@ -244,6 +244,45 @@ class RuntimeContext:
         xiaohongshu_adapter = XiaohongshuAdapter()
         new_discovery_engine.register_adapter(xiaohongshu_adapter)
 
+        # 7c. YouTube discovery strategies — only registered when the user
+        # has YouTube follow events in the DB (i.e. has run init --yes-youtube
+        # or fetch-youtube at least once).  Registration is intentionally
+        # gated so the strategies don't fire for users who never set up YouTube.
+        try:
+            from openbiliclaw.discovery.strategies.youtube import (
+                YoutubeChannelStrategy,
+                YoutubeSearchStrategy,
+                YoutubeTrendingStrategy,
+            )
+            from openbiliclaw.youtube.client import YtScraperClient
+
+            yt_client = YtScraperClient()
+            yt_search = YoutubeSearchStrategy(
+                client=yt_client,
+                llm_service=new_llm_service,
+                concurrency=concurrency,
+            )
+            yt_trending = YoutubeTrendingStrategy(
+                client=yt_client,
+                llm_service=new_llm_service,
+                concurrency=concurrency,
+            )
+            yt_channel = YoutubeChannelStrategy(
+                client=yt_client,
+                llm_service=new_llm_service,
+                memory=cast("Any", self.memory_manager),
+                concurrency=concurrency,
+            )
+            new_discovery_engine.register_strategy(yt_search)
+            new_discovery_engine.register_strategy(yt_trending)
+            new_discovery_engine.register_strategy(yt_channel)
+            logger.info("YouTube discovery strategies registered")
+        except ImportError as _yt_import_err:
+            logger.info(
+                "YouTube discovery skipped (scrapetube/yt-dlp not installed): %s",
+                _yt_import_err,
+            )
+
         # 8. Continuous refresh controller
         new_xhs_producer: Any = None
         new_douyin_producer: Any = None

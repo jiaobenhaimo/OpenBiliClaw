@@ -6,6 +6,11 @@
 
 ## v0.3.69: 抖音首页推荐流 discovery（2026-05-12）
 
+- 插件设置页与后端配置 schema 对齐：新增 DeepSeek reasoning、OpenRouter headers、per-module LLM override、B 站 / sources 浏览器配置、小红书 / 抖音预算、数据目录 / SQLite、scheduler 高级项、候选池平台配比、自动更新和 logging 清理参数，并通过 `/api/config` 完整读写。
+- `/api/config` 现在暴露并保存 `sources.*`、scheduler speculation / `pool_source_shares` / auto-update interval、logging rotation / unmanaged cleanup 和 `llm.deepseek.reasoning_effort`；`save_config()` 同步串行化这些隐藏高级字段，避免插件保存常用项时把它们丢回默认值。
+- 配置默认值文档和示例补齐：`discovery_cron` 统一为 `"0 */8 * * *"`，`auto_update_enabled` 统一为保守默认 `false`，配置参考移除已废弃的 `[sources.xiaohongshu].sidecar_url`，并补上 YouTube / XHS / Douyin init 环境变量说明。
+- YouTube 已接入首次 `init` 的多源画像链路：交互式 `--yes-youtube` / `--no-youtube` 决策、`OPENBILICLAW_NO_YOUTUBE=1` 环境跳过、浏览器扩展 `yt_tasks` 串行拉取观看历史 / 订阅 / 点赞，并把事件送入 `analyze_events()` 与 `build_initial_profile()`。
+- 新增 YouTube 单源工具：`openbiliclaw fetch-youtube` 用于 smoke 浏览器扩展任务桥，`openbiliclaw import-youtube <path>` 支持 Google Takeout `.zip` 或目录导入观看历史 / 订阅 / 点赞。
 - 新增 GitHub Pages 项目主页：`docs/index.html` 作为 `/docs` 发布入口，首屏突出纯本地 / 私有 / 开源 / 自进化跨平台内容发现 Agent 定位，并提供一句话安装提示、Chrome 插件下载、GitHub 源码、产品闭环和推荐 / 价值画像 / 认知风格 / 聊天校准截图；原文档导航保留在 `docs/index.md`。
 - GitHub Pages 项目主页新增中英文双语切换：默认跟随浏览器语言，用户手动选择后写入 `localStorage`，安装提示、导航、CTA、截图说明、架构说明和复制按钮状态均同步切换。
 - Chrome 插件版本提升到 v0.3.20 并准备发布：打包这几天已合入的抖音任务桥、Douyin search / hot / feed 插件签名链路、抖音 Cookie 同步和小红书 / 抖音 dispatcher 互斥，manifest 描述同步改为跨平台内容发现 Agent。

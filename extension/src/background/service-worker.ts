@@ -32,6 +32,13 @@ import {
   type DyTaskResult,
 } from "./dy-task-dispatcher.js";
 import {
+  startYtTaskPolling,
+  handleYtTaskAlarm,
+  handleYtScopeResult,
+  pollYtTaskNow,
+} from "./yt-task-dispatcher.js";
+import type { YtScopeResult } from "../content/yt/task-executor.js";
+import {
   openExtensionUi,
   parseDelightBvid,
   parseNotificationBvid,
@@ -184,6 +191,10 @@ function handleRuntimeEvent(event: Record<string, unknown>): void {
     pollDyTaskNow();
     return;
   }
+  if (eventType === "yt_task_available") {
+    pollYtTaskNow();
+    return;
+  }
 
   // Dev-only: lets `curl -X POST /api/extension/reload` (or the
   // openbiliclaw extension-reload CLI shim) reload the entire
@@ -307,6 +318,7 @@ chrome.runtime.onInstalled.addListener(() => {
   connectRuntimeStream();
   startXhsTaskPolling();
   startDyTaskPolling();
+  startYtTaskPolling();
   startCookieSync();
 });
 
@@ -315,6 +327,7 @@ chrome.runtime.onStartup.addListener(() => {
   connectRuntimeStream();
   startXhsTaskPolling();
   startDyTaskPolling();
+  startYtTaskPolling();
   startCookieSync();
 });
 
@@ -423,6 +436,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
     return true;
   }
+  if (message.action === "YT_SCOPE_RESULT") {
+    void handleYtScopeResult(message.data as YtScopeResult)
+      .then(() => {
+        sendResponse({ ok: true });
+      })
+      .catch((error: unknown) => {
+        sendResponse({ ok: false, error: String(error) });
+      });
+    return true;
+  }
   if (message.action !== "BEHAVIOR_EVENT") return;
 
   eventBuffer = enqueueBufferedEvent(eventBuffer, message.data as BehaviorEvent, BUFFER_MAX_SIZE);
@@ -435,6 +458,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   handleXhsTaskAlarm(alarm.name);
   handleDyTaskAlarm(alarm.name);
+  handleYtTaskAlarm(alarm.name);
   if (handleCookieSyncAlarm(alarm.name)) {
     return;
   }

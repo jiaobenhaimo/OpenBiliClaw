@@ -29,6 +29,7 @@ from openbiliclaw.api.models import (
     DelightAckResponse,
     DouyinCookieIn,
     DouyinCookieResponse,
+    DouyinSourceConfigOut,
     EmbeddingConfigOut,
     EventIngestResponse,
     FeedbackIn,
@@ -56,7 +57,10 @@ from openbiliclaw.api.models import (
     RecommendationReshuffleResponse,
     RuntimeStatusResponse,
     SchedulerConfigOut,
+    SourcesBrowserConfigOut,
+    SourcesConfigOut,
     StorageConfigOut,
+    XiaohongshuSourceConfigOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -2634,6 +2638,89 @@ def create_app(
                 await publish({"type": "dy_task_available", "source": "task_kick"})
         return {"ok": True}
 
+    # ── YouTube bootstrap endpoints ────────────────────────────────
+    from openbiliclaw.sources.yt_tasks import (
+        YtTaskQueue,
+        yt_bootstrap_items_to_events,
+    )
+
+    _yt_task_queue: YtTaskQueue | None = None
+    if hasattr(ctx.database, "conn"):
+        _yt_task_queue = YtTaskQueue(ctx.database)
+
+    @app.get("/api/sources/yt/next-task")
+    def yt_next_task(response: Any = None) -> Any:
+        """Return the oldest pending YouTube task, or 204 if none."""
+        from starlette.responses import Response
+
+        if _yt_task_queue is None:
+            return Response(status_code=204)
+        task = _yt_task_queue.next_pending()
+        if task is None:
+            return Response(status_code=204)
+
+        import json as _json
+
+        payload = _json.loads(task["payload_json"]) if task.get("payload_json") else {}
+        return {
+            "id": task["id"],
+            "type": task["type"],
+            **payload,
+        }
+
+    @app.post("/api/sources/yt/task-result")
+    async def yt_task_result(payload: dict[str, Any]) -> dict[str, Any]:
+        """Accept a YouTube task result from the extension dispatcher."""
+        task_id = payload.get("task_id", "")
+        status = payload.get("status", "")
+        items = [v for v in payload.get("items", []) if isinstance(v, dict)]
+        scope_counts = payload.get("scope_counts")
+        if not isinstance(scope_counts, dict):
+            scope_counts = None
+        debug = payload.get("debug")
+        if not isinstance(debug, dict):
+            debug = None
+
+        if not task_id:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=422, detail="task_id is required")
+
+        if _yt_task_queue is None:
+            return {"ok": True}
+
+        task = _yt_task_queue.get(task_id)
+        task_type = str(task.get("type", "")).strip() if task else ""
+
+        if status in {"partial", "ok"} or (status == "empty" and task_type == "bootstrap_profile"):
+            is_final = status == "ok" or (status == "empty" and task_type == "bootstrap_profile")
+            added_items = _yt_task_queue.merge_result(
+                task_id,
+                items=items if items else None,
+                scope_counts=scope_counts,
+                debug=debug,
+                complete=is_final,
+            )
+            if task_type == "bootstrap_profile" and added_items:
+                profile_events: list[dict[str, Any]] = []
+                for event in yt_bootstrap_items_to_events(added_items):
+                    await ctx.memory_manager.propagate_event(event)
+                    profile_events.append(event)
+                await _ingest_profile_update_events(profile_events)
+        else:
+            _yt_task_queue.fail(task_id, error=payload.get("error", ""), debug=debug)
+
+        return {"ok": True}
+
+    @app.post("/api/sources/yt/kick")
+    async def yt_task_kick() -> dict[str, Any]:
+        """Broadcast `yt_task_available` over runtime-stream."""
+        publish = getattr(getattr(ctx, "event_hub", None), "publish", None)
+        if callable(publish):
+            with suppress(Exception):
+                await publish({"type": "yt_task_available", "source": "task_kick"})
+        return {"ok": True}
+
     @app.post("/api/extension/reload")
     async def extension_reload() -> dict[str, Any]:
         """Dev-only: broadcast `extension_reload` so the connected
@@ -2672,6 +2759,7 @@ def create_app(
                 base_url=p.base_url,
                 http_referer=getattr(p, "http_referer", ""),
                 x_title=getattr(p, "x_title", ""),
+                reasoning_effort=getattr(p, "reasoning_effort", ""),
             )
 
         issue_list = [ConfigIssueOut(field=i.field, message=i.message) for i in (issues or [])]
@@ -2718,11 +2806,45 @@ def create_app(
                 browser_executable=cfg.bilibili.browser_executable,
                 browser_headed=cfg.bilibili.browser_headed,
             ),
+            sources=SourcesConfigOut(
+                browser=SourcesBrowserConfigOut(
+                    cdp_url=cfg.sources.browser_cdp_url,
+                    headed=cfg.sources.browser_headed,
+                ),
+                xiaohongshu=XiaohongshuSourceConfigOut(
+                    daily_search_budget=cfg.sources.xiaohongshu.daily_search_budget,
+                    daily_creator_budget=cfg.sources.xiaohongshu.daily_creator_budget,
+                    task_interval_seconds=cfg.sources.xiaohongshu.task_interval_seconds,
+                ),
+                douyin=DouyinSourceConfigOut(
+                    enabled=cfg.sources.douyin.enabled,
+                    mode=cfg.sources.douyin.mode,
+                    cookie_env=cfg.sources.douyin.cookie_env,
+                    daily_search_budget=cfg.sources.douyin.daily_search_budget,
+                    daily_hot_budget=cfg.sources.douyin.daily_hot_budget,
+                    daily_feed_budget=cfg.sources.douyin.daily_feed_budget,
+                    request_interval_seconds=cfg.sources.douyin.request_interval_seconds,
+                ),
+            ),
             scheduler=SchedulerConfigOut(
                 enabled=cfg.scheduler.enabled,
                 discovery_cron=cfg.scheduler.discovery_cron,
                 pool_target_count=cfg.scheduler.pool_target_count,
+                pool_source_shares=dict(cfg.scheduler.pool_source_shares),
                 account_sync_interval_hours=cfg.scheduler.account_sync_interval_hours,
+                speculation_interval_minutes=cfg.scheduler.speculation_interval_minutes,
+                speculation_ttl_days=cfg.scheduler.speculation_ttl_days,
+                speculation_cooldown_days=cfg.scheduler.speculation_cooldown_days,
+                speculation_confirmation_threshold=(
+                    cfg.scheduler.speculation_confirmation_threshold
+                ),
+                speculation_max_active=cfg.scheduler.speculation_max_active,
+                speculation_max_primary_interests=(
+                    cfg.scheduler.speculation_max_primary_interests
+                ),
+                speculation_max_secondary_interests=(
+                    cfg.scheduler.speculation_max_secondary_interests
+                ),
                 auto_update_enabled=cfg.scheduler.auto_update_enabled,
                 auto_update_check_interval_hours=cfg.scheduler.auto_update_check_interval_hours,
             ),
@@ -2732,6 +2854,11 @@ def create_app(
                 file_level=cfg.logging.file_level,
                 directory=cfg.logging.directory,
                 filename=cfg.logging.filename,
+                max_file_size_mb=cfg.logging.max_file_size_mb,
+                backup_count=cfg.logging.backup_count,
+                aggregate_budget_mb=cfg.logging.aggregate_budget_mb,
+                unmanaged_truncate_mb=cfg.logging.unmanaged_truncate_mb,
+                unmanaged_max_age_days=cfg.logging.unmanaged_max_age_days,
             ),
             issues=issue_list,
         )
@@ -2758,12 +2885,20 @@ def create_app(
         """
         from openbiliclaw.config import (
             _collect_config_issues,
+            _normalize_pool_source_shares,
             load_config,
             save_config,
         )
 
         cfg = load_config()
         update = payload.model_dump(exclude_none=True)
+
+        def _as_bool(value: object) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+            return bool(value)
 
         # Apply top-level scalars
         if "language" in update:
@@ -2788,7 +2923,14 @@ def create_app(
                 if provider_name in llm_data and isinstance(llm_data[provider_name], dict):
                     provider_cfg = getattr(cfg.llm, provider_name)
                     pdata = llm_data[provider_name]
-                    for field_name in ("api_key", "model", "base_url", "http_referer", "x_title"):
+                    for field_name in (
+                        "api_key",
+                        "model",
+                        "base_url",
+                        "http_referer",
+                        "x_title",
+                        "reasoning_effort",
+                    ):
                         if field_name in pdata:
                             setattr(provider_cfg, field_name, str(pdata[field_name]))
             if "embedding" in llm_data and isinstance(llm_data["embedding"], dict):
@@ -2829,7 +2971,45 @@ def create_app(
             if "browser_executable" in bdata:
                 cfg.bilibili.browser_executable = str(bdata["browser_executable"])
             if "browser_headed" in bdata:
-                cfg.bilibili.browser_headed = bool(bdata["browser_headed"])
+                cfg.bilibili.browser_headed = _as_bool(bdata["browser_headed"])
+
+        # Apply source updates
+        if "sources" in update:
+            sources_data = update["sources"]
+            if isinstance(sources_data, dict):
+                browser_data = sources_data.get("browser")
+                if isinstance(browser_data, dict):
+                    if "cdp_url" in browser_data:
+                        cfg.sources.browser_cdp_url = str(browser_data["cdp_url"])
+                    if "headed" in browser_data:
+                        cfg.sources.browser_headed = _as_bool(browser_data["headed"])
+
+                xhs_data = sources_data.get("xiaohongshu")
+                if isinstance(xhs_data, dict):
+                    for key in (
+                        "daily_search_budget",
+                        "daily_creator_budget",
+                        "task_interval_seconds",
+                    ):
+                        if key in xhs_data:
+                            setattr(cfg.sources.xiaohongshu, key, int(xhs_data[key]))
+
+                dy_data = sources_data.get("douyin")
+                if isinstance(dy_data, dict):
+                    if "enabled" in dy_data:
+                        cfg.sources.douyin.enabled = _as_bool(dy_data["enabled"])
+                    if "mode" in dy_data:
+                        cfg.sources.douyin.mode = str(dy_data["mode"])
+                    if "cookie_env" in dy_data:
+                        cfg.sources.douyin.cookie_env = str(dy_data["cookie_env"])
+                    for key in (
+                        "daily_search_budget",
+                        "daily_hot_budget",
+                        "daily_feed_budget",
+                        "request_interval_seconds",
+                    ):
+                        if key in dy_data:
+                            setattr(cfg.sources.douyin, key, int(dy_data[key]))
 
         # Apply scheduler updates
         if "scheduler" in update:
@@ -2839,17 +3019,28 @@ def create_app(
                 "discovery_cron",
                 "pool_target_count",
                 "account_sync_interval_hours",
+                "speculation_interval_minutes",
+                "speculation_ttl_days",
+                "speculation_cooldown_days",
+                "speculation_confirmation_threshold",
+                "speculation_max_active",
+                "speculation_max_primary_interests",
+                "speculation_max_secondary_interests",
                 "auto_update_enabled",
                 "auto_update_check_interval_hours",
             ):
                 if key in sdata:
                     current_val = getattr(cfg.scheduler, key)
                     if isinstance(current_val, bool):
-                        setattr(cfg.scheduler, key, bool(sdata[key]))
+                        setattr(cfg.scheduler, key, _as_bool(sdata[key]))
                     elif isinstance(current_val, int):
                         setattr(cfg.scheduler, key, int(sdata[key]))
                     else:
                         setattr(cfg.scheduler, key, str(sdata[key]))
+            if "pool_source_shares" in sdata:
+                cfg.scheduler.pool_source_shares = _normalize_pool_source_shares(
+                    sdata["pool_source_shares"]
+                )
 
         # Apply storage updates
         if "storage" in update:
@@ -2863,6 +3054,15 @@ def create_app(
             for key in ("level", "file_level", "directory", "filename"):
                 if key in ldata:
                     setattr(cfg.logging, key, str(ldata[key]))
+            for key in (
+                "max_file_size_mb",
+                "backup_count",
+                "aggregate_budget_mb",
+                "unmanaged_truncate_mb",
+                "unmanaged_max_age_days",
+            ):
+                if key in ldata:
+                    setattr(cfg.logging, key, int(ldata[key]))
 
         # Save to disk
         saved_path = save_config(cfg)

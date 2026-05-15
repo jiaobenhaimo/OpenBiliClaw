@@ -2827,6 +2827,195 @@ class TestEmbeddingAndCompatProviderE2E:
         assert "*" in openai_mask and "*" in compat_mask
         assert openai_mask != compat_mask
 
+    def test_get_config_exposes_sources_and_advanced_settings(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The config API should expose persisted advanced fields so the
+        extension settings page can stay aligned with config.toml."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(
+            data_dir="runtime-data",
+            llm=LLMConfig(
+                default_provider="deepseek",
+                deepseek=LLMProviderConfig(
+                    api_key="ds-key",
+                    model="deepseek-v4-flash",
+                    base_url="https://api.deepseek.com",
+                    reasoning_effort="high",
+                ),
+                openrouter=LLMProviderConfig(
+                    api_key="or-key",
+                    model="openai/gpt-5-nano",
+                    base_url="https://openrouter.ai/api/v1",
+                    http_referer="https://example.com",
+                    x_title="Example App",
+                ),
+            ),
+        )
+        cfg.bilibili.browser_executable = "/Applications/Chrome.app"
+        cfg.bilibili.browser_headed = True
+        cfg.sources.browser_cdp_url = "http://localhost:9222"
+        cfg.sources.browser_headed = True
+        cfg.sources.xiaohongshu.daily_search_budget = 11
+        cfg.sources.xiaohongshu.daily_creator_budget = 3
+        cfg.sources.xiaohongshu.task_interval_seconds = 66
+        cfg.sources.douyin.enabled = True
+        cfg.sources.douyin.cookie_env = "CUSTOM_DY_COOKIE"
+        cfg.sources.douyin.daily_search_budget = 12
+        cfg.sources.douyin.daily_hot_budget = 4
+        cfg.sources.douyin.daily_feed_budget = 13
+        cfg.sources.douyin.request_interval_seconds = 5
+        cfg.scheduler.pool_source_shares = {"bilibili": 6, "xiaohongshu": 2, "douyin": 2}
+        cfg.scheduler.account_sync_interval_hours = 9
+        cfg.scheduler.speculation_interval_minutes = 21
+        cfg.scheduler.speculation_ttl_days = 8
+        cfg.scheduler.auto_update_enabled = True
+        cfg.scheduler.auto_update_check_interval_hours = 10
+        cfg.logging.file_level = "WARNING"
+        cfg.logging.max_file_size_mb = 123
+        cfg.logging.aggregate_budget_mb = 456
+        cfg.logging.unmanaged_truncate_mb = 78
+        cfg.logging.unmanaged_max_age_days = 9
+
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        response = client.get("/api/config", params={"reveal_keys": "true"})
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["data_dir"] == "runtime-data"
+        assert data["llm"]["deepseek"]["reasoning_effort"] == "high"
+        assert data["llm"]["openrouter"]["http_referer"] == "https://example.com"
+        assert data["llm"]["openrouter"]["x_title"] == "Example App"
+        assert data["bilibili"]["browser_executable"] == "/Applications/Chrome.app"
+        assert data["bilibili"]["browser_headed"] is True
+        assert data["sources"]["browser"]["cdp_url"] == "http://localhost:9222"
+        assert data["sources"]["browser"]["headed"] is True
+        assert data["sources"]["xiaohongshu"]["daily_search_budget"] == 11
+        assert data["sources"]["douyin"]["enabled"] is True
+        assert data["sources"]["douyin"]["daily_feed_budget"] == 13
+        assert data["scheduler"]["pool_source_shares"] == {
+            "bilibili": 6,
+            "xiaohongshu": 2,
+            "douyin": 2,
+        }
+        assert data["scheduler"]["account_sync_interval_hours"] == 9
+        assert data["scheduler"]["speculation_interval_minutes"] == 21
+        assert data["scheduler"]["speculation_ttl_days"] == 8
+        assert data["scheduler"]["auto_update_enabled"] is True
+        assert data["scheduler"]["auto_update_check_interval_hours"] == 10
+        assert data["logging"]["file_level"] == "WARNING"
+        assert data["logging"]["max_file_size_mb"] == 123
+        assert data["logging"]["aggregate_budget_mb"] == 456
+        assert data["logging"]["unmanaged_truncate_mb"] == 78
+        assert data["logging"]["unmanaged_max_age_days"] == 9
+
+    def test_put_config_updates_sources_and_advanced_settings(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """PUT /api/config should update the same advanced fields that the
+        extension settings page exposes."""
+        from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+
+        cfg = Config(llm=LLMConfig(openai=LLMProviderConfig(api_key="sk-openai")))
+        client = self._make_client(monkeypatch, tmp_path, cfg)
+
+        response = client.put(
+            "/api/config",
+            json={
+                "data_dir": "runtime-data",
+                "llm": {
+                    "deepseek": {"reasoning_effort": "high"},
+                    "openrouter": {
+                        "http_referer": "https://example.com",
+                        "x_title": "Example App",
+                    },
+                    "soul": {"provider": "claude", "model": "claude-sonnet-4-6"},
+                    "discovery": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+                    "recommendation": {"provider": "gemini", "model": "gemini-2.5-flash"},
+                    "evaluation": {"provider": "openai", "model": "gpt-5-nano"},
+                },
+                "bilibili": {
+                    "browser_executable": "/Applications/Chrome.app",
+                    "browser_headed": True,
+                },
+                "sources": {
+                    "browser": {"cdp_url": "http://localhost:9222", "headed": True},
+                    "xiaohongshu": {
+                        "daily_search_budget": 11,
+                        "daily_creator_budget": 3,
+                        "task_interval_seconds": 66,
+                    },
+                    "douyin": {
+                        "enabled": True,
+                        "mode": "direct",
+                        "cookie_env": "CUSTOM_DY_COOKIE",
+                        "daily_search_budget": 12,
+                        "daily_hot_budget": 4,
+                        "daily_feed_budget": 13,
+                        "request_interval_seconds": 5,
+                    },
+                },
+                "scheduler": {
+                    "account_sync_interval_hours": 9,
+                    "pool_source_shares": {"bilibili": 6, "xiaohongshu": 2, "douyin": 2},
+                    "speculation_interval_minutes": 21,
+                    "speculation_ttl_days": 8,
+                    "speculation_cooldown_days": 9,
+                    "speculation_confirmation_threshold": 4,
+                    "speculation_max_active": 6,
+                    "speculation_max_primary_interests": 17,
+                    "speculation_max_secondary_interests": 66,
+                    "auto_update_enabled": True,
+                    "auto_update_check_interval_hours": 10,
+                },
+                "storage": {"db_path": "runtime-data/openbiliclaw.db"},
+                "logging": {
+                    "file_level": "WARNING",
+                    "directory": "runtime-logs",
+                    "filename": "backend.log",
+                    "max_file_size_mb": 123,
+                    "backup_count": 3,
+                    "aggregate_budget_mb": 456,
+                    "unmanaged_truncate_mb": 78,
+                    "unmanaged_max_age_days": 9,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert cfg.data_dir == "runtime-data"
+        assert cfg.llm.deepseek.reasoning_effort == "high"
+        assert cfg.llm.openrouter.http_referer == "https://example.com"
+        assert cfg.llm.openrouter.x_title == "Example App"
+        assert cfg.llm.soul.provider == "claude"
+        assert cfg.llm.discovery.provider == "deepseek"
+        assert cfg.llm.recommendation.provider == "gemini"
+        assert cfg.llm.evaluation.provider == "openai"
+        assert cfg.bilibili.browser_executable == "/Applications/Chrome.app"
+        assert cfg.bilibili.browser_headed is True
+        assert cfg.sources.browser_cdp_url == "http://localhost:9222"
+        assert cfg.sources.browser_headed is True
+        assert cfg.sources.xiaohongshu.daily_search_budget == 11
+        assert cfg.sources.douyin.enabled is True
+        assert cfg.sources.douyin.cookie_env == "CUSTOM_DY_COOKIE"
+        assert cfg.sources.douyin.daily_feed_budget == 13
+        assert cfg.scheduler.pool_source_shares == {
+            "bilibili": 6,
+            "xiaohongshu": 2,
+            "douyin": 2,
+        }
+        assert cfg.scheduler.speculation_interval_minutes == 21
+        assert cfg.scheduler.auto_update_enabled is True
+        assert cfg.scheduler.auto_update_check_interval_hours == 10
+        assert cfg.storage.db_path == "runtime-data/openbiliclaw.db"
+        assert cfg.logging.file_level == "WARNING"
+        assert cfg.logging.max_file_size_mb == 123
+        assert cfg.logging.aggregate_budget_mb == 456
+        assert cfg.logging.unmanaged_truncate_mb == 78
+        assert cfg.logging.unmanaged_max_age_days == 9
+
 
 def test_events_endpoint_emits_activity_added_runtime_event() -> None:
     """v0.3.38 — POST /api/events publishes ``activity.added`` so the

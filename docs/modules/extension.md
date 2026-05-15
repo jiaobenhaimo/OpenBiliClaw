@@ -4,7 +4,7 @@
 
 `extension/` 是 Chrome 插件子项目，负责：
 
-- 在 B 站 / 小红书 / 抖音等支持的站点采集行为事件（平台无关内核 + 平台适配器）
+- 在 B 站 / 小红书 / 抖音 / YouTube 等支持的站点采集行为事件（平台无关内核 + 平台适配器）
 - 通过 background service worker 缓冲并上报到本地后端
 - 在 side panel 中展示连接状态、推荐结果、画像和聊天入口
 
@@ -29,6 +29,7 @@
 | 抖音搜索任务 | ✅ | 后端可派发 `search` 任务；插件在已登录抖音会话中执行关键词搜索，MAIN-world search bridge 调用页面 `byted_acrawler.frontierSign()` 签名搜索 API，回传 `dy_search` 候选供 CLI smoke 和正式 `dy-plugin-search` discovery 使用；单关键词任务 timeout 为 180 秒 |
 | 抖音热点任务 | ✅ | 后端可派发 `hot` 任务；插件打开 `/hot/{sentence_id}`，从跳转后的 `/video/{aweme_id}` 取 seed aweme，并通过 MAIN-world related bridge 签名 `/aweme/v1/web/aweme/related/`，回传 `dy_hot` 候选供 `dy-plugin-hot-related` discovery 使用 |
 | 抖音首页推荐流任务 | ✅ | 后端可派发 `feed` 任务；插件在已登录抖音首页通过 MAIN-world feed bridge 签名 `/aweme/v1/web/tab/feed/`，回传 `dy_feed` 候选供 `dy-plugin-feed` discovery 使用 |
+| YouTube 初始化画像任务 | ✅ | 后端可派发 `bootstrap_profile` 任务；插件依次访问 `/feed/history`、`/feed/channels`、`/playlist?list=LL`，从 DOM 读取观看历史 / 订阅 / 点赞并用 `partial` 分批回传给 `/api/sources/yt/task-result` |
 
 ## 目录结构
 
@@ -54,6 +55,9 @@ extension/
 │   │   │   ├── dom-extractor.ts # 抖音页面 DOM 兜底解析
 │   │   │   └── task-executor.ts # 抖音后台任务在页面内的执行入口
 │   │   ├── xiaohongshu.ts     # 小红书 entry point，挂载 xiaohongshuAdapter
+│   │   ├── youtube.ts         # YouTube entry point，挂载任务 executor
+│   │   ├── yt/
+│   │   │   └── task-executor.ts # YouTube bootstrap scope DOM 解析与回传
 │   │   └── xhs/
 │   │       ├── bootstrap.ts   # 初始化画像任务的 state / DOM 解析 helper
 │   │       ├── passive.ts     # 小红书被动 URL / note metadata 采集
@@ -175,7 +179,28 @@ CLI 侧分两层使用这条链路：
 - `openbiliclaw init --yes-douyin` 会把任务结果加入初始化事件集合，进入 `analyze_events()` 和 `build_initial_profile()`。
 - `openbiliclaw fetch-douyin` 只做单源 smoke / 补拉；事件由 daemon 在接收 partial 时写入 memory，CLI 自身不会再传播一次，也不会隐式触发画像重建。
 
-当收到 `search` 时，dispatcher 会先打开抖音首页，再为每个关键词打开抖音搜索页并发送 `DY_SEARCH_EXECUTE`：
+### YouTube 任务桥
+
+`src/background/yt-task-dispatcher.ts` 会轮询后端 `/api/sources/yt/next-task`。当收到 `bootstrap_profile` 时，dispatcher 会打开一个前台 YouTube tab，并按任务 payload 串行执行：
+
+```json
+{
+  "task_id": "...",
+  "type": "bootstrap_profile",
+  "scopes": ["yt_history", "yt_subscriptions", "yt_likes"],
+  "max_items_per_scope": 300,
+  "max_scroll_rounds": 10
+}
+```
+
+`src/content/yt/task-executor.ts` 负责在页面内滚动并读取 DOM。`yt_history` 对应 `/feed/history`，`yt_subscriptions` 对应 `/feed/channels`，`yt_likes` 对应 `/playlist?list=LL`。每个 scope 完成后，background 以 `partial` 回传新增 items 和 scope counts，最后以 `ok` 完成任务。后端会把新增 items 转成统一事件：观看历史 → `view`，订阅 → `follow`，点赞 → `like`。
+
+CLI 侧分两层使用这条链路：
+
+- `openbiliclaw init --yes-youtube` 会在抖音 collect 完成后才入队 YouTube，避免两个前台 tab 任务同时抢浏览器焦点，并把结果加入 `analyze_events()` 和 `build_initial_profile()`。
+- `openbiliclaw fetch-youtube` 只做单源 smoke / 补拉，不隐式触发画像重建。
+
+抖音 dispatcher 收到 `search` 时，会先打开抖音首页，再为每个关键词打开抖音搜索页并发送 `DY_SEARCH_EXECUTE`：
 
 ```json
 {
@@ -201,6 +226,8 @@ CLI 入口：
 
 - 后端连接状态检查
 - 从 `/api/recommendations` 拉取推荐列表
+- 设置页会通过 `/api/config` 读取并保存后端配置，保存后请求后端热重载；当前覆盖 LLM provider/key/model、DeepSeek reasoning、OpenRouter headers、per-module LLM override、B 站浏览器、通用 source 浏览器、小红书 / 抖音 source 预算、数据目录、SQLite 路径、调度、自动更新、候选池平台配比、猜测兴趣参数和日志清理参数
+- 设置页保存配置时会保留后端已有的高级字段：`save_config()` 会串行化 scheduler speculation / auto-update 和 logging unmanaged cleanup 字段，避免 UI 修改常用项时把隐藏高级项写回默认值
 - 推荐 tab 现已改成“换一批”，会调用 `/api/recommendations/reshuffle` 直接从 discovery pool 秒级换出一批新推荐
 - 推荐 tab 滚到底时会调用 `/api/recommendations/append` 继续往下续 10 条，不会把当前这一屏直接替换掉；首次渲染、切回推荐 tab 和追加完成后也会再检查一次底部距离，避免停在底部时没有新 scroll 事件导致续页卡住
 - popup API 现在会统一规范化推荐项，追加出来的 `cover_url` 也会被收敛成可直接加载的 `https://` 地址
@@ -275,6 +302,7 @@ npm run build
 - 缓冲去重与强信号 flush
 - B 站 / 抖音 Cookie 自动同步的重试闹钟和幂等监听器
 - manifest 图标资源存在性
+- popup 设置页字段与 `/api/config` schema 的基础对齐
 - `dist/` 运行时脚本可被 Chrome 直接加载
 
 ## Release 分发

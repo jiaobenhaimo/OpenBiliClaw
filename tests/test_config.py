@@ -78,6 +78,7 @@ class TestConfigDefaults:
         assert config.llm.default_provider == "openai"
         assert config.bilibili.auth_method == "cookie"
         assert config.scheduler.enabled is True
+        assert config.scheduler.discovery_cron == "0 */8 * * *"
         assert config.scheduler.pool_target_count == 600
 
     def test_config_defaults_pool_target_count_to_600(self) -> None:
@@ -564,6 +565,42 @@ def test_save_config_round_trips_pool_source_shares(tmp_path: Path) -> None:
         "xiaohongshu": 2,
         "douyin": 2,
     }
+
+
+def test_save_config_round_trips_advanced_scheduler_and_logging_fields(
+    tmp_path: Path,
+) -> None:
+    """Popup/API saves must not drop advanced fields that the UI may not edit."""
+    config_path = tmp_path / "config.toml"
+    config = Config()
+    config.scheduler.speculation_interval_minutes = 22
+    config.scheduler.speculation_ttl_days = 8
+    config.scheduler.speculation_cooldown_days = 9
+    config.scheduler.speculation_confirmation_threshold = 4
+    config.scheduler.speculation_max_active = 6
+    config.scheduler.speculation_max_primary_interests = 17
+    config.scheduler.speculation_max_secondary_interests = 66
+    config.scheduler.auto_update_enabled = True
+    config.scheduler.auto_update_check_interval_hours = 12
+    config.logging.aggregate_budget_mb = 444
+    config.logging.unmanaged_truncate_mb = 55
+    config.logging.unmanaged_max_age_days = 6
+
+    save_config(config, config_path)
+    loaded = load_config(config_path)
+
+    assert loaded.scheduler.speculation_interval_minutes == 22
+    assert loaded.scheduler.speculation_ttl_days == 8
+    assert loaded.scheduler.speculation_cooldown_days == 9
+    assert loaded.scheduler.speculation_confirmation_threshold == 4
+    assert loaded.scheduler.speculation_max_active == 6
+    assert loaded.scheduler.speculation_max_primary_interests == 17
+    assert loaded.scheduler.speculation_max_secondary_interests == 66
+    assert loaded.scheduler.auto_update_enabled is True
+    assert loaded.scheduler.auto_update_check_interval_hours == 12
+    assert loaded.logging.aggregate_budget_mb == 444
+    assert loaded.logging.unmanaged_truncate_mb == 55
+    assert loaded.logging.unmanaged_max_age_days == 6
 
 
 def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:

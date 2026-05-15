@@ -3497,14 +3497,27 @@ function bindSettings() {
     setVal("cfgDeepseekKey", cfg.llm?.deepseek?.api_key);
     setVal("cfgDeepseekModel", cfg.llm?.deepseek?.model);
     setVal("cfgDeepseekBaseUrl", cfg.llm?.deepseek?.base_url);
+    const deepseekReasoning = document.getElementById("cfgDeepseekReasoning");
+    if (deepseekReasoning) deepseekReasoning.value = cfg.llm?.deepseek?.reasoning_effort || "";
     setVal("cfgOllamaModel", cfg.llm?.ollama?.model);
     setVal("cfgOllamaBaseUrl", cfg.llm?.ollama?.base_url);
     setVal("cfgOpenrouterKey", cfg.llm?.openrouter?.api_key);
     setVal("cfgOpenrouterModel", cfg.llm?.openrouter?.model);
     setVal("cfgOpenrouterBaseUrl", cfg.llm?.openrouter?.base_url);
+    setVal("cfgOpenrouterReferer", cfg.llm?.openrouter?.http_referer);
+    setVal("cfgOpenrouterTitle", cfg.llm?.openrouter?.x_title);
     setVal("cfgOpenaiCompatibleKey", cfg.llm?.openai_compatible?.api_key);
     setVal("cfgOpenaiCompatibleModel", cfg.llm?.openai_compatible?.model);
     setVal("cfgOpenaiCompatibleBaseUrl", cfg.llm?.openai_compatible?.base_url);
+
+    setVal("cfgModuleSoulProvider", cfg.llm?.soul?.provider);
+    setVal("cfgModuleSoulModel", cfg.llm?.soul?.model);
+    setVal("cfgModuleDiscoveryProvider", cfg.llm?.discovery?.provider);
+    setVal("cfgModuleDiscoveryModel", cfg.llm?.discovery?.model);
+    setVal("cfgModuleRecommendationProvider", cfg.llm?.recommendation?.provider);
+    setVal("cfgModuleRecommendationModel", cfg.llm?.recommendation?.model);
+    setVal("cfgModuleEvaluationProvider", cfg.llm?.evaluation?.provider);
+    setVal("cfgModuleEvaluationModel", cfg.llm?.evaluation?.model);
 
     // Embedding (v0.3.32+ — owns its own api_key/base_url)
     const embProvider = document.getElementById("cfgEmbeddingProvider");
@@ -3519,22 +3532,65 @@ function bindSettings() {
     const biliAuth = document.getElementById("cfgBiliAuth");
     if (biliAuth) biliAuth.value = cfg.bilibili?.auth_method || "cookie";
     setVal("cfgBiliCookie", cfg.bilibili?.cookie);
+    setVal("cfgBiliBrowserExecutable", cfg.bilibili?.browser_executable);
+    const biliBrowserHeaded = document.getElementById("cfgBiliBrowserHeaded");
+    if (biliBrowserHeaded) biliBrowserHeaded.checked = cfg.bilibili?.browser_headed === true;
+
+    // Sources
+    setVal("cfgSourcesBrowserCdp", cfg.sources?.browser?.cdp_url);
+    const sourcesBrowserHeaded = document.getElementById("cfgSourcesBrowserHeaded");
+    if (sourcesBrowserHeaded) {
+      sourcesBrowserHeaded.checked = cfg.sources?.browser?.headed === true;
+    }
+    setVal("cfgXhsDailySearchBudget", cfg.sources?.xiaohongshu?.daily_search_budget);
+    setVal("cfgXhsDailyCreatorBudget", cfg.sources?.xiaohongshu?.daily_creator_budget);
+    setVal("cfgXhsTaskInterval", cfg.sources?.xiaohongshu?.task_interval_seconds);
+    const douyinEnabled = document.getElementById("cfgDouyinEnabled");
+    if (douyinEnabled) douyinEnabled.checked = cfg.sources?.douyin?.enabled === true;
+    setVal("cfgDouyinCookieEnv", cfg.sources?.douyin?.cookie_env);
+    setVal("cfgDouyinDailySearchBudget", cfg.sources?.douyin?.daily_search_budget);
+    setVal("cfgDouyinDailyHotBudget", cfg.sources?.douyin?.daily_hot_budget);
+    setVal("cfgDouyinDailyFeedBudget", cfg.sources?.douyin?.daily_feed_budget);
+    setVal("cfgDouyinRequestInterval", cfg.sources?.douyin?.request_interval_seconds);
 
     // General
     const lang = document.getElementById("cfgLanguage");
     if (lang) lang.value = cfg.language || "zh";
+    setVal("cfgDataDir", cfg.data_dir);
+    setVal("cfgStorageDbPath", cfg.storage?.db_path);
 
     // Scheduler
     const schedEnabled = document.getElementById("cfgSchedulerEnabled");
     if (schedEnabled) schedEnabled.checked = cfg.scheduler?.enabled !== false;
     setVal("cfgDiscoveryCron", cfg.scheduler?.discovery_cron);
     setVal("cfgPoolTarget", cfg.scheduler?.pool_target_count);
+    setVal("cfgAccountSyncInterval", cfg.scheduler?.account_sync_interval_hours);
     const autoUpdate = document.getElementById("cfgAutoUpdate");
-    if (autoUpdate) autoUpdate.checked = cfg.scheduler?.auto_update_enabled !== false;
+    if (autoUpdate) autoUpdate.checked = cfg.scheduler?.auto_update_enabled === true;
+    setVal("cfgAutoUpdateInterval", cfg.scheduler?.auto_update_check_interval_hours);
+    setVal("cfgPoolShareBilibili", cfg.scheduler?.pool_source_shares?.bilibili);
+    setVal("cfgPoolShareXhs", cfg.scheduler?.pool_source_shares?.xiaohongshu);
+    setVal("cfgPoolShareDouyin", cfg.scheduler?.pool_source_shares?.douyin);
+    setVal("cfgSpeculationInterval", cfg.scheduler?.speculation_interval_minutes);
+    setVal("cfgSpeculationTtl", cfg.scheduler?.speculation_ttl_days);
+    setVal("cfgSpeculationCooldown", cfg.scheduler?.speculation_cooldown_days);
+    setVal("cfgSpeculationThreshold", cfg.scheduler?.speculation_confirmation_threshold);
+    setVal("cfgSpeculationMaxActive", cfg.scheduler?.speculation_max_active);
+    setVal("cfgSpeculationMaxPrimary", cfg.scheduler?.speculation_max_primary_interests);
+    setVal("cfgSpeculationMaxSecondary", cfg.scheduler?.speculation_max_secondary_interests);
 
     // Logging
     const logLevel = document.getElementById("cfgLogLevel");
     if (logLevel) logLevel.value = cfg.logging?.level || "INFO";
+    const logFileLevel = document.getElementById("cfgLogFileLevel");
+    if (logFileLevel) logFileLevel.value = cfg.logging?.file_level || "DEBUG";
+    setVal("cfgLogDirectory", cfg.logging?.directory);
+    setVal("cfgLogFilename", cfg.logging?.filename);
+    setVal("cfgLogMaxFileSize", cfg.logging?.max_file_size_mb);
+    setVal("cfgLogBackupCount", cfg.logging?.backup_count);
+    setVal("cfgLogAggregateBudget", cfg.logging?.aggregate_budget_mb);
+    setVal("cfgLogUnmanagedTruncate", cfg.logging?.unmanaged_truncate_mb);
+    setVal("cfgLogUnmanagedMaxAge", cfg.logging?.unmanaged_max_age_days);
 
     renderIssues(cfg.issues);
   }
@@ -3544,9 +3600,26 @@ function bindSettings() {
       const el = document.getElementById(id);
       return el ? el.value : "";
     };
+    const getInt = (id, fallback) => {
+      const raw = getVal(id);
+      if (raw === "") return fallback;
+      const parsed = parseInt(raw, 10);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const getFloat = (id, fallback) => {
+      const raw = getVal(id);
+      if (raw === "") return fallback;
+      const parsed = parseFloat(raw);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const checked = (id, fallback = false) => {
+      const el = document.getElementById(id);
+      return el ? el.checked : fallback;
+    };
 
     return {
       language: getVal("cfgLanguage"),
+      data_dir: getVal("cfgDataDir"),
       llm: {
         default_provider: providerSelect.value,
         openai: {
@@ -3566,6 +3639,7 @@ function bindSettings() {
           api_key: getVal("cfgDeepseekKey"),
           model: getVal("cfgDeepseekModel"),
           base_url: getVal("cfgDeepseekBaseUrl"),
+          reasoning_effort: getVal("cfgDeepseekReasoning"),
         },
         ollama: {
           model: getVal("cfgOllamaModel"),
@@ -3575,6 +3649,8 @@ function bindSettings() {
           api_key: getVal("cfgOpenrouterKey"),
           model: getVal("cfgOpenrouterModel"),
           base_url: getVal("cfgOpenrouterBaseUrl"),
+          http_referer: getVal("cfgOpenrouterReferer"),
+          x_title: getVal("cfgOpenrouterTitle"),
         },
         openai_compatible: {
           api_key: getVal("cfgOpenaiCompatibleKey"),
@@ -3586,21 +3662,84 @@ function bindSettings() {
           api_key: getVal("cfgEmbeddingApiKey"),
           base_url: getVal("cfgEmbeddingBaseUrl"),
           model: getVal("cfgEmbeddingModel"),
-          similarity_threshold: parseFloat(getVal("cfgEmbeddingSimilarity")) || 0.82,
+          similarity_threshold: getFloat("cfgEmbeddingSimilarity", 0.82),
+        },
+        soul: {
+          provider: getVal("cfgModuleSoulProvider"),
+          model: getVal("cfgModuleSoulModel"),
+        },
+        discovery: {
+          provider: getVal("cfgModuleDiscoveryProvider"),
+          model: getVal("cfgModuleDiscoveryModel"),
+        },
+        recommendation: {
+          provider: getVal("cfgModuleRecommendationProvider"),
+          model: getVal("cfgModuleRecommendationModel"),
+        },
+        evaluation: {
+          provider: getVal("cfgModuleEvaluationProvider"),
+          model: getVal("cfgModuleEvaluationModel"),
         },
       },
       bilibili: {
         auth_method: getVal("cfgBiliAuth"),
         cookie: getVal("cfgBiliCookie"),
+        browser_executable: getVal("cfgBiliBrowserExecutable"),
+        browser_headed: checked("cfgBiliBrowserHeaded"),
+      },
+      sources: {
+        browser: {
+          cdp_url: getVal("cfgSourcesBrowserCdp"),
+          headed: checked("cfgSourcesBrowserHeaded"),
+        },
+        xiaohongshu: {
+          daily_search_budget: getInt("cfgXhsDailySearchBudget", 30),
+          daily_creator_budget: getInt("cfgXhsDailyCreatorBudget", 10),
+          task_interval_seconds: getInt("cfgXhsTaskInterval", 45),
+        },
+        douyin: {
+          enabled: checked("cfgDouyinEnabled"),
+          mode: "direct",
+          cookie_env: getVal("cfgDouyinCookieEnv"),
+          daily_search_budget: getInt("cfgDouyinDailySearchBudget", 30),
+          daily_hot_budget: getInt("cfgDouyinDailyHotBudget", 5),
+          daily_feed_budget: getInt("cfgDouyinDailyFeedBudget", 30),
+          request_interval_seconds: getInt("cfgDouyinRequestInterval", 2),
+        },
       },
       scheduler: {
-        enabled: document.getElementById("cfgSchedulerEnabled")?.checked ?? true,
+        enabled: checked("cfgSchedulerEnabled", true),
         discovery_cron: getVal("cfgDiscoveryCron"),
-        pool_target_count: parseInt(getVal("cfgPoolTarget"), 10) || 600,
-        auto_update_enabled: document.getElementById("cfgAutoUpdate")?.checked ?? true,
+        pool_target_count: getInt("cfgPoolTarget", 600),
+        account_sync_interval_hours: getInt("cfgAccountSyncInterval", 6),
+        pool_source_shares: {
+          bilibili: getInt("cfgPoolShareBilibili", 8),
+          xiaohongshu: getInt("cfgPoolShareXhs", 1),
+          douyin: getInt("cfgPoolShareDouyin", 1),
+        },
+        speculation_interval_minutes: getInt("cfgSpeculationInterval", 10),
+        speculation_ttl_days: getInt("cfgSpeculationTtl", 3),
+        speculation_cooldown_days: getInt("cfgSpeculationCooldown", 7),
+        speculation_confirmation_threshold: getInt("cfgSpeculationThreshold", 3),
+        speculation_max_active: getInt("cfgSpeculationMaxActive", 5),
+        speculation_max_primary_interests: getInt("cfgSpeculationMaxPrimary", 15),
+        speculation_max_secondary_interests: getInt("cfgSpeculationMaxSecondary", 60),
+        auto_update_enabled: checked("cfgAutoUpdate"),
+        auto_update_check_interval_hours: getInt("cfgAutoUpdateInterval", 6),
+      },
+      storage: {
+        db_path: getVal("cfgStorageDbPath"),
       },
       logging: {
         level: getVal("cfgLogLevel"),
+        file_level: getVal("cfgLogFileLevel"),
+        directory: getVal("cfgLogDirectory"),
+        filename: getVal("cfgLogFilename"),
+        max_file_size_mb: getInt("cfgLogMaxFileSize", 100),
+        backup_count: getInt("cfgLogBackupCount", 1),
+        aggregate_budget_mb: getInt("cfgLogAggregateBudget", 500),
+        unmanaged_truncate_mb: getInt("cfgLogUnmanagedTruncate", 200),
+        unmanaged_max_age_days: getInt("cfgLogUnmanagedMaxAge", 30),
       },
     };
   }

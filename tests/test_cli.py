@@ -1810,6 +1810,7 @@ def test_init_guides_missing_runtime_config_interactively(
     #   5. "n" — skip module overrides
     #   6. "n" — skip xhs inclusion
     #   7. "n" — skip douyin inclusion
+    #   8. "n" — skip youtube inclusion
     wizard_input = (
         "\n".join(
             [
@@ -1817,6 +1818,7 @@ def test_init_guides_missing_runtime_config_interactively(
                 "gemini-key",
                 "",
                 "1",
+                "n",
                 "n",
                 "n",
                 "n",
@@ -1887,9 +1889,9 @@ def test_init_guides_missing_auth_interactively(
     # (1=install extension and skip / 2=paste cookie now). To keep this
     # test exercising the manual-paste path, send "2" first.
     # v0.3.27+: a y/n xhs prompt fires before data fetch; v0.3.64+
-    # then asks for douyin. Send "n" to both so this test stays
+    # then asks for douyin; v0.3.69+ adds youtube. Send "n" to all so this test stays
     # focused on the cookie-prompt path.
-    result = runner.invoke(app, ["init"], input="2\nSESSDATA=valid\nn\nn\n")
+    result = runner.invoke(app, ["init"], input="2\nSESSDATA=valid\nn\nn\nn\n")
 
     assert result.exit_code == 1
     assert fake_auth.saved_cookie == "SESSDATA=valid"
@@ -2592,6 +2594,87 @@ def test_ask_xhs_inclusion_env_var_returns_false(
     monkeypatch.setenv("OPENBILICLAW_NO_XHS", "1")
     monkeypatch.setattr(cli_module, "_is_interactive_terminal", lambda: True)
     assert _ask_xhs_inclusion() is False
+
+
+def test_init_youtube_env_skip_overrides_yes_flag(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    """OPENBILICLAW_NO_YOUTUBE=1 must win even when scripts pass --yes-youtube."""
+
+    class FakeDatabase:
+        def max_llm_usage_id(self) -> None:
+            return None
+
+        def count_pool_candidates(self) -> int:
+            return 0
+
+    class FakeBilibiliClient:
+        async def get_user_history(self, max_items: int = 100) -> list[dict[str, object]]:
+            return [{"title": "B 站历史", "author_name": "UP 主"}]
+
+        async def get_all_favorites(self, **_: object) -> list[object]:
+            return []
+
+        async def get_following(self, **_: object) -> list[object]:
+            return []
+
+    class FakeMemoryManager:
+        async def propagate_event(self, event: dict[str, object]) -> None:
+            return None
+
+        def get_layer(self, name: str) -> _FakeMemoryLayer:
+            assert name == "preference"
+            return _FakeMemoryLayer()
+
+    class FakeSoulEngine:
+        async def analyze_events(
+            self, events: list[dict[str, object]], event_chunk_size: int = 0
+        ) -> None:
+            return None
+
+        async def build_initial_profile(self, history: list[dict[str, object]]) -> SoulProfile:
+            return SoulProfile(
+                personality_portrait="稳定用户画像" * 30,
+                core_traits=["理性"],
+                preferences=PreferenceLayer(),
+            )
+
+    async def passthrough_progress(coro: object, **_: object) -> object:
+        return await coro  # type: ignore[misc]
+
+    async def fake_discovery_backfill(*_: object, **__: object) -> int:
+        return 0
+
+    enqueue_calls: list[bool] = []
+
+    def fake_enqueue_youtube() -> str | None:
+        enqueue_calls.append(True)
+        return "fake-yt-task-id"
+
+    monkeypatch.setattr(cli_module, "_prepare_init_runtime", lambda: None)
+    monkeypatch.setattr(cli_module, "_get_runtime_database", lambda: FakeDatabase())
+    monkeypatch.setattr(cli_module, "_build_bilibili_client", lambda: FakeBilibiliClient())
+    monkeypatch.setattr(cli_module, "_build_memory_manager", lambda: FakeMemoryManager())
+    monkeypatch.setattr(cli_module, "_build_soul_engine", lambda: FakeSoulEngine())
+    monkeypatch.setattr(cli_module, "_run_with_progress", passthrough_progress)
+    monkeypatch.setattr(cli_module, "_run_init_discovery_backfill_async", fake_discovery_backfill)
+    monkeypatch.setattr(
+        cli_module,
+        "_build_draft_profile_for_discover",
+        lambda memory: SoulProfile(preferences=PreferenceLayer()),
+    )
+    monkeypatch.setattr(cli_module, "_notify_running_server_init_completed", lambda: None)
+    monkeypatch.setattr(cli_module, "_enqueue_yt_bootstrap_task", fake_enqueue_youtube)
+
+    result = runner.invoke(
+        app,
+        ["init", "--no-xhs", "--no-douyin", "--yes-youtube"],
+        env={"OPENBILICLAW_NO_YOUTUBE": "1"},
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert enqueue_calls == []
+    assert "OPENBILICLAW_NO_YOUTUBE=1" in result.stdout
 
 
 def test_init_no_xhs_flag_skips_enqueue(

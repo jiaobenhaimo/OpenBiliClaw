@@ -4,10 +4,10 @@
 
 OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
-1. **用户交互层** — Chrome 浏览器插件（B 站 + 小红书 + 抖音页面行为采集 · 推荐展示 · 对话交互 · xhs/dy 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）
+1. **用户交互层** — Chrome 浏览器插件（B 站 + 小红书 + 抖音 + YouTube 页面行为采集 · 推荐展示 · 对话交互 · xhs/dy/yt 任务调度 / 初始化画像导入 · B 站 / 抖音 Cookie 自动同步）
 2. **外部集成层** — OpenClaw adapter / skill wrappers / 本地 API 等对外接入边界
 3. **Agent 核心层** — 自研编排器 + Soul Engine + Discovery Engine + Recommendation Engine + Skill System
-4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / 通用 Web 源
+4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / YouTube / 通用 Web 源
 5. **多层网状记忆存储** — Core / Episodic / Semantic / Working Memory（SQLite + 向量索引 + JSON）
 
 详见 [项目 Spec](spec.md) 中的架构图。
@@ -47,6 +47,8 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `bilibili_adapter` — B 站 API 直连（WBI 签名、v_voucher 自动恢复）
 - `xiaohongshu_adapter` — 小红书扩展代理（被动收集 + 关键词搜索 + 创作者订阅 + `bootstrap_profile` 初始化画像任务，零后端爬取）
 - `dy_tasks` — 抖音扩展任务队列（`bootstrap_profile` 初始化画像任务；发布 / 收藏 / 点赞 / 关注信号由扩展以用户浏览器登录态抓取；`search` 任务用于插件签名搜索，回传 `dy_search` 候选；`hot` 任务用于 `/hot/{sentence_id}` → related API，回传 `dy_hot` 候选；`feed` 任务用于首页 `/aweme/v1/web/tab/feed/`，回传 `dy_feed` 候选；三者分别作为 `dy-plugin-search` / `dy-plugin-hot-related` / `dy-plugin-feed` discovery 来源）
+- `yt_tasks` — YouTube 扩展任务队列（`bootstrap_profile` 初始化画像任务；观看历史 / 订阅 / 点赞由扩展以用户浏览器登录态读取 DOM 并分批回传）
+- `youtube.takeout` — Google Takeout 离线导入解析器，将 YouTube 观看历史 / 订阅 / 点赞转换为统一事件
 - `web_adapter` — 通用 Web（Playwright CDP + LLM 内容抽取）
 - `SourceRecipe` — 源任务持久化与分发
 
@@ -68,13 +70,14 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 
 ### Init 多源画像导入
 
-`openbiliclaw init` 的首轮信号现在由三条路径合流：
+`openbiliclaw init` 的首轮信号现在由四条路径合流：
 
 1. B 站 API 直连拉取观看历史、收藏夹和关注列表。
 2. 后端在 `xhs_tasks` 表入队 `bootstrap_profile`，由浏览器插件在用户已登录的小红书页面中先打开 `/explore` 定位当前用户 profile。滚动任务会以前台 tab 触发页面内“我”入口的 anchor click，background 只等待同一 tab 完成导航；只有找不到可点击入口时才回退到直接导航。到 profile 后，插件解析 profile state / DOM 中的 `saved / liked` notes 和页面显式暴露的 `xhs_history` notes，回写 `/api/sources/xhs/task-result`。当任务显式传入 `max_scroll_rounds` 时，插件会在 profile tab 内优先探测 feed / waterfall / masonry 滚动容器做有限滚动，并先用 `status="partial"` 分批回传新增 notes，最终再用 `status="ok"` 完成任务；`scroll_wait_ms` 和 `max_stagnant_scroll_rounds` 也由任务 payload 控制，并由插件端裁剪到安全范围。
 3. 后端在 `dy_tasks` 表入队 `bootstrap_profile`，由浏览器插件在用户已登录的抖音页面中依次访问发布 / 收藏 / 点赞 / 关注 scope。content script 结合 DOM 解析、MAIN-world fetch tap 和 API harvester 采集条目，按 scope 以 `status="partial"` 分批回写 `/api/sources/dy/task-result`，最终以 `ok` 完成任务。Douyin 默认需要显式 `--yes-douyin` 才进入 init；非交互式终端默认跳过，避免盲目触发风控或空 200 响应。
+4. 后端在抖音任务完成后再在 `yt_tasks` 表入队 `bootstrap_profile`，由浏览器插件在用户已登录的 YouTube 页面中依次访问 `/feed/history`、`/feed/channels`、`/playlist?list=LL`。YouTube 与抖音都会打开前台 tab，串行入队可避免多个平台同时抢浏览器焦点。YouTube 默认需要交互式确认或显式 `--yes-youtube`；非交互式终端默认跳过，`OPENBILICLAW_NO_YOUTUBE=1` 会强制跳过。
 
-回写后的跨源对象会转成普通事件层 payload：小红书 `saved -> favorite`、`liked -> like`、`xhs_history -> view`；抖音 `dy_post -> view`、`dy_collect -> favorite`、`dy_like -> like`、`dy_follow -> follow`。事件都带 `metadata.source_platform`。CLI 只短暂等待任务结果；插件未连接、未登录或页面不暴露对应数据时，初始化继续使用已有数据完成。profile 已经初始化后，后续 bootstrap task-result 新增事件还会转成 `ProfileSignal` 进入 `ProfileUpdatePipeline`，补齐跨源增量画像更新；首次 init 期间仍由 CLI 汇总事件统一生成画像，避免重复学习。
+回写后的跨源对象会转成普通事件层 payload：小红书 `saved -> favorite`、`liked -> like`、`xhs_history -> view`；抖音 `dy_post -> view`、`dy_collect -> favorite`、`dy_like -> like`、`dy_follow -> follow`；YouTube `yt_history -> view`、`yt_subscriptions -> follow`、`yt_likes -> like`。事件都带 `metadata.source_platform`。CLI 只短暂等待任务结果；插件未连接、未登录或页面不暴露对应数据时，初始化继续使用已有数据完成。profile 已经初始化后，后续 bootstrap task-result 新增事件还会转成 `ProfileSignal` 进入 `ProfileUpdatePipeline`，补齐跨源增量画像更新；首次 init 期间仍由 CLI 汇总事件统一生成画像，避免重复学习。
 
 ### Douyin Direct Discovery
 

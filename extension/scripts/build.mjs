@@ -33,6 +33,10 @@ const entrypoints = [
     entry: resolve(root, "src/main/dy-fetch-tap.ts"),
     outfile: resolve(root, "dist/main/dy-fetch-tap.js"),
   },
+  {
+    entry: resolve(root, "src/content/youtube.ts"),
+    outfile: resolve(root, "dist/content/youtube.js"),
+  },
 ];
 
 for (const target of entrypoints) {
