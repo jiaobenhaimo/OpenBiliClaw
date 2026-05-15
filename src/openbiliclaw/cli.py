@@ -3382,6 +3382,22 @@ def init(
     else:
         include_xhs = _ask_xhs_inclusion()
 
+    # Persist the XHS decision into config so the long-running runtime
+    # doesn't keep dispatching extension search tasks and burning
+    # daily_search_budget when the user has opted out. The init prompt
+    # only controls bootstrap; without persisting enabled=False, the XHS
+    # producer would still tick every 60s against an empty deficit.
+    try:
+        from openbiliclaw.config import load_config, save_config
+
+        cfg_for_persist = load_config()
+        if bool(getattr(cfg_for_persist.sources.xiaohongshu, "enabled", True)) != include_xhs:
+            cfg_for_persist.sources.xiaohongshu.enabled = include_xhs
+            save_config(cfg_for_persist)
+    except Exception:
+        # Persisting the flag is best-effort; init proceeds either way.
+        pass
+
     # Same resolution order for the Douyin opt-in. Default is
     # off-in-non-interactive (see _ask_dy_inclusion docstring) which
     # diverges from the XHS auto-on default — Douyin's risk control

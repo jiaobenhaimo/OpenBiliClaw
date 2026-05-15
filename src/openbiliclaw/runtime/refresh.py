@@ -25,7 +25,7 @@ _DEFAULT_PLATFORM_SOURCE_SHARES: dict[str, int] = {
     "xiaohongshu": 1,
     "douyin": 1,
 }
-_PLATFORM_SOURCE_ORDER = ("bilibili", "xiaohongshu", "douyin")
+_PLATFORM_SOURCE_ORDER = ("bilibili", "xiaohongshu", "douyin", "youtube")
 _BILIBILI_DISCOVERY_SOURCES = ("search", "related_chain", "trending", "explore")
 
 
@@ -676,6 +676,7 @@ class ContinuousRefreshController:
         """
         with suppress(Exception):
             await self.prepare_delight_candidates()
+        self._warn_on_stranded_source_shares()
         tasks = [
             asyncio.create_task(self._loop_refresh()),
             asyncio.create_task(self._loop_pool_precompute()),
@@ -1433,6 +1434,45 @@ class ContinuousRefreshController:
                 return int(source_counts.get("bilibili", 0))
             return sum(int(source_counts.get(source, 0)) for source in _BILIBILI_DISCOVERY_SOURCES)
         return int(source_counts.get(source_family, 0))
+
+    def _warn_on_stranded_source_shares(self) -> None:
+        """Warn once at startup if any configured share has no producer.
+
+        ``runtime_context._pool_source_shares_from_config`` already strips
+        sources whose ``enabled`` flag is False, so a stranded share here
+        means the user kept the source on but the matching producer is
+        not wired (missing build_*_producer, scheduler.enabled=False, …).
+        Without this warning the pool sits below ``pool_target_count``
+        forever and the missing slack is invisible.
+        """
+        shares = self._normalized_pool_source_shares()
+        targets = self._source_target_counts()
+        stranded: list[str] = []
+        for source, target in targets.items():
+            if target <= 0:
+                continue
+            if source == "bilibili":
+                continue  # always served by the four discovery strategies
+            if source == "xiaohongshu" and self.xhs_producer is None:
+                stranded.append("xiaohongshu")
+            elif source == "douyin" and self.douyin_producer is None:
+                stranded.append("douyin")
+            elif source == "youtube":
+                # YouTube has no producer loop — its share acts only as a
+                # cap on incidental yt items the discovery strategies pull
+                # in. Silent skip.
+                continue
+            elif source not in {"bilibili", "xiaohongshu", "douyin", "youtube"}:
+                # Unknown source family with an explicit share.
+                stranded.append(source)
+        if stranded:
+            logger.warning(
+                "pool_source_shares allocate quota to sources without an "
+                "active producer (will leave pool under target): sources=%s "
+                "shares=%s",
+                stranded,
+                {s: shares.get(s) for s in stranded},
+            )
 
     def _normalized_pool_source_shares(self) -> dict[str, int]:
         raw = self.pool_source_shares or _DEFAULT_PLATFORM_SOURCE_SHARES

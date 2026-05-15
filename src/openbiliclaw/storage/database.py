@@ -40,6 +40,8 @@ _DOUYIN_SOURCE_FAMILY = "douyin"
 _DOUYIN_SOURCE_PREFIXES = ("dy-", "dy_", "douyin")
 _BILIBILI_SOURCE_FAMILY = "bilibili"
 _BILIBILI_SOURCE_KEYS = ("search", "related_chain", "trending", "explore")
+_YOUTUBE_SOURCE_FAMILY = "youtube"
+_YOUTUBE_SOURCE_PREFIXES = ("yt-", "yt_", "youtube")
 _EXPLORE_HIGH_RISK_CLUSTERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "manufacturing",
@@ -172,6 +174,10 @@ def _pool_source_family(source: object, source_platform: object = "") -> str:
         return _XHS_SOURCE_FAMILY
     if platform in {_DOUYIN_SOURCE_FAMILY, "dy"} or source_key.startswith(_DOUYIN_SOURCE_PREFIXES):
         return _DOUYIN_SOURCE_FAMILY
+    if platform in {_YOUTUBE_SOURCE_FAMILY, "yt"} or source_key.startswith(
+        _YOUTUBE_SOURCE_PREFIXES
+    ):
+        return _YOUTUBE_SOURCE_FAMILY
     if platform in {_BILIBILI_SOURCE_FAMILY, "bili"} or source_key in _BILIBILI_SOURCE_KEYS:
         return _BILIBILI_SOURCE_FAMILY
     return raw_source or "unknown"

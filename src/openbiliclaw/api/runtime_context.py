@@ -42,8 +42,27 @@ def _pool_source_shares_from_config(config: Any) -> dict[str, int]:
     scheduler = getattr(config, "scheduler", None)
     shares = getattr(scheduler, "pool_source_shares", None)
     if not isinstance(shares, dict):
-        return dict(_DEFAULT_POOL_SOURCE_SHARES)
-    return dict(shares)
+        shares = dict(_DEFAULT_POOL_SOURCE_SHARES)
+    else:
+        shares = dict(shares)
+
+    # Drop shares for sources the user has disabled.  Otherwise the quota
+    # is stranded — the source's producer is None / short-circuits so the
+    # deficit is never filled, and bilibili is held back from absorbing
+    # the slack.  See refresh.py ``_source_target_counts`` for the
+    # downstream share-to-count math.
+    sources_cfg = getattr(config, "sources", None)
+    if sources_cfg is not None:
+        xhs_cfg = getattr(sources_cfg, "xiaohongshu", None)
+        if xhs_cfg is not None and not bool(getattr(xhs_cfg, "enabled", True)):
+            shares.pop("xiaohongshu", None)
+        dy_cfg = getattr(sources_cfg, "douyin", None)
+        if dy_cfg is not None and not bool(getattr(dy_cfg, "enabled", False)):
+            shares.pop("douyin", None)
+        yt_cfg = getattr(sources_cfg, "youtube", None)
+        if yt_cfg is not None and not bool(getattr(yt_cfg, "enabled", False)):
+            shares.pop("youtube", None)
+    return shares
 
 
 @dataclass
@@ -292,11 +311,14 @@ class RuntimeContext:
 
             xhs_cfg = getattr(new_config.sources, "xiaohongshu", None)
             sched_cfg = getattr(new_config, "scheduler", None)
+            xhs_enabled = bool(getattr(xhs_cfg, "enabled", True)) and bool(
+                getattr(sched_cfg, "enabled", True)
+            )
             new_xhs_producer = XhsTaskProducer(
                 task_queue=XhsTaskQueue(self.database),
                 soul_engine=new_soul_engine,
                 llm_service=new_llm_service,
-                enabled=bool(getattr(sched_cfg, "enabled", True)),
+                enabled=xhs_enabled,
                 daily_budget=int(getattr(xhs_cfg, "daily_search_budget", 30)),
             )
             from openbiliclaw.runtime.douyin_producer import build_douyin_discovery_producer
