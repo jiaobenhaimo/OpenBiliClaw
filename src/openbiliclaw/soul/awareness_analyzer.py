@@ -29,7 +29,18 @@ _AWARENESS_WRAPPED_ARRAY_KEYS = (
     "output",
     "list",
     "array",
+    # MiMo / reasoning-model variants seen in the wild (v0.3.x resilience pass).
+    "observations",
+    "recent_observations",
+    "latest",
+    "latest_observations",
 )
+
+# The full schema of a single awareness note, used by `_looks_like_single_note`
+# below. The runtime check only requires `observation` (the only field whose
+# absence makes the note worthless); the other keys are recovered with sensible
+# defaults in `_build_note`.
+_NOTE_SHAPE_KEYS = frozenset({"date", "observation", "trend", "emotion_guess"})
 
 
 class SupportsCoreMemoryTask(Protocol):
@@ -119,6 +130,14 @@ class AwarenessAnalyzer:
         return payload
 
     @staticmethod
+    def _looks_like_single_note(value: object) -> bool:
+        # Only `observation` is load-bearing — `date`, `trend`, `emotion_guess`
+        # are recovered with defaults by `_build_note`. Reasoning models that
+        # return a bare singular note dict (no array wrapper) are still
+        # recoverable as long as `observation` is present.
+        return isinstance(value, dict) and "observation" in value
+
+    @staticmethod
     def _coerce_note_list(value: object) -> list[object] | None:
         if isinstance(value, list):
             return list(value)
@@ -127,6 +146,10 @@ class AwarenessAnalyzer:
                 nested = value.get(key)
                 if isinstance(nested, list):
                     return list(nested)
+                if AwarenessAnalyzer._looks_like_single_note(nested):
+                    return [nested]
+            if AwarenessAnalyzer._looks_like_single_note(value):
+                return [value]
         return None
 
     @staticmethod
