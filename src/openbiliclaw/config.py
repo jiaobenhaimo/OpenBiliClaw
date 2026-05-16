@@ -306,10 +306,10 @@ class SoulPreferenceConfig:
 
     ``satisfaction_filter_enabled``: v0.3.x event-satisfaction signal —
     when True, the preference analyzer ignores events the storage
-    classifier marked as quick-exit / explicit-negative. Default False
-    so existing installs keep current behavior until the operator flips
-    the flag after observing inferred_satisfaction distributions for a
-    release cycle.
+    classifier marked as quick-exit / explicit-negative, while retaining
+    neutral context. Default False so existing installs keep current
+    behavior until the operator flips the flag after observing
+    inferred_satisfaction distributions for a release cycle.
     """
 
     satisfaction_filter_enabled: bool = False
@@ -512,9 +512,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
 
     soul_raw = raw.get("soul", {}) if isinstance(raw.get("soul"), dict) else {}
     soul_preference_raw = (
-        soul_raw.get("preference", {})
-        if isinstance(soul_raw.get("preference"), dict)
-        else {}
+        soul_raw.get("preference", {}) if isinstance(soul_raw.get("preference"), dict) else {}
     )
     soul = SoulConfig(
         preference=SoulPreferenceConfig(
@@ -821,9 +819,10 @@ def _render_config_toml(config: Config) -> str:
             "[soul.preference]",
             "# v0.3.x event-satisfaction signal. When true, preference",
             "# analysis ignores events the storage classifier marked as",
-            "# quick_exit or explicit_negative. Default false; flip after",
+            "# quick_exit or explicit_negative; neutral rows are retained.",
+            "# Default false; flip after",
             "# one release cycle of observing inferred_satisfaction",
-            "# distributions in `openbiliclaw cost --by caller`.",
+            "# distributions in the `events` table.",
             "satisfaction_filter_enabled = "
             f"{_toml_bool(config.soul.preference.satisfaction_filter_enabled)}",
             "",

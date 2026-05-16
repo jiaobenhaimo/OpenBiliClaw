@@ -7,20 +7,20 @@ Reuses the core PromptOptimizer from optimizer.py.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openbiliclaw.eval.discovery_evaluator import (
     DISCOVERY_FIELD_TO_PARAM,
-    DISCOVERY_FIELD_TO_PIPELINE,
     DimensionScore,
 )
 from openbiliclaw.eval.optimizer import (
     ContinuousParam,
-    ParamChange,
     PromptOptimizer,
     PromptParam,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _SRC = "src/openbiliclaw"
 
@@ -101,13 +101,15 @@ def dimension_scores_to_field_scores(
         parts = dim.dimension.split(".", 1)
         layer = parts[0] if len(parts) > 1 else ""
         field_name = parts[1] if len(parts) > 1 else parts[0]
-        results.append(FieldScore(
-            layer=layer,
-            field=field_name,
-            score=dim.score,
-            expected=None,
-            predicted=None,
-            deviation=dim.details or f"score={dim.score:.2f}",
-            severity=dim.severity,
-        ))
+        results.append(
+            FieldScore(
+                layer=layer,
+                field=field_name,
+                score=dim.score,
+                expected=None,
+                predicted=None,
+                deviation=dim.details or f"score={dim.score:.2f}",
+                severity=dim.severity,
+            )
+        )
     return results

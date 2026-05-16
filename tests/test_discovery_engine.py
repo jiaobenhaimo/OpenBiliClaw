@@ -1632,7 +1632,10 @@ def _negative_row(idx: int, title: str) -> dict[str, object]:
 class _RecordingBatchLLMService:
     """Captures the user_input sent to the batch evaluator for assertions."""
 
-    def __init__(self, response: str = '[{"score": 0.7, "reason": "ok", "style_key": "deep_dive"}]') -> None:
+    def __init__(
+        self,
+        response: str = '[{"score": 0.7, "reason": "ok", "style_key": "deep_dive"}]',
+    ) -> None:
         self.response = response
         self.user_inputs: list[str] = []
 
@@ -1655,9 +1658,7 @@ class _RecordingBatchLLMService:
 async def test_evaluate_batch_includes_negative_exemplars_in_user_prompt() -> None:
     """When the event store has negative rows, the eval batch user
     message must include the <negative_examples> block."""
-    db = _StubNegativeExemplarsDatabase(
-        rows=[_negative_row(1, "震惊！我刚发现的神器")]
-    )
+    db = _StubNegativeExemplarsDatabase(rows=[_negative_row(1, "震惊！我刚发现的神器")])
     llm = _RecordingBatchLLMService()
     engine = ContentDiscoveryEngine(llm_service=llm, database=db)
     batch = [DiscoveredContent(bvid="BVx", title="候选", up_name="u", source_strategy="search")]
@@ -1707,9 +1708,7 @@ async def test_evaluate_batch_runs_when_exemplar_helper_raises() -> None:
 @pytest.mark.asyncio
 async def test_evaluate_batch_caches_exemplars_across_back_to_back_calls() -> None:
     """Two batches with the same latest_event_id should share one query."""
-    db = _StubNegativeExemplarsDatabase(
-        rows=[_negative_row(1, "震惊！我刚发现的神器")]
-    )
+    db = _StubNegativeExemplarsDatabase(rows=[_negative_row(1, "震惊！我刚发现的神器")])
     llm = _RecordingBatchLLMService()
     engine = ContentDiscoveryEngine(llm_service=llm, database=db)
     batch = [DiscoveredContent(bvid="BVx", title="候选", up_name="u", source_strategy="search")]
@@ -1724,9 +1723,7 @@ async def test_evaluate_batch_caches_exemplars_across_back_to_back_calls() -> No
 @pytest.mark.asyncio
 async def test_evaluate_batch_refreshes_exemplars_on_new_event_id() -> None:
     """A new negative classified row should bust the cache on the next batch."""
-    db = _StubNegativeExemplarsDatabase(
-        rows=[_negative_row(1, "震惊！我刚发现的神器")]
-    )
+    db = _StubNegativeExemplarsDatabase(rows=[_negative_row(1, "震惊！我刚发现的神器")])
     llm = _RecordingBatchLLMService()
     engine = ContentDiscoveryEngine(llm_service=llm, database=db)
     batch = [DiscoveredContent(bvid="BVx", title="候选", up_name="u", source_strategy="search")]
@@ -1736,3 +1733,24 @@ async def test_evaluate_batch_refreshes_exemplars_on_new_event_id() -> None:
     await engine._evaluate_batch(batch, _build_profile())
 
     assert db.query_calls >= 2, "new event id must invalidate the cache"
+
+
+@pytest.mark.asyncio
+async def test_eval_cache_rechecks_content_when_negative_exemplars_change() -> None:
+    """Cached relevance scores must not bypass newly available negative anchors."""
+    db = _StubNegativeExemplarsDatabase(rows=[])
+    llm = _RecordingBatchLLMService()
+    engine = ContentDiscoveryEngine(llm_service=llm, database=db)
+    profile = _build_profile()
+    content = DiscoveredContent(bvid="BVx", title="候选", up_name="u", source_strategy="search")
+
+    await engine.evaluate_content_batch([content], profile)
+    assert len(llm.user_inputs) == 1
+    assert "<negative_examples>" not in llm.user_inputs[0]
+
+    db._rows = [_negative_row(1, "震惊！我刚发现的神器")]  # noqa: SLF001
+    db.bump_latest_event_id()
+    await engine.evaluate_content_batch([content], profile)
+
+    assert len(llm.user_inputs) == 2, "negative-anchor revision must invalidate eval cache"
+    assert "<negative_examples>" in llm.user_inputs[1]

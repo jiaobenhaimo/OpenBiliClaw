@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +72,7 @@ class BackgroundTaskRegistry:
                     asyncio.gather(*tasks, return_exceptions=True),
                     timeout=grace_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "%d background task(s) did not exit within %.1fs of cancel",
                     sum(1 for t in tasks if not t.done()),

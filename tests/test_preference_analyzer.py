@@ -329,9 +329,7 @@ async def test_analyze_events_passes_unfiltered_when_satisfaction_flag_off() -> 
     verbatim in the LLM user prompt, including quick-exit / negative rows."""
     from openbiliclaw.soul.preference_analyzer import PreferenceAnalyzer
 
-    service = FakeStructuredService(
-        LLMResponse(content="{}", provider="openai")
-    )
+    service = FakeStructuredService(LLMResponse(content="{}", provider="openai"))
     analyzer = PreferenceAnalyzer(service, satisfaction_filter_enabled=False)
     events = [
         {"event_type": "click", "title": "好内容", "inferred_satisfaction": "positive"},
@@ -345,20 +343,20 @@ async def test_analyze_events_passes_unfiltered_when_satisfaction_flag_off() -> 
 
 @pytest.mark.asyncio
 async def test_analyze_events_drops_negative_events_when_satisfaction_flag_on() -> None:
-    """Flag-on path drops quick-exit / explicit-negative events from the prompt."""
+    """Flag-on path drops negative events but keeps neutral context."""
     from openbiliclaw.soul.preference_analyzer import PreferenceAnalyzer
 
-    service = FakeStructuredService(
-        LLMResponse(content="{}", provider="openai")
-    )
+    service = FakeStructuredService(LLMResponse(content="{}", provider="openai"))
     analyzer = PreferenceAnalyzer(service, satisfaction_filter_enabled=True)
     events = [
         {"event_type": "click", "title": "好内容", "inferred_satisfaction": "positive"},
+        {"event_type": "search", "title": "搜索线索", "inferred_satisfaction": "neutral"},
         {"event_type": "click", "title": "标题党", "inferred_satisfaction": "negative"},
         {"event_type": "click", "title": "未知", "inferred_satisfaction": None},
     ]
     await analyzer.analyze_events(events=events, existing_preference={})
     user_input = service.calls[0]["user_input"]
     assert "好内容" in user_input
+    assert "搜索线索" in user_input, "neutral rows remain useful context"
     assert "未知" in user_input, "unknown / null rows must be kept by the positive+unknown filter"
     assert "标题党" not in user_input, "negative rows must be filtered out"

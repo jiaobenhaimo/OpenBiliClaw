@@ -635,10 +635,7 @@ class DelightScorer:
                 for s in getattr(dom, "specifics", [])[:5]
                 if str(getattr(s, "name", "")).strip()
             ]
-            if spec_names:
-                text = f"{domain}：{' '.join(spec_names)}"
-            else:
-                text = domain
+            text = f"{domain}：{' '.join(spec_names)}" if spec_names else domain
             weight = float(getattr(dom, "weight", 0.0) or 0.0)
             like_texts.append((text, weight))
 

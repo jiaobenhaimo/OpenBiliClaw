@@ -129,6 +129,19 @@ class SupportsStructuredTask(Protocol):
     ) -> object: ...
 
 
+class SupportsNegativeExemplarStore(Protocol):
+    """Storage surface needed by negative-anchor cache invalidation."""
+
+    def get_latest_event_id(self) -> int | None: ...
+
+    def query_events(
+        self,
+        *,
+        satisfaction_modes: frozenset[str] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]: ...
+
+
 def llm_eval_candidate_limit(limit: int) -> int:
     """Return the pre-LLM candidate window for a requested result limit."""
     safe_limit = max(1, int(limit))
@@ -467,9 +480,9 @@ class ContentDiscoveryEngine:
         # v0.3.x negative-anchors cache: (timestamp, latest_event_id,
         # exemplars). Refreshes when either the latest event id changes
         # (new negative classified) or 5 minutes have elapsed.
-        self._negative_exemplars_cache: (
-            tuple[float, int | None, list[dict[str, object]]] | None
-        ) = None
+        self._negative_exemplars_cache: tuple[float, int | None, list[dict[str, object]]] | None = (
+            None
+        )
 
     def register_strategy(self, strategy: DiscoveryStrategy) -> None:
         """Register a discovery strategy."""
@@ -942,11 +955,19 @@ class ContentDiscoveryEngine:
             )
             contents = contents[: self._EVALUATE_BATCH_HARD_CAP]
 
-        # Split into cached vs uncached
+        # Split into cached vs uncached. Batch eval consumes recent negative
+        # exemplars, so the in-memory score cache is versioned by latest event
+        # id. Otherwise a newly recorded quick-exit cannot affect candidates
+        # scored earlier in the same process.
+        negative_revision = self._negative_exemplar_revision()
         uncached_indices: list[int] = []
         scores: list[float] = [0.0] * len(contents)
         for i, content in enumerate(contents):
-            cache_key = f"{self._content_identity(content)}:{id(profile)}"
+            cache_key = self._batch_eval_cache_key(
+                content,
+                profile,
+                negative_revision=negative_revision,
+            )
             cached = self._eval_cache.get(cache_key)
             if cached is not None:
                 # Cache tuple grew in v0.3.18 to carry franchise_key.
@@ -1058,6 +1079,23 @@ class ContentDiscoveryEngine:
 
         return scores
 
+    def _negative_exemplar_revision(self) -> int | None:
+        """Return the event-log revision used for negative-aware eval cache keys."""
+        database = cast(
+            "SupportsNegativeExemplarStore | None",
+            getattr(self, "_database", None),
+        )
+        if database is None:
+            return None
+        try:
+            latest_id = database.get_latest_event_id()
+        except Exception:
+            logger.debug("negative_exemplars: get_latest_event_id failed", exc_info=True)
+            return None
+        if latest_id is None:
+            return None
+        return int(latest_id)
+
     def _get_negative_exemplars(self) -> list[dict[str, object]] | None:
         """Return recent negative exemplars, refreshing the cache when stale.
 
@@ -1069,19 +1107,21 @@ class ContentDiscoveryEngine:
         # Defensive getattr: some test fixtures construct the engine via
         # ``__new__`` and skip ``__init__`` entirely, so `_database` and
         # `_negative_exemplars_cache` may not exist as attributes.
-        database = getattr(self, "_database", None)
+        database = cast(
+            "SupportsNegativeExemplarStore | None",
+            getattr(self, "_database", None),
+        )
         if database is None:
             return None
 
         from openbiliclaw.soul.negative_exemplars import recent_negative_exemplars
 
-        try:
-            latest_id: int | None = database.get_latest_event_id()
-        except Exception:
-            logger.debug("negative_exemplars: get_latest_event_id failed", exc_info=True)
-            latest_id = None
+        latest_id = self._negative_exemplar_revision()
 
-        cached = getattr(self, "_negative_exemplars_cache", None)
+        cached = cast(
+            "tuple[float, int | None, list[dict[str, object]]] | None",
+            getattr(self, "_negative_exemplars_cache", None),
+        )
         if cached is not None:
             cached_ts, cached_latest_id, cached_exemplars = cached
             if cached_latest_id == latest_id and (time.monotonic() - cached_ts) < 300:
@@ -1095,6 +1135,16 @@ class ContentDiscoveryEngine:
 
         self._negative_exemplars_cache = (time.monotonic(), latest_id, exemplars)
         return exemplars
+
+    def _batch_eval_cache_key(
+        self,
+        content: DiscoveredContent,
+        profile: SoulProfile,
+        *,
+        negative_revision: int | None,
+    ) -> str:
+        revision = "none" if negative_revision is None else str(negative_revision)
+        return f"{self._content_identity(content)}:{id(profile)}:neg:{revision}"
 
     async def _evaluate_batch(
         self,
@@ -1204,7 +1254,11 @@ class ContentDiscoveryEngine:
             if franchise_key:
                 content.franchise_key = franchise_key
 
-            cache_key = f"{self._content_identity(content)}:{id(profile)}"
+            cache_key = self._batch_eval_cache_key(
+                content,
+                profile,
+                negative_revision=self._negative_exemplar_revision(),
+            )
             self._eval_cache[cache_key] = (
                 score,
                 reason,

@@ -88,19 +88,28 @@ DEFAULT_CONTINUOUS_PARAMS: list[ContinuousParam] = [
         name="interest_decay_factor",
         file_path=f"{_SRC}/soul/preference_analyzer.py",
         accessor="decay_factor_per_week",
-        current=0.9, min_val=0.7, max_val=0.99, step=0.03,
+        current=0.9,
+        min_val=0.7,
+        max_val=0.99,
+        step=0.03,
     ),
     ContinuousParam(
         name="candidate_confidence_threshold",
         file_path=f"{_SRC}/soul/engine.py",
         accessor="_candidate_ready_for_learning.confidence",
-        current=0.8, min_val=0.5, max_val=0.95, step=0.05,
+        current=0.8,
+        min_val=0.5,
+        max_val=0.95,
+        step=0.05,
     ),
     ContinuousParam(
         name="candidate_occurrence_threshold",
         file_path=f"{_SRC}/soul/engine.py",
         accessor="_candidate_ready_for_learning.occurrences",
-        current=2.0, min_val=1.0, max_val=5.0, step=1.0,
+        current=2.0,
+        min_val=1.0,
+        max_val=5.0,
+        step=1.0,
     ),
 ]
 
@@ -169,7 +178,8 @@ class PromptOptimizer:
         self._backup: dict[str, str] = {}  # file_path → original content
 
     async def exploit(
-        self, worst_fields: list[FieldScore],
+        self,
+        worst_fields: list[FieldScore],
     ) -> list[ParamChange]:
         """Generate changes to fix the worst-scoring fields (exploitation)."""
         if not worst_fields:
@@ -184,7 +194,8 @@ class PromptOptimizer:
 
         for field_score in worst_fields[:2]:  # Focus on top-2 worst
             param_name = self._field_to_param.get(
-                f"{field_score.layer}.{field_score.field}", "",
+                f"{field_score.layer}.{field_score.field}",
+                "",
             )
             if not param_name or param_name in targeted_params:
                 continue
@@ -208,19 +219,22 @@ class PromptOptimizer:
         return changes
 
     async def _exploit_via_agent(
-        self, worst_fields: list[FieldScore],
+        self,
+        worst_fields: list[FieldScore],
     ) -> list[ParamChange]:
         """Use Claude Agent SDK to autonomously read files and propose fixes."""
         from openbiliclaw.eval.agents import run_optimizer_agent
 
         eval_data = {
             "worst_fields": [
-                {"layer": f.layer, "field": f.field, "score": f.score,
-                 "deviation": f.deviation}
+                {"layer": f.layer, "field": f.field, "score": f.score, "deviation": f.deviation}
                 for f in worst_fields[:5]
             ],
             "attributions": [
-                f"{f.layer}.{f.field} → {self._field_to_param.get(f'{f.layer}.{f.field}', 'unknown')}"
+                (
+                    f"{f.layer}.{f.field} → "
+                    f"{self._field_to_param.get(f'{f.layer}.{f.field}', 'unknown')}"
+                )
                 for f in worst_fields[:5]
             ],
         }
@@ -230,21 +244,21 @@ class PromptOptimizer:
         for c in result.get("changes", []):
             if not isinstance(c, dict):
                 continue
-            changes.append(ParamChange(
-                param_name=str(c.get("file_path", "")),
-                change_type="prompt",
-                old_value=str(c.get("old_text", "")),
-                new_value=str(c.get("new_text", "")),
-                description=str(c.get("reason", "")),
-                file_path=str(c.get("file_path", "")),
-            ))
+            changes.append(
+                ParamChange(
+                    param_name=str(c.get("file_path", "")),
+                    change_type="prompt",
+                    old_value=str(c.get("old_text", "")),
+                    new_value=str(c.get("new_text", "")),
+                    description=str(c.get("reason", "")),
+                    file_path=str(c.get("file_path", "")),
+                )
+            )
         return changes
 
     async def explore(self) -> list[ParamChange]:
         """Random perturbation of a parameter (exploration)."""
-        all_params: list[str] = (
-            [p.name for p in self._continuous] + [p.name for p in self._prompts]
-        )
+        all_params: list[str] = [p.name for p in self._continuous] + [p.name for p in self._prompts]
         if not all_params:
             return []
 
@@ -294,17 +308,15 @@ class PromptOptimizer:
             else:
                 logger.warning(
                     "Change not applied (old_text not found): %s — %s",
-                    change.file_path, change.description[:60],
+                    change.file_path,
+                    change.description[:60],
                 )
         return applied
 
     def has_pipeline_changes(self) -> bool:
         """Check if any pending changes touch non-prompt files."""
         prompt_file = f"{_SRC}/llm/prompts.py"
-        return any(
-            c.file_path and c.file_path != prompt_file
-            for c in self._pending_changes
-        )
+        return any(c.file_path and c.file_path != prompt_file for c in self._pending_changes)
 
     def validate_with_tests(self, timeout: int = 60) -> tuple[bool, str]:
         """Run pytest to validate pipeline changes. Returns (passed, output)."""
@@ -312,8 +324,16 @@ class PromptOptimizer:
 
         try:
             result = subprocess.run(
-                [".venv/bin/python", "-m", "pytest", "tests/", "-x", "-q",
-                 "-W", "ignore::DeprecationWarning"],
+                [
+                    ".venv/bin/python",
+                    "-m",
+                    "pytest",
+                    "tests/",
+                    "-x",
+                    "-q",
+                    "-W",
+                    "ignore::DeprecationWarning",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -364,13 +384,12 @@ class PromptOptimizer:
         return None
 
     def _perturb_continuous(
-        self, param: ContinuousParam, *, direction: str,
+        self,
+        param: ContinuousParam,
+        *,
+        direction: str,
     ) -> ParamChange | None:
-        delta = (
-            random.choice([-param.step, param.step])
-            if direction == "random"
-            else param.step
-        )
+        delta = random.choice([-param.step, param.step]) if direction == "random" else param.step
 
         new_val = max(param.min_val, min(param.max_val, param.current + delta))
         if new_val == param.current:
@@ -388,7 +407,9 @@ class PromptOptimizer:
         return change
 
     async def _optimize_prompt(
-        self, param: PromptParam, worst: FieldScore,
+        self,
+        param: PromptParam,
+        worst: FieldScore,
     ) -> ParamChange | None:
         """Use LLM to generate a targeted prompt fix."""
         full_path = self._project_root / param.file_path
@@ -407,26 +428,35 @@ class PromptOptimizer:
         func_body = current_content[func_start:end]
 
         messages = [
-            {"role": "system", "content": (
-                "你是一个 prompt 优化器。根据评估偏差，对 prompt 函数提出最小化修改。\n"
-                "只修改 prompt 文本中的特定片段，不要重写整个函数。\n"
-                "返回 JSON: {\"old_text\": \"要替换的原文\", \"new_text\": \"替换后的文本\", "
-                "\"reason\": \"修改原因\"}"
-            )},
-            {"role": "user", "content": (
-                f"评估偏差:\n"
-                f"  层: {worst.layer}\n"
-                f"  字段: {worst.field}\n"
-                f"  分数: {worst.score:.2f}\n"
-                f"  偏差: {worst.deviation}\n\n"
-                f"当前 prompt 函数:\n```python\n{func_body[:3000]}\n```\n\n"
-                f"请提出一个最小化的 prompt 文本修改来改善这个偏差。"
-            )},
+            {
+                "role": "system",
+                "content": (
+                    "你是一个 prompt 优化器。根据评估偏差，对 prompt 函数提出最小化修改。\n"
+                    "只修改 prompt 文本中的特定片段，不要重写整个函数。\n"
+                    '返回 JSON: {"old_text": "要替换的原文", "new_text": "替换后的文本", '
+                    '"reason": "修改原因"}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"评估偏差:\n"
+                    f"  层: {worst.layer}\n"
+                    f"  字段: {worst.field}\n"
+                    f"  分数: {worst.score:.2f}\n"
+                    f"  偏差: {worst.deviation}\n\n"
+                    f"当前 prompt 函数:\n```python\n{func_body[:3000]}\n```\n\n"
+                    f"请提出一个最小化的 prompt 文本修改来改善这个偏差。"
+                ),
+            },
         ]
 
         try:
             response = await self._llm.complete(
-                messages, temperature=0.4, max_tokens=2048, json_mode=True,
+                messages,
+                temperature=0.4,
+                max_tokens=2048,
+                json_mode=True,
             )
             fix = json.loads(response.content)
             if not isinstance(fix, dict):
@@ -466,21 +496,30 @@ class PromptOptimizer:
         func_body = current_content[func_start:end]
 
         messages = [
-            {"role": "system", "content": (
-                "你是一个 prompt 探索器。对 prompt 提出一个创造性的小修改——"
-                "可以是更精确的措辞、增加一条规则、或调整输出格式。\n"
-                "返回 JSON: {\"old_text\": \"原文\", \"new_text\": \"新文本\", "
-                "\"reason\": \"探索原因\"}"
-            )},
-            {"role": "user", "content": (
-                f"当前 prompt 函数:\n```python\n{func_body[:3000]}\n```\n\n"
-                f"请提出一个有创意的小修改。"
-            )},
+            {
+                "role": "system",
+                "content": (
+                    "你是一个 prompt 探索器。对 prompt 提出一个创造性的小修改——"
+                    "可以是更精确的措辞、增加一条规则、或调整输出格式。\n"
+                    '返回 JSON: {"old_text": "原文", "new_text": "新文本", '
+                    '"reason": "探索原因"}'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"当前 prompt 函数:\n```python\n{func_body[:3000]}\n```\n\n"
+                    f"请提出一个有创意的小修改。"
+                ),
+            },
         ]
 
         try:
             response = await self._llm.complete(
-                messages, temperature=0.9, max_tokens=2048, json_mode=True,
+                messages,
+                temperature=0.9,
+                max_tokens=2048,
+                json_mode=True,
             )
             fix = json.loads(response.content)
             if not isinstance(fix, dict):
@@ -561,7 +600,6 @@ class PromptOptimizer:
                 orig_end += len(orig_line)
                 norm_remaining -= len(orig_line.rstrip()) + 1  # +1 for \n
 
-            original_span = content[orig_start:orig_end]
             content = content[:orig_start] + new_text + content[orig_end:]
             path.write_text(content, encoding="utf-8")
             logger.info("Applied change via fuzzy whitespace matching")
@@ -569,8 +607,14 @@ class PromptOptimizer:
 
         # Fuzzy: normalize Chinese/English punctuation
         def _normalize_punct(s: str) -> str:
-            return (s.replace("。", ".").replace("，", ",").replace("：", ":")
-                    .replace("；", ";").replace("（", "(").replace("）", ")"))
+            return (
+                s.replace("。", ".")
+                .replace("，", ",")
+                .replace("：", ":")
+                .replace("；", ";")
+                .replace("（", "(")
+                .replace("）", ")")
+            )
 
         if _normalize_punct(old_text) in _normalize_punct(content):
             # Find best matching substring
@@ -578,8 +622,7 @@ class PromptOptimizer:
             np_old = _normalize_punct(old_text)
             idx = np_content.index(np_old)
             # The character positions map 1:1 since we only replaced single chars
-            original_span = content[idx:idx + len(old_text)]
-            content = content[:idx] + new_text + content[idx + len(old_text):]
+            content = content[:idx] + new_text + content[idx + len(old_text) :]
             path.write_text(content, encoding="utf-8")
             logger.info("Applied change via punctuation normalization")
             return True

@@ -16,9 +16,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbiliclaw.discovery.engine import DiscoveredContent
-
 if TYPE_CHECKING:
+    from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.soul.profile import SoulProfile
     from openbiliclaw.sources.protocol import SourceRecipe
 

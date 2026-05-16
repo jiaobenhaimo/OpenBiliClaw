@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 import time
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.logging import RichHandler
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from openbiliclaw.config import Config
 
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ def _is_managed_log(path: Path, managed_filename: str) -> bool:
         return True
     prefix = managed_filename + "."
     if name.startswith(prefix):
-        suffix = name[len(prefix):]
+        suffix = name[len(prefix) :]
         return suffix.isdigit()
     return False
 
@@ -155,18 +156,12 @@ def _sweep_unmanaged_logs(
         return
 
     try:
-        entries = [
-            (p, p.stat()) for p in log_dir.iterdir() if p.is_file()
-        ]
+        entries = [(p, p.stat()) for p in log_dir.iterdir() if p.is_file()]
     except OSError:
         return
 
     now = time.time()
-    age_cutoff = (
-        now - unmanaged_max_age_days * 86400
-        if unmanaged_max_age_days > 0
-        else 0.0
-    )
+    age_cutoff = now - unmanaged_max_age_days * 86400 if unmanaged_max_age_days > 0 else 0.0
 
     # Pass 1: truncate huge unmanaged files
     truncate_bytes = unmanaged_truncate_mb * 1024 * 1024
@@ -215,9 +210,7 @@ def _sweep_unmanaged_logs(
         return
     budget_bytes = aggregate_budget_mb * 1024 * 1024
     try:
-        current_entries = [
-            (p, p.stat()) for p in log_dir.iterdir() if p.is_file()
-        ]
+        current_entries = [(p, p.stat()) for p in log_dir.iterdir() if p.is_file()]
     except OSError:
         return
     total = sum(st.st_size for _, st in current_entries)

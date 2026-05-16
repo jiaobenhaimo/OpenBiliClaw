@@ -47,11 +47,12 @@ class PreferenceAnalyzer:
     # EMA blend: 0.3 * latest batch + 0.7 * prior mix. Chosen so one-off
     # cross-platform batches don't erase long-running bilibili history.
     source_mix_blend_alpha: float = 0.3
-    # v0.3.x event-satisfaction signal: when True, drop events the
+    # v0.3.x event-satisfaction signal: when True, drop only events the
     # storage classifier marked as quick-exit / explicit-negative before
-    # building the LLM prompt. Default False so existing installs keep
-    # current behavior until the operator flips the config flag. See
-    # docs/plans/2026-05-16-event-satisfaction-signal.md.
+    # building the LLM prompt. Neutral rows still carry useful context
+    # (searches, shallow views, passive browse). Default False so existing
+    # installs keep current behavior until the operator flips the config flag.
+    # See docs/plans/2026-05-16-event-satisfaction-signal.md.
     satisfaction_filter_enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -99,11 +100,13 @@ class PreferenceAnalyzer:
 
         The ``"unknown"`` bucket is included so pre-classification legacy
         rows (NULL ``inferred_satisfaction``) still feed the analyzer.
+        ``"neutral"`` is included because searches / shallow views are not
+        satisfaction evidence, but they are still useful preference context.
         """
         if not self.satisfaction_filter_enabled:
             return events
         filtered = filter_events_by_satisfaction(
-            events, modes=frozenset({"positive", "unknown"})
+            events, modes=frozenset({"positive", "neutral", "unknown"})
         )
         if len(filtered) != len(events):
             logger.info(

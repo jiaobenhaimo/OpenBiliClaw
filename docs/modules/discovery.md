@@ -302,9 +302,9 @@ discovery 不是“把整个找片过程都交给 LLM”。当前实现里，LLM
 
 `ContentDiscoveryEngine._evaluate_batch` 在每次 batch 调用前会通过 `_get_negative_exemplars()` 从事件层拉一份「最近真正不喜欢」的标题列表（来自 `soul/negative_exemplars.py` 的 recency-weighted、去重、80 字截断、最多 8 条），并作为 `negative_examples=` 透传给 `build_batch_content_evaluation_prompt()`：
 
-- 引擎实例内部有一份 5 分钟 TTL 缓存，key 是 `(latest_event_id, time bucket)`。同一秒内的多次 batch 共用一次 `query_events` I/O；用户新打了一条负反馈，下一次 batch 会立即看到新样本。
+- 引擎实例内部 `_get_negative_exemplars` 的 exemplar 缓存形如 `(timestamp, latest_event_id, exemplars)`，命中条件是 `latest_event_id` 未变且 `< 300s`（即 5 分钟 TTL）。同一窗口内的多次 batch 共用一次 `query_events` I/O；用户新打一条负反馈后，`latest_event_id` 改变，下一次 batch 立即看到新样本。注意这是 exemplar 池本身的缓存；候选**分数**的复用则通过 `_batch_eval_cache_key` 把 `latest_event_id` 拼进 cache key 完成（见下条 batch 评分缓存说明），两套机制互相独立。
 - 上游 `_get_negative_exemplars()` 与 `recent_negative_exemplars()` 都把异常吞成 `None`/`[]`，event 表为空或存储抖动都不会中断 batch；user prompt 自动退回到无 `<negative_examples>` 形态，cache prefix 不被打断。
-- 拿到 exemplars 后 prompt builder 把它放在 `<source_context>` 与 `<content_batch>` 之间（系统规则 10/11 让 LLM 按话术 / 商业意图 / 标题结构层面去对照打分，而不是关键词重叠）。前置 `[soul.preference] satisfaction_filter_enabled` 未打开时，事件分类仍在跑，所以负样本池可以提前积累。
+- 拿到 exemplars 后 prompt builder 把它放在 `<source_context>` 与 `<content_batch>` 之间（系统规则 10/11 让 LLM 按话术 / 商业意图 / 标题结构层面去对照打分，而不是关键词重叠）。前置 `[soul.preference] satisfaction_filter_enabled` 未打开时，事件分类仍在跑，所以负样本池可以提前积累。batch 评分缓存 key 带最新 event id，避免负样本出现后继续复用旧分数。
 
 所以这里的 LLM 不是“决定推荐”，而是在给候选池补一个统一、可比较的相关性分数。
 

@@ -86,7 +86,6 @@ def test_topic_fatigue_curve_grows_steeply_after_first_repeat() -> None:
     must escalate sharply after count=2 so a topic that's been served
     three times in a row gets a near-saturating penalty.
     """
-    recent = ("ai",) * 3 + ("games",) * 27  # length 30
     f1 = PoolCurator._topic_fatigue("games", ("games",) + ("other",) * 29)  # 1/30
     f2 = PoolCurator._topic_fatigue("games", ("games",) * 2 + ("other",) * 28)
     f3 = PoolCurator._topic_fatigue("games", ("games",) * 3 + ("other",) * 27)
@@ -104,9 +103,7 @@ def test_combined_topic_fatigue_uses_max_of_key_and_group_axes() -> None:
     from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.recommendation.curator import ScoringContext
 
-    item = DiscoveredContent(
-        bvid="BV1A", title="t", topic_key="动漫杂谈", topic_group="动漫"
-    )
+    item = DiscoveredContent(bvid="BV1A", title="t", topic_key="动漫杂谈", topic_group="动漫")
     # No exact key match in history, but topic_group="动漫" appears 3 times
     context = ScoringContext(
         recent_topic_keys=("动漫补番", "动漫解说", "动漫资讯", "音乐", "游戏"),
@@ -254,10 +251,16 @@ def test_score_candidates_explore_gets_serendipity_bonus() -> None:
     now = _now()
     ts = now.isoformat()
     search = DiscoveredContent(
-        bvid="BVS", relevance_score=0.8, source_strategy="search", discovered_at=ts,
+        bvid="BVS",
+        relevance_score=0.8,
+        source_strategy="search",
+        discovered_at=ts,
     )
     explore = DiscoveredContent(
-        bvid="BVE", relevance_score=0.8, source_strategy="explore", discovered_at=ts,
+        bvid="BVE",
+        relevance_score=0.8,
+        source_strategy="explore",
+        discovered_at=ts,
     )
     context = ScoringContext(now=now)
     scores = curator.score_candidates([search, explore], context)
@@ -270,12 +273,18 @@ def test_score_candidates_penalises_fatigued_topic() -> None:
     now = _now()
     ts = now.isoformat()
     fresh_topic = DiscoveredContent(
-        bvid="BV1", relevance_score=0.8, topic_key="new_topic",
-        source_strategy="search", discovered_at=ts,
+        bvid="BV1",
+        relevance_score=0.8,
+        topic_key="new_topic",
+        source_strategy="search",
+        discovered_at=ts,
     )
     stale_topic = DiscoveredContent(
-        bvid="BV2", relevance_score=0.8, topic_key="repeated",
-        source_strategy="search", discovered_at=ts,
+        bvid="BV2",
+        relevance_score=0.8,
+        topic_key="repeated",
+        source_strategy="search",
+        discovered_at=ts,
     )
     context = ScoringContext(
         recent_topic_keys=("repeated",) * 10,

@@ -336,7 +336,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Chrome Extension                   │
-│      (Behavior · Recs · Durable Chat · Cookies)       │
+│      (Behavior · Dwell Satisfaction · Recs · Chat · Cookies)│
 │      (XHS/DY/YT tasks · init-profile bridge)          │
 └────────────────────────┬────────────────────────────┘
                          │ REST API / WebSocket cookie request
@@ -346,10 +346,11 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 ├─────────┬──────────┬───────────┬────────────────────┤
 │  Soul   │ Memory   │ Discovery │  Recommendation    │
 │  Engine │ System   │  Engine   │     Engine          │
-│(Profile)│(5-Layer) │(4-Strategy│   (Expression)     │
+│(Sat.filter)│(5-Layer)│(Neg.anchor)│  (Expression)   │
 ├─────────┴──────────┴───────────┴────────────────────┤
 │ LLM Adapters · Bilibili API · Extension Proxy · SQLite│
-│ SQLite tables: content_cache · chat_turns             │
+│ SQLite: events(inferred_satisfaction) · content_cache   │
+│         recommendations · chat_turns                    │
 └─────────────────────────────────────────────────────┘
 ```
 

@@ -15,6 +15,7 @@ All tests are async — pytest's ``asyncio_mode = "auto"`` config applies.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import pytest
@@ -96,7 +97,7 @@ async def test_cancel_all_with_hung_task_logs_warning_and_clears(
     task = registry.track("stuck", _quick_done())
 
     async def _fake_wait_for(_awaitable: object, *, timeout: float) -> object:
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     # Patch on the registry's module so the import in cancel_all picks
     # up the fake implementation.
@@ -109,17 +110,15 @@ async def test_cancel_all_with_hung_task_logs_warning_and_clears(
             cancelled = await registry.cancel_all(grace_seconds=0.05)
         assert cancelled == 1
         assert len(registry._tasks) == 0
-        assert any(
-            "did not exit within" in record.message for record in caplog.records
-        ), f"expected warning log, got {[r.message for r in caplog.records]}"
+        assert any("did not exit within" in record.message for record in caplog.records), (
+            f"expected warning log, got {[r.message for r in caplog.records]}"
+        )
     finally:
         # Drain the underlying task so the loop closes cleanly.
         if not task.done():
             task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, BaseException):
             await task
-        except (asyncio.CancelledError, BaseException):
-            pass
 
 
 async def test_stats_groups_by_name_prefix() -> None:
