@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -184,3 +185,97 @@ def test_awareness_analyzer_requires_core_memory_task_service() -> None:
 
     with pytest.raises(TypeError, match="complete_structured_task"):
         AwarenessAnalyzer(FakeRegistry("[]"))
+
+
+# --- _coerce_note_list parser tolerance (v0.3.x awareness resilience) ---
+
+
+def test_coerce_note_list_wraps_singular_note_dict() -> None:
+    """A bare single-note dict (MiMo reasoning-model shape) is wrapped into a list."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    payload = {
+        "date": "2026-03-08",
+        "observation": "最近连续浏览硬核教程。",
+        "trend": "更偏向深度解释。",
+        "emotion_guess": "专注吸收信息。",
+    }
+    assert AwarenessAnalyzer._coerce_note_list(payload) == [payload]
+
+
+def test_coerce_note_list_singular_note_requires_observation() -> None:
+    """A dict that lacks the load-bearing `observation` field is NOT a single note."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    # Has date/trend/emotion_guess but no observation — worthless, reject.
+    payload = {"date": "2026-03-08", "trend": "x", "emotion_guess": "y"}
+    assert AwarenessAnalyzer._coerce_note_list(payload) is None
+
+
+@pytest.mark.parametrize(
+    "wrapper_key",
+    ["observations", "recent_observations", "latest", "latest_observations"],
+)
+def test_coerce_note_list_accepts_new_wrapper_keys(wrapper_key: str) -> None:
+    """Expanded wrapper-key vocabulary covers shapes MiMo / reasoning models emit."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    inner = [
+        {
+            "date": "2026-03-08",
+            "observation": "最近连续浏览硬核教程。",
+            "trend": "更偏向深度解释。",
+            "emotion_guess": "专注吸收信息。",
+        }
+    ]
+    assert AwarenessAnalyzer._coerce_note_list({wrapper_key: inner}) == inner
+
+
+def test_coerce_note_list_accepts_dict_wrapped_singular_under_known_key() -> None:
+    """A known wrapper key whose value is itself a single note dict is recovered."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    inner = {
+        "date": "2026-03-08",
+        "observation": "最近连续浏览硬核教程。",
+        "trend": "更偏向深度解释。",
+        "emotion_guess": "专注吸收信息。",
+    }
+    assert AwarenessAnalyzer._coerce_note_list({"notes": inner}) == [inner]
+
+
+@pytest.mark.parametrize(
+    "garbage",
+    [
+        "scalar",
+        42,
+        None,
+        {},
+        {"unrelated_key": "value"},
+        {"results": "not-a-list-or-note"},
+    ],
+)
+def test_coerce_note_list_rejects_garbage_shapes(garbage: object) -> None:
+    """Genuinely unrecoverable shapes still return None — no silent fabrication."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    assert AwarenessAnalyzer._coerce_note_list(garbage) is None
+
+
+@pytest.mark.asyncio
+async def test_awareness_analyzer_consumes_singular_note_fixture() -> None:
+    """End-to-end: a real-shape MiMo singular-note JSON is parsed into one AwarenessNote."""
+    from openbiliclaw.soul.awareness_analyzer import AwarenessAnalyzer
+
+    fixture_path = Path(__file__).parent / "fixtures" / "awareness_singular_note.json"
+    raw = fixture_path.read_text(encoding="utf-8")
+
+    notes = await AwarenessAnalyzer(FakeStructuredService(raw)).analyze(
+        events=[{"event_type": "view", "title": "AI 工具实测"}],
+        preference={},
+        soul_profile={},
+    )
+
+    assert len(notes) == 1
+    assert notes[0].observation.startswith("最近连续浏览")
+    assert notes[0].date == "2026-03-08"
