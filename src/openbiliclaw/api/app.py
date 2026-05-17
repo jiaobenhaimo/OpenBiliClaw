@@ -9,7 +9,7 @@ import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -256,8 +256,13 @@ def create_app(
     auto_update_service: Any | None = None,
 ) -> FastAPI:
     """Create the local backend API app."""
-    from openbiliclaw.api.runtime_context import RuntimeContext, build_runtime_context
+    from openbiliclaw.api.runtime_context import (
+        RuntimeContext,
+        build_degraded_runtime_context,
+        build_runtime_context,
+    )
     from openbiliclaw.config import load_config
+    from openbiliclaw.llm.registry import RegistryBuildError
 
     app = FastAPI(title="OpenBiliClaw API", default_response_class=JSONResponse)
 
@@ -328,13 +333,63 @@ def create_app(
             ctx.auto_update_service = AutoUpdateService(enabled=True)
     else:
         # Production path: build everything from config.
-        ctx = build_runtime_context(
-            config,
-            memory_manager=memory_manager,
-            database=database,
-            event_hub=runtime_event_hub,
-        )
+        try:
+            ctx = build_runtime_context(
+                config,
+                memory_manager=memory_manager,
+                database=database,
+                event_hub=runtime_event_hub,
+            )
+        except RegistryBuildError as exc:
+            ctx = build_degraded_runtime_context(
+                config,
+                memory_manager=memory_manager,
+                database=database,
+                event_hub=runtime_event_hub,
+                exc=exc,
+            )
+            logger.warning(
+                "FastAPI started in degraded mode (%s): %s",
+                ctx.degraded_reason,
+                "; ".join(str(getattr(issue, "message", issue)) for issue in ctx.degraded_issues),
+            )
     app.state.runtime_context = ctx
+    app.state.degraded = bool(getattr(ctx, "degraded", False))
+    app.state.degraded_reason = str(getattr(ctx, "degraded_reason", ""))
+    app.state.degraded_issues = list(getattr(ctx, "degraded_issues", []))
+
+    def _degraded_issues_payload() -> list[dict[str, str]]:
+        return [
+            {
+                "field": str(getattr(issue, "field", "")),
+                "message": str(getattr(issue, "message", issue)),
+                "severity": str(getattr(issue, "severity", "warning")),
+            }
+            for issue in getattr(ctx, "degraded_issues", [])
+        ]
+
+    def _degraded_body() -> dict[str, object]:
+        return {
+            "status": "degraded",
+            "reason": str(getattr(ctx, "degraded_reason", "")),
+            "issues": _degraded_issues_payload(),
+        }
+
+    @app.middleware("http")
+    async def _degraded_mode_guard(request: Request, call_next: Any) -> Any:
+        if not bool(getattr(ctx, "degraded", False)):
+            return await call_next(request)
+        path = request.url.path
+        method = request.method.upper()
+        allowed = (
+            method == "OPTIONS"
+            or path == "/api/health"
+            or path == "/api/runtime-status"
+            or (path == "/api/config" and method in {"GET", "PUT"})
+        )
+        if allowed:
+            return await call_next(request)
+        return JSONResponse(status_code=503, content=_degraded_body())
 
     async def _run_post_feedback_tasks() -> None:
         with suppress(Exception):
@@ -508,7 +563,17 @@ def create_app(
             )
 
     @app.get("/api/health", response_model=HealthResponse)
-    def health() -> HealthResponse:
+    def health() -> HealthResponse | JSONResponse:
+        if bool(getattr(ctx, "degraded", False)):
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "degraded",
+                    "service": "openbiliclaw-api",
+                    "reason": str(getattr(ctx, "degraded_reason", "")),
+                    "issues": _degraded_issues_payload(),
+                },
+            )
         return HealthResponse(status="ok", service="openbiliclaw-api")
 
     @app.post("/api/bilibili/cookie", response_model=BilibiliCookieResponse)
@@ -745,6 +810,29 @@ def create_app(
     @app.websocket("/api/runtime-stream")
     async def runtime_stream(websocket: WebSocket) -> None:
         await websocket.accept()
+        if bool(getattr(ctx, "degraded", False)):
+            connected = False
+            try:
+                ctx.presence.on_connect()
+                connected = True
+                await websocket.send_json(
+                    {
+                        "type": "degraded",
+                        "reason": str(getattr(ctx, "degraded_reason", "")),
+                        "issues": _degraded_issues_payload(),
+                    }
+                )
+                while True:
+                    message = await websocket.receive()
+                    if message.get("type") == "websocket.disconnect":
+                        raise WebSocketDisconnect
+            except WebSocketDisconnect:
+                pass
+            finally:
+                if connected:
+                    ctx.presence.on_disconnect()
+            return
+
         subscribe = getattr(ctx.event_hub, "subscribe", None)
         unsubscribe = getattr(ctx.event_hub, "unsubscribe", None)
         if not callable(subscribe) or not callable(unsubscribe):
@@ -829,6 +917,8 @@ def create_app(
 
     @app.on_event("startup")
     async def startup_refresh_loop() -> None:
+        if bool(getattr(ctx, "degraded", False)):
+            return
         await ctx.restart_background_tasks(app)
 
     @app.on_event("shutdown")
@@ -3283,6 +3373,8 @@ def create_app(
         issues: list[Any] | None = None,
         *,
         mask_keys: bool = True,
+        degraded: bool = False,
+        degraded_reason: str = "",
     ) -> ConfigResponse:
         """Convert a Config dataclass to a ConfigResponse, optionally masking API keys."""
 
@@ -3315,6 +3407,8 @@ def create_app(
         return ConfigResponse(
             language=cfg.language,
             data_dir=cfg.data_dir,
+            degraded=degraded,
+            degraded_reason=degraded_reason,
             llm=LLMConfigOut(
                 default_provider=cfg.llm.default_provider,
                 openai=_provider_out(cfg.llm.openai),
@@ -3426,8 +3520,16 @@ def create_app(
         )
 
         cfg = load_config()
-        issues = _collect_config_issues(cfg)
-        return _config_to_response(cfg, issues, mask_keys=not reveal_keys)
+        issues = list(_collect_config_issues(cfg))
+        if bool(getattr(ctx, "degraded", False)):
+            issues.extend(getattr(ctx, "degraded_issues", []))
+        return _config_to_response(
+            cfg,
+            issues,
+            mask_keys=not reveal_keys,
+            degraded=bool(getattr(ctx, "degraded", False)),
+            degraded_reason=str(getattr(ctx, "degraded_reason", "")),
+        )
 
     @app.put("/api/config", response_model=ConfigUpdateResponse)
     async def update_config(payload: ConfigUpdateIn) -> ConfigUpdateResponse | JSONResponse:
@@ -3682,7 +3784,13 @@ def create_app(
         if any(getattr(issue, "severity", "warning") == "blocking" for issue in issues):
             response = ConfigUpdateResponse(
                 ok=False,
-                config=_config_to_response(cfg, issues, mask_keys=True),
+                config=_config_to_response(
+                    cfg,
+                    issues,
+                    mask_keys=True,
+                    degraded=bool(getattr(ctx, "degraded", False)),
+                    degraded_reason=str(getattr(ctx, "degraded_reason", "")),
+                ),
                 message="配置校验失败，未写入 config.toml。",
                 reloaded=False,
                 rollback_applied=False,
@@ -3709,6 +3817,25 @@ def create_app(
 
             saved_path = save_config(cfg)
             logger.info("Configuration saved to %s", saved_path)
+
+            if bool(getattr(ctx, "degraded", False)):
+                return ConfigUpdateResponse(
+                    ok=True,
+                    config=_config_to_response(
+                        cfg,
+                        issues,
+                        mask_keys=True,
+                        degraded=True,
+                        degraded_reason=str(getattr(ctx, "degraded_reason", "")),
+                    ),
+                    message=(
+                        f"配置已保存到 {saved_path}。当前后端处于降级模式，"
+                        "请 restart daemon 后让新配置生效。"
+                    ),
+                    reloaded=False,
+                    rollback_applied=False,
+                    restart_required=True,
+                )
 
             # ── Hot-reload: rebuild runtime components ──────────────
             reload_message = f"配置已保存到 {saved_path}。"

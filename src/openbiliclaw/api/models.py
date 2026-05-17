@@ -639,6 +639,8 @@ class ConfigResponse(BaseModel):
 
     language: str = "zh"
     data_dir: str = "data"
+    degraded: bool = False
+    degraded_reason: str = ""
     llm: LLMConfigOut = Field(default_factory=LLMConfigOut)
     bilibili: BilibiliConfigOut = Field(default_factory=BilibiliConfigOut)
     sources: SourcesConfigOut = Field(default_factory=SourcesConfigOut)
