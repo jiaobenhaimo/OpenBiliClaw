@@ -449,13 +449,15 @@ class RuntimeContext:
                                 "probe_feedback_history",
                                 [],
                             )
-                    try:
-                        await speculator.force_tick(
+                    self.task_registry.track(
+                        "post_reload_speculate",
+                        self._safe_post_reload_speculate(
+                            speculator,
                             profile,
-                            feedback_history=feedback_history,
-                        )
-                    except TypeError:
-                        await speculator.force_tick(profile)
+                            feedback_history,
+                        ),
+                    )
+                    logger.debug("post-reload speculator scheduled as background task")
             except Exception:
                 pass  # Profile not initialized yet — skip silently
 
@@ -472,6 +474,24 @@ class RuntimeContext:
             )
 
         logger.info("Background tasks restarted after hot-reload")
+
+    @staticmethod
+    async def _safe_post_reload_speculate(
+        speculator: Any,
+        profile: Any,
+        feedback_history: object,
+    ) -> None:
+        """Run post-reload speculation without blocking config PUT."""
+        try:
+            try:
+                await speculator.force_tick(
+                    profile,
+                    feedback_history=feedback_history,
+                )
+            except TypeError:
+                await speculator.force_tick(profile)
+        except Exception:
+            pass
 
     @staticmethod
     async def _safe_prewarm_pool_mmr_embeddings(prewarm_callable: Any) -> None:

@@ -115,6 +115,139 @@ class TestBackendAPI:
         assert soul._speculator.force_tick_calls == 0
         assert rec.prewarm_calls == 0
 
+    @pytest.mark.asyncio
+    async def test_restart_tasks_detaches_speculator_tick(self) -> None:
+        from types import SimpleNamespace
+
+        from openbiliclaw.api.runtime_context import RuntimeContext
+        from openbiliclaw.config import Config
+
+        class HangingSpeculator:
+            async def force_tick(self, *_args: object, **_kwargs: object) -> None:
+                await asyncio.sleep(60)
+
+        class FakeSoulEngine:
+            _speculator = HangingSpeculator()
+
+            async def get_profile(self) -> dict[str, object]:
+                return {"profile": "ok"}
+
+        cfg = Config()
+        ctx = RuntimeContext(
+            config=cfg,
+            memory_manager=SimpleNamespace(load_discovery_runtime_state=lambda: {}),
+            runtime_controller=object(),
+            account_sync_service=object(),
+            auto_update_service=object(),
+            soul_engine=FakeSoulEngine(),
+            recommendation_engine=object(),
+        )
+        app = SimpleNamespace(state=SimpleNamespace())
+
+        try:
+            await asyncio.wait_for(ctx.restart_background_tasks(app), timeout=0.5)
+            assert ctx.task_registry.stats().get("post_reload_speculate") == 1
+        finally:
+            await ctx.task_registry.cancel_all()
+
+    @pytest.mark.asyncio
+    async def test_restart_tasks_swallows_detached_speculator_failure(self) -> None:
+        from types import SimpleNamespace
+
+        from openbiliclaw.api.runtime_context import RuntimeContext
+        from openbiliclaw.config import Config
+
+        class BrokenSpeculator:
+            async def force_tick(self, *_args: object, **_kwargs: object) -> None:
+                raise RuntimeError("boom")
+
+        class FakeSoulEngine:
+            _speculator = BrokenSpeculator()
+
+            async def get_profile(self) -> dict[str, object]:
+                return {"profile": "ok"}
+
+        cfg = Config()
+        ctx = RuntimeContext(
+            config=cfg,
+            memory_manager=SimpleNamespace(load_discovery_runtime_state=lambda: {}),
+            runtime_controller=object(),
+            account_sync_service=object(),
+            auto_update_service=object(),
+            soul_engine=FakeSoulEngine(),
+            recommendation_engine=object(),
+        )
+        app = SimpleNamespace(state=SimpleNamespace())
+        captured_tasks: list[asyncio.Task[object]] = []
+        original_track = ctx.task_registry.track
+
+        def _track(name: str, coro):
+            task = original_track(name, coro)
+            if name == "post_reload_speculate":
+                captured_tasks.append(task)
+            return task
+
+        ctx.task_registry.track = _track  # type: ignore[method-assign]
+
+        await ctx.restart_background_tasks(app)
+        assert len(captured_tasks) == 1
+        await asyncio.wait_for(captured_tasks[0], timeout=0.5)
+        assert captured_tasks[0].exception() is None
+
+    @pytest.mark.asyncio
+    async def test_put_config_does_not_block_on_speculator(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from types import SimpleNamespace
+
+        import httpx
+
+        from openbiliclaw.api.runtime_context import RuntimeContext
+        from openbiliclaw.config import Config, save_config
+
+        config_path = tmp_path / "config.toml"
+        cfg = Config()
+        cfg.llm.default_provider = "openai"
+        cfg.llm.openai.api_key = "sk-test-openai"
+        save_config(cfg, config_path)
+        monkeypatch.setenv("OPENBILICLAW_PROJECT_ROOT", str(tmp_path))
+
+        class HangingSpeculator:
+            async def force_tick(self, *_args: object, **_kwargs: object) -> None:
+                await asyncio.sleep(60)
+
+        class FakeSoulEngine:
+            _speculator = HangingSpeculator()
+
+            async def get_profile(self) -> dict[str, object]:
+                return {"profile": "ok"}
+
+        async def _fake_rebuild(self: RuntimeContext, new_config: Config) -> None:
+            self.config = new_config
+            self.memory_manager = SimpleNamespace(load_discovery_runtime_state=lambda: {})
+            self.runtime_controller = object()
+            self.account_sync_service = object()
+            self.auto_update_service = object()
+            self.soul_engine = FakeSoulEngine()
+            self.recommendation_engine = object()
+
+        monkeypatch.setattr(RuntimeContext, "rebuild_from_config", _fake_rebuild)
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            response = await asyncio.wait_for(
+                client.put("/api/config", json={"language": "zh"}),
+                timeout=0.5,
+            )
+
+        assert response.status_code == 200
+        assert response.json()["reloaded"] is True
+
     def test_create_app_bootstrap_shares_database_with_memory_manager(
         self,
         monkeypatch,
