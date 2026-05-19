@@ -19,11 +19,12 @@
 
 ---
 
-## 📌 v0.3.84 重要更新（2026-05-20）
+## 📌 extension-v0.3.35 重要更新（2026-05-20）
 
+- **💬 插件聊天页贴底** —— side panel 聊天 tab 激活时隐藏底部活动栏，聊天记录区占满上方空间，输入框固定在底部，窄屏能多看历史。
 - **🚀 安装自动 init 收敛** —— Bash / PowerShell / Docker / AI agent 安装渠道都会在确认 embedding、B 站 Cookie 来源和小红书 / 抖音 / YouTube opt-in 后自动运行 init。
 - **🐳 Docker runtime 配置同步** —— `agent_bootstrap.py --mode docker` 会把确认后的配置同步进容器 `/app/runtime`，再触发容器内 init；手动 `docker exec ... init` 只保留为 fallback。
-- **📦 后端发布** —— 后端版本提升到 `backend-v0.3.84`；浏览器插件版本保持 `extension-v0.3.34`。
+- **📦 插件发布** —— 浏览器插件版本提升到 `extension-v0.3.35`；本次不发布后端包。
 
 完整变更详见 [docs/changelog.md](docs/changelog.md)。
 
