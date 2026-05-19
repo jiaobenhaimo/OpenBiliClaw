@@ -30,6 +30,14 @@ def test_install_sh_uses_interactive_auto_init_contract() -> None:
     assert "docker exec -it openbiliclaw-backend openbiliclaw init" not in install_sh
 
 
+def test_install_ps1_uses_interactive_auto_init_contract() -> None:
+    install_ps1 = _read("scripts/install.ps1")
+
+    assert "--interactive-confirm" in install_ps1
+    assert "--wait-for-extension-cookie" in install_ps1
+    assert "docker exec -it openbiliclaw-backend openbiliclaw init" not in install_ps1
+
+
 def test_agent_install_llm_menu_numbering_matches_current_options() -> None:
     doc = _read("docs/agent-install.md")
 

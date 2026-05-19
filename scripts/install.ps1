@@ -288,6 +288,10 @@ function Invoke-Bootstrap([string]$PythonExe) {
     )
     if ($ReuseFrom) { $args += '--reuse-from'; $args += $ReuseFrom }
     if ($SkipStart) { $args += '--skip-start' }
+    if (-not $env:OPENBILICLAW_NONINTERACTIVE -and -not $env:CI) {
+        $args += '--interactive-confirm'
+        $args += '--wait-for-extension-cookie'
+    }
 
     $script:BootstrapLog = [IO.Path]::GetTempFileName()
     Log-Info "Running bootstrap: $PythonExe $bootstrap $($args -join ' ')"
