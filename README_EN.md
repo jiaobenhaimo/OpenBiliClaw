@@ -17,11 +17,12 @@
 
 ---
 
-## 📌 v0.3.84 Highlights (2026-05-20)
+## 📌 extension-v0.3.35 Highlights (2026-05-20)
 
+- **💬 Bottom-pinned extension chat** — when the side-panel Chat tab is active, the bottom activity footer is hidden, chat history owns the upper space, and the composer stays pinned to the bottom.
 - **🚀 Auto-init across install channels** — Bash, PowerShell, Docker, and AI-agent install paths confirm embedding, Bilibili cookie source, and Xiaohongshu / Douyin / YouTube opt-ins before automatically running init.
 - **🐳 Docker runtime config sync** — `agent_bootstrap.py --mode docker` copies confirmed config into the container's `/app/runtime` before triggering init; manual `docker exec ... init` remains a fallback.
-- **📦 Backend release** — backend bumps to `backend-v0.3.84`; the browser extension remains at `extension-v0.3.34`.
+- **📦 Extension release** — the browser extension bumps to `extension-v0.3.35`; no backend package is released in this pass.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 

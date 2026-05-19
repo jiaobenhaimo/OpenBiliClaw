@@ -4,6 +4,14 @@
 
 ---
 
+## extension v0.3.35: 插件聊天页贴底布局修复（2026-05-20）
+
+- 浏览器插件聊天 tab 激活时会隐藏底部活动栏，让聊天输入框成为 side panel 底部固定区域；聊天记录区改为独立 flex 滚动，优先占用输入框上方空间。
+- 压缩聊天消息、状态提示和输入区间距，空状态提示不再占位；textarea 保留两行起步并限制最大高度，长内容在输入框内部滚动。
+- 浏览器插件版本提升到 v0.3.35，准备发布 `extension-v0.3.35`；Chrome / Edge / Brave 走 `openbiliclaw-extension-v0.3.35.zip`，Firefox 140+ 走 `openbiliclaw-extension-v0.3.35-firefox.zip`。本次不发布后端包。
+
+---
+
 ## v0.3.84: 安装渠道自动 init 收敛（2026-05-20）
 
 - `agent_bootstrap.py` 新增交互确认模式和扩展 Cookie 等待流程：Bash / PowerShell / Docker / AI agent 安装渠道会在确认 embedding、B 站 Cookie 来源和小红书 / 抖音 / YouTube opt-in 后自动运行 init，不再把手动 `openbiliclaw init` 作为主路径。
