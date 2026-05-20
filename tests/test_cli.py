@@ -515,9 +515,15 @@ def test_start_uses_local_api_defaults(monkeypatch: pytest.MonkeyPatch, runner: 
     called: dict[str, object] = {}
     backup_calls: list[str] = []
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         called["host"] = host
         called["port"] = port
+        called["serve_webui"] = serve_webui
 
     monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
     monkeypatch.setattr(
@@ -535,7 +541,7 @@ def test_start_uses_local_api_defaults(monkeypatch: pytest.MonkeyPatch, runner: 
     assert "启动 OpenBiliClaw" in result.stdout
     assert "API 服务" in result.stdout
     assert backup_calls == ["called"]
-    assert called == {"host": "127.0.0.1", "port": 8420}
+    assert called == {"host": "127.0.0.1", "port": 8420, "serve_webui": True}
 
 
 def test_start_warns_when_pause_on_disconnect_requires_extension_presence(
@@ -545,9 +551,15 @@ def test_start_warns_when_pause_on_disconnect_requires_extension_presence(
     cfg = config_module.Config()
     cfg.scheduler.pause_on_extension_disconnect = True
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         called["host"] = host
         called["port"] = port
+        called["serve_webui"] = serve_webui
 
     monkeypatch.setattr(config_module, "load_config", lambda: cfg, raising=False)
     monkeypatch.setattr(cli_module, "_ensure_runtime_database_healthy", lambda: None)
@@ -560,7 +572,7 @@ def test_start_warns_when_pause_on_disconnect_requires_extension_presence(
     assert result.exit_code == 0
     assert "WARN extension presence required" in result.stdout
     assert "background LLM work after grace period" in result.stdout
-    assert called == {"host": "127.0.0.1", "port": 8420}
+    assert called == {"host": "127.0.0.1", "port": 8420, "serve_webui": True}
 
 
 def test_run_api_server_prints_degraded_mode_panel(
@@ -590,7 +602,7 @@ def test_run_api_server_prints_degraded_mode_panel(
         Console(file=output, force_terminal=False, width=120),
         raising=False,
     )
-    monkeypatch.setattr(api_app, "create_app", lambda: fake_app)
+    monkeypatch.setattr(api_app, "create_app", lambda **_: fake_app)
     monkeypatch.setattr(
         "uvicorn.run",
         lambda app, **kwargs: run_calls.append({"app": app, **kwargs}),
@@ -612,7 +624,12 @@ def test_start_refuses_unhealthy_database(
     server_calls: list[str] = []
     backup_calls: list[str] = []
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         server_calls.append(f"{host}:{port}")
 
     def fake_ensure_runtime_database_healthy() -> None:
@@ -810,9 +827,15 @@ def test_start_accepts_explicit_host_and_port(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         called["host"] = host
         called["port"] = port
+        called["serve_webui"] = serve_webui
 
     monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
     monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
@@ -821,7 +844,7 @@ def test_start_accepts_explicit_host_and_port(
     result = runner.invoke(app, ["start", "--host", "0.0.0.0", "--port", "9000"])
 
     assert result.exit_code == 0
-    assert called == {"host": "0.0.0.0", "port": 9000}
+    assert called == {"host": "0.0.0.0", "port": 9000, "serve_webui": True}
     assert "0.0.0.0:9000" in result.stdout
 
 
@@ -830,9 +853,15 @@ def test_serve_api_uses_container_defaults(
 ) -> None:
     called: dict[str, object] = {}
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         called["host"] = host
         called["port"] = port
+        called["serve_webui"] = serve_webui
 
     monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
     monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
@@ -843,7 +872,33 @@ def test_serve_api_uses_container_defaults(
     assert result.exit_code == 0
     assert "容器 API 服务" in result.stdout
     assert "0.0.0.0:8420" in result.stdout
-    assert called == {"host": "0.0.0.0", "port": 8420}
+    assert called == {"host": "0.0.0.0", "port": 8420, "serve_webui": False}
+
+
+def test_serve_api_with_web_enables_webui(
+    monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    called: dict[str, object] = {}
+
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
+        called["host"] = host
+        called["port"] = port
+        called["serve_webui"] = serve_webui
+
+    monkeypatch.setattr(cli_module, "_require_runtime_config", lambda: None)
+    monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
+    monkeypatch.setattr(cli_module, "_initialize_logging", lambda log_level_override=None: None)
+
+    result = runner.invoke(app, ["serve-api", "--with-web"])
+
+    assert result.exit_code == 0
+    assert "Web UI 同端口可用" in result.stdout
+    assert called == {"host": "0.0.0.0", "port": 8420, "serve_webui": True}
 
 
 def test_serve_api_warns_when_pause_on_disconnect_requires_extension_presence(
@@ -853,9 +908,15 @@ def test_serve_api_warns_when_pause_on_disconnect_requires_extension_presence(
     cfg = config_module.Config()
     cfg.scheduler.pause_on_extension_disconnect = True
 
-    def fake_run_api_server(*, host: str = "127.0.0.1", port: int = 8420) -> None:
+    def fake_run_api_server(
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8420,
+        serve_webui: bool = False,
+    ) -> None:
         called["host"] = host
         called["port"] = port
+        called["serve_webui"] = serve_webui
 
     monkeypatch.setattr(config_module, "load_config", lambda: cfg, raising=False)
     monkeypatch.setattr(cli_module, "_run_api_server", fake_run_api_server, raising=False)
@@ -866,7 +927,7 @@ def test_serve_api_warns_when_pause_on_disconnect_requires_extension_presence(
     assert result.exit_code == 0
     assert "WARN extension presence required" in result.stdout
     assert "background LLM work after grace period" in result.stdout
-    assert called == {"host": "0.0.0.0", "port": 8420}
+    assert called == {"host": "0.0.0.0", "port": 8420, "serve_webui": False}
 
 
 def test_discover_prints_init_guidance_when_profile_missing(
