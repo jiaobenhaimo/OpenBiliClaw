@@ -14,6 +14,8 @@ data_dir = "data"
 # Default LLM provider: "openai" | "claude" | "gemini" | "deepseek" | "ollama" | "openrouter"
 # 这里选择的 provider 决定了运行时会检查哪一组敏感字段。
 default_provider = "openai"
+# 默认关闭跨 provider fallback：默认 provider 请求失败时直接报错，不再静默切到其它 provider。
+fallback_enabled = false
 
 [llm.openai]
 # 若 default_provider = "openai"，api_key 必填
@@ -118,8 +120,7 @@ base_url = ""
 # embedding provider, supply its credentials here, and chat traffic keeps
 # using whatever ``[llm].default_provider`` points to.
 #
-# provider: empty = use [llm].default_provider (back-compat path —
-#                   borrows credentials from [llm.<provider>])
+# provider: empty = disable embedding; embedding no longer follows [llm].default_provider
 #           "ollama" = local Ollama (no API key needed)
 #           "openai" / "gemini" = remote embeddings
 # model:    matched to provider when empty:
@@ -127,7 +128,7 @@ base_url = ""
 #             openai → text-embedding-3-small
 #             ollama → bge-m3   (multilingual, ~568MB, sub-second on CPU)
 #
-# To enable the local Ollama fallback:
+# To enable local Ollama embedding:
 #   1. install Ollama   (Mac: `brew install ollama` ; Windows: ollama.com/download)
 #   2. `ollama pull bge-m3`
 #   3. set `provider = "ollama"` here, or run `openbiliclaw setup-embedding`
@@ -149,6 +150,9 @@ api_key = ""
 base_url = ""
 # Cosine similarity threshold: topics above this are considered "same topic"
 similarity_threshold = 0.82
+# 默认关闭 embedding fallback：不会自动切换 provider，也不会借用 [llm.<provider>] 凭据。
+# 设为 true 后，才会尝试 ollama → gemini → openai fallback 链，并允许旧配置借用 chat-side 凭据。
+fallback_enabled = false
 
 # Per-module LLM overrides — set provider/model to use a different LLM
 # for specific modules. Leave empty to inherit from [llm] defaults.

@@ -971,8 +971,10 @@ def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:
     config.language = "en"
     config.data_dir = "runtime-data"
     config.llm.default_provider = "gemini"
+    config.llm.fallback_enabled = True
     config.llm.gemini.api_key = "gemini-test-key"
     config.llm.gemini.model = "gemini-2.5-flash"
+    config.llm.embedding.fallback_enabled = True
 
     save_config(config, config_path)
     loaded = load_config(config_path)
@@ -980,8 +982,17 @@ def test_save_config_round_trips_runtime_changes(tmp_path: Path) -> None:
     assert loaded.language == "en"
     assert loaded.data_dir == "runtime-data"
     assert loaded.llm.default_provider == "gemini"
+    assert loaded.llm.fallback_enabled is True
     assert loaded.llm.gemini.api_key == "gemini-test-key"
     assert loaded.llm.gemini.model == "gemini-2.5-flash"
+    assert loaded.llm.embedding.fallback_enabled is True
+
+
+def test_llm_and_embedding_fallback_defaults_are_disabled() -> None:
+    config = Config()
+
+    assert config.llm.fallback_enabled is False
+    assert config.llm.embedding.fallback_enabled is False
 
 
 def test_save_config_round_trips_embedding_credentials(tmp_path: Path) -> None:
@@ -995,6 +1006,7 @@ def test_save_config_round_trips_embedding_credentials(tmp_path: Path) -> None:
     config.llm.embedding.api_key = "sk-dedicated-embedding-xyz"
     config.llm.embedding.base_url = "https://embed.example.com/v1"
     config.llm.embedding.similarity_threshold = 0.91
+    config.llm.embedding.fallback_enabled = True
 
     save_config(config, config_path)
     loaded = load_config(config_path)
@@ -1004,6 +1016,7 @@ def test_save_config_round_trips_embedding_credentials(tmp_path: Path) -> None:
     assert loaded.llm.embedding.api_key == "sk-dedicated-embedding-xyz"
     assert loaded.llm.embedding.base_url == "https://embed.example.com/v1"
     assert loaded.llm.embedding.similarity_threshold == 0.91
+    assert loaded.llm.embedding.fallback_enabled is True
 
 
 def test_load_config_accepts_legacy_embedding_section_without_api_key(

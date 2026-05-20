@@ -89,7 +89,7 @@ python3 scripts/agent_bootstrap.py --mode docker --interactive-confirm --wait-fo
    - **6) OpenRouter 聚合** —— 默认 `openai/gpt-5-nano`;格式 `<vendor>/<model>`(如 anthropic/claude-sonnet-4-6 / google/gemini-2.5-flash)
    - **7) 本地 Ollama（完全离线）** —— 默认 `qwen2.5:7b`(中文好);可选 llama3.2 / gemma2 / mistral / deepseek-r1。无 Key / 16GB+ 内存
 2. **Phase 2 — 给所选服务填配置**：每个选项只问该选项需要的字段。**所有 provider 在 prompt 模型名前都会显示一行"可选/常见模型"提示**(DeepSeek 列 v4-flash / v4-pro,OpenAI 列 gpt-4o-mini / gpt-4o / gpt-4-turbo,Gemini / Claude / Ollama 同样,OpenAI 协议兼容子菜单见上 9 个 preset),用户主动确认而不是回车跳过一个不知道是啥的字符串。Ollama 不问 Key(自动装 + 拉模型);自建网关 / 其它路径强制手填模型名(写错会 404)。
-3. **Phase 3 — Embedding（向量化，3 选 1 + 高级）**：默认推荐 **本地 Ollama bge-m3**（免费、离线、效果够用），其次 Gemini（云端、效果最好但要 Key），再次「跟随主 LLM」（仅当主 LLM 提供 embedding 接口时可用，否则自动 fallback 到 Ollama）。高级选项里有"自定义 OpenAI 兼容 endpoint"。
+3. **Phase 3 — Embedding（向量化，3 选 1 + 高级）**：默认推荐 **本地 Ollama bge-m3**（免费、离线、效果够用），其次 Gemini（云端、效果最好但要 Key），也可以选择暂不启用。Embedding 与主 LLM 独立，不再默认跟随主 LLM。高级选项里有"自定义 OpenAI 兼容 endpoint"。
 4. **Phase 4 — Per-module 覆盖**（高级，默认跳过）：可单独给 soul / discovery / recommendation / evaluation 指定不同模型。
 
 接着 B 站登录态走 **2 选 1**（v0.3.12+）：
