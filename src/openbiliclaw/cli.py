@@ -3066,7 +3066,7 @@ def start(
     _print_status_panel(
         "info",
         "API 服务",
-        f"正在启动本地后端，当前监听 {host}:{port}。",
+        f"正在启动本地后端，当前监听 {host}:{port}。Web UI: http://{host}:{port}/web",
     )
     _warn_if_pause_on_disconnect_requires_presence()
     _maybe_create_runtime_database_backup()
@@ -3083,7 +3083,7 @@ def serve_api(
     _print_status_panel(
         "info",
         "API 服务",
-        f"正在启动容器友好的后端入口，当前监听 {host}:{port}。",
+        f"正在启动容器友好的后端入口，当前监听 {host}:{port}。Web UI 同端口可用：/web",
     )
     _warn_if_pause_on_disconnect_requires_presence()
     _run_api_server(host=host, port=port)

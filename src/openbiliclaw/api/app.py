@@ -8,11 +8,12 @@ import logging
 import shutil
 import uuid
 from contextlib import suppress
+from importlib import resources
 from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from openbiliclaw.api.models import (
     ActivityFeedItemOut,
@@ -286,6 +287,24 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    def _webui_html() -> HTMLResponse:
+        html = resources.files("openbiliclaw.webui").joinpath("index.html").read_text(
+            encoding="utf-8"
+        )
+        return HTMLResponse(html)
+
+    @app.get("/", include_in_schema=False)
+    async def webui_root() -> RedirectResponse:
+        return RedirectResponse(url="/web", status_code=302)
+
+    @app.get("/web", response_class=HTMLResponse, include_in_schema=False)
+    async def webui() -> HTMLResponse:
+        return _webui_html()
+
+    @app.get("/web/", response_class=HTMLResponse, include_in_schema=False)
+    async def webui_slash() -> HTMLResponse:
+        return _webui_html()
 
     # ── Build RuntimeContext ────────────────────────────────────────
     config = load_config()

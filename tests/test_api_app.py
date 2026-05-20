@@ -625,6 +625,23 @@ class TestBackendAPI:
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "service": "openbiliclaw-api"}
 
+    def test_webui_routes_serve_bundled_html(self) -> None:
+        from fastapi.testclient import TestClient
+
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        root_response = client.get("/", follow_redirects=False)
+        assert root_response.status_code == 302
+        assert root_response.headers["location"] == "/web"
+
+        for path in ("/web", "/web/"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/html")
+            assert "OpenBiliClaw" in response.text
+            assert "为你推荐的内容" in response.text
+
     def test_health_endpoint_reports_profile_ready_when_available(self) -> None:
         from fastapi.testclient import TestClient
 
