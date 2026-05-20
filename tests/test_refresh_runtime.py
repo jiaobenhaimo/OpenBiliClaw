@@ -228,6 +228,15 @@ class _FakeDouyinProducer:
         return {"discovered": 3, "reason": "ok"}
 
 
+class _FakeYoutubeProducer:
+    def __init__(self) -> None:
+        self.calls: list[int | None] = []
+
+    async def produce_if_due(self, *, limit: int | None = None) -> dict[str, object]:
+        self.calls.append(limit)
+        return {"discovered": 3, "reason": "ok"}
+
+
 class _FakeRecommendationEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, object]], dict[str, object], int]] = []
@@ -272,6 +281,7 @@ _LOOP_BODY_ATTRS = [
     ("_loop_soul_pipeline", ("_tick_soul_pipeline",)),
     ("_loop_xhs_producer", ("_tick_xhs_producer",)),
     ("_loop_douyin_producer", ("_tick_douyin_producer",)),
+    ("_loop_youtube_producer", ("_tick_youtube_producer",)),
     (
         "_loop_proactive_push",
         (
@@ -1412,7 +1422,7 @@ def test_source_replenishment_plan_leaves_xhs_deficit_to_xhs_producer() -> None:
     assert controller._build_source_replenishment_plan() == []
 
 
-def test_source_replenishment_plan_maps_youtube_deficit_to_youtube_strategies() -> None:
+def test_source_replenishment_plan_leaves_youtube_deficit_to_youtube_producer() -> None:
     controller = ContinuousRefreshController(
         memory_manager=_FakeMemoryManager(),
         database=_FakeDatabase(
@@ -1430,9 +1440,34 @@ def test_source_replenishment_plan_maps_youtube_deficit_to_youtube_strategies() 
         pool_source_shares={"bilibili": 8, "youtube": 2},
     )
 
-    assert controller._build_source_replenishment_plan() == [
-        (["yt_search", "yt_trending", "yt_channel"], 20)
-    ]
+    assert controller._build_source_replenishment_plan() == []
+
+
+def test_warn_on_stranded_source_shares_checks_youtube_producer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("WARNING")
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=80,
+            source_counts={
+                "bilibili": 80,
+                "youtube": 0,
+            },
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=100,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        youtube_producer=None,
+    )
+
+    controller._warn_on_stranded_source_shares()
+
+    assert "youtube" in caplog.text
 
 
 async def test_xhs_producer_receives_source_deficit_limit() -> None:
@@ -1498,6 +1533,51 @@ async def test_douyin_producer_skips_when_douyin_at_quota() -> None:
     )
 
     await controller._tick_douyin_producer()
+
+    assert producer.calls == []
+
+
+async def test_youtube_producer_runs_when_youtube_under_quota() -> None:
+    producer = _FakeYoutubeProducer()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=540,
+            source_counts={"bilibili": 480, "youtube": 0},
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        discovery_limit=30,
+        youtube_producer=producer,
+    )
+
+    await controller._tick_youtube_producer()
+
+    assert producer.calls == [30]
+
+
+async def test_youtube_producer_skips_when_youtube_at_quota() -> None:
+    producer = _FakeYoutubeProducer()
+    controller = ContinuousRefreshController(
+        memory_manager=_FakeMemoryManager(),
+        database=_FakeDatabase(
+            [],
+            pool_count=600,
+            source_counts={"bilibili": 480, "youtube": 120},
+        ),
+        soul_engine=_FakeSoulEngine(),
+        discovery_engine=_FakeDiscoveryEngine(),
+        recommendation_engine=_FakeRecommendationEngine(),
+        pool_target_count=600,
+        pool_source_shares={"bilibili": 8, "youtube": 2},
+        youtube_producer=producer,
+    )
+
+    await controller._tick_youtube_producer()
 
     assert producer.calls == []
 

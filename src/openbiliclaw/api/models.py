@@ -594,6 +594,7 @@ class YoutubeSourceConfigOut(BaseModel):
     daily_trending_budget: int = 50
     daily_channel_budget: int = 10
     request_interval_seconds: int = 2
+    min_interval_minutes: int = 60
 
 
 class SourcesConfigOut(BaseModel):

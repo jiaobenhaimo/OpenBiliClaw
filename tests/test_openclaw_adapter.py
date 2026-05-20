@@ -775,6 +775,8 @@ def test_build_openclaw_adapter_services_reuses_shared_database(monkeypatch) -> 
     }
     assert services.runtime_controller.kwargs["scheduler_config"] is fake_config.scheduler
     assert "presence" in services.runtime_controller.kwargs
+    assert "youtube_producer" in services.runtime_controller.kwargs
+    assert services.runtime_controller.kwargs["youtube_producer"] is None
     assert services.runtime_controller.kwargs["check_interval_seconds"] == 77
     assert services.runtime_controller.kwargs["signal_event_threshold"] == 9
     assert services.runtime_controller.kwargs["trending_refresh_hours"] == 5
