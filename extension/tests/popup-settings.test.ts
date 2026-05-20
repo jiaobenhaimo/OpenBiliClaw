@@ -41,6 +41,7 @@ test("settings page exposes advanced config fields from backend schema", () => {
     "cfgYoutubeDailyTrendingBudget",
     "cfgYoutubeDailyChannelBudget",
     "cfgYoutubeRequestInterval",
+    "cfgYoutubeMinInterval",
     "cfgExtensionDisconnectGrace",
     "cfgRefreshCheckInterval",
     "cfgSignalEventThreshold",
@@ -175,16 +176,22 @@ test("settings page round-trips YouTube source budgets", () => {
     popupJs,
     /setVal\("cfgYoutubeRequestInterval", cfg\.sources\?\.youtube\?\.request_interval_seconds\)/,
   );
+  assert.match(
+    popupJs,
+    /setVal\("cfgYoutubeMinInterval", cfg\.sources\?\.youtube\?\.min_interval_minutes\)/,
+  );
   assert.match(popupJs, /daily_search_budget: getInt\("cfgYoutubeDailySearchBudget", 6\)/);
   assert.match(popupJs, /daily_trending_budget: getInt\("cfgYoutubeDailyTrendingBudget", 50\)/);
   assert.match(popupJs, /daily_channel_budget: getInt\("cfgYoutubeDailyChannelBudget", 10\)/);
   assert.match(popupJs, /request_interval_seconds: getInt\("cfgYoutubeRequestInterval", 2\)/);
+  assert.match(popupJs, /min_interval_minutes: getInt\("cfgYoutubeMinInterval", 60\)/);
 
   for (const id of [
     "cfgYoutubeDailySearchBudget",
     "cfgYoutubeDailyTrendingBudget",
     "cfgYoutubeDailyChannelBudget",
     "cfgYoutubeRequestInterval",
+    "cfgYoutubeMinInterval",
   ]) {
     assert.match(popupHtml, new RegExp(`id="${id}"`));
   }

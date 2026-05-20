@@ -3958,6 +3958,7 @@ class TestEmbeddingAndCompatProviderE2E:
                         "daily_trending_budget": 41,
                         "daily_channel_budget": 9,
                         "request_interval_seconds": 4,
+                        "min_interval_minutes": 30,
                     },
                 },
                 "scheduler": {
@@ -4023,6 +4024,8 @@ class TestEmbeddingAndCompatProviderE2E:
         assert cfg.sources.youtube.daily_trending_budget == 41
         assert cfg.sources.youtube.daily_channel_budget == 9
         assert cfg.sources.youtube.request_interval_seconds == 4
+        assert cfg.sources.youtube.min_interval_minutes == 30
+        assert response.json()["config"]["sources"]["youtube"]["min_interval_minutes"] == 30
         assert cfg.scheduler.pool_source_shares == {
             "bilibili": 6,
             "xiaohongshu": 2,

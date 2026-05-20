@@ -238,10 +238,9 @@ class DouyinSourceConfig:
 class YoutubeSourceConfig:
     """YouTube source-specific configuration.
 
-    YouTube discovery runs through the regular strategy pipeline rather
-    than a per-source plugin producer. The budget knobs therefore tune
-    each runtime discovery pass: search queries, trending fetch size and
-    subscribed-channel breadth.
+    YouTube steady-state discovery runs through a backend-direct runtime
+    producer. The budget knobs cap per-day execution units: search
+    queries, trending fetch breadth, and subscribed-channel breadth.
     """
 
     enabled: bool = False
@@ -249,6 +248,7 @@ class YoutubeSourceConfig:
     daily_trending_budget: int = 50
     daily_channel_budget: int = 10
     request_interval_seconds: int = 2
+    min_interval_minutes: int = 60
 
 
 @dataclass
@@ -543,6 +543,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
             daily_trending_budget=int(youtube_raw.get("daily_trending_budget", 50)),
             daily_channel_budget=int(youtube_raw.get("daily_channel_budget", 10)),
             request_interval_seconds=int(youtube_raw.get("request_interval_seconds", 2)),
+            min_interval_minutes=max(0, int(youtube_raw.get("min_interval_minutes", 60))),
         ),
     )
 
@@ -957,6 +958,7 @@ def _render_config_toml(config: Config) -> str:
             f"daily_trending_budget = {config.sources.youtube.daily_trending_budget}",
             f"daily_channel_budget = {config.sources.youtube.daily_channel_budget}",
             f"request_interval_seconds = {config.sources.youtube.request_interval_seconds}",
+            f"min_interval_minutes = {config.sources.youtube.min_interval_minutes}",
             "",
             "[scheduler]",
             f"enabled = {_toml_bool(config.scheduler.enabled)}",
@@ -967,14 +969,12 @@ def _render_config_toml(config: Config) -> str:
             f"discovery_cron = {_toml_string(config.scheduler.discovery_cron)}",
             f"pool_target_count = {config.scheduler.pool_target_count}",
             f"account_sync_interval_hours = {config.scheduler.account_sync_interval_hours}",
-            "refresh_check_interval_seconds = "
-            f"{config.scheduler.refresh_check_interval_seconds}",
+            f"refresh_check_interval_seconds = {config.scheduler.refresh_check_interval_seconds}",
             f"signal_event_threshold = {config.scheduler.signal_event_threshold}",
             f"trending_refresh_hours = {config.scheduler.trending_refresh_hours}",
             f"explore_refresh_hours = {config.scheduler.explore_refresh_hours}",
             f"discovery_limit = {config.scheduler.discovery_limit}",
-            "proactive_push_interval_seconds = "
-            f"{config.scheduler.proactive_push_interval_seconds}",
+            f"proactive_push_interval_seconds = {config.scheduler.proactive_push_interval_seconds}",
             "speculator_idle_interval_minutes = "
             f"{config.scheduler.speculator_idle_interval_minutes}",
             f"speculation_interval_minutes = {config.scheduler.speculation_interval_minutes}",

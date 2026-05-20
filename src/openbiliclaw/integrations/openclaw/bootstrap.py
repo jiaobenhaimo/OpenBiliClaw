@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from openbiliclaw.api.runtime_context import build_youtube_discovery_producer
 from openbiliclaw.bilibili.api import BilibiliAPIClient
 from openbiliclaw.bilibili.auth import resolve_runtime_cookie
 from openbiliclaw.config import Config, load_config
@@ -146,6 +147,15 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         soul_engine=soul_engine,
         discovery_engine=discovery_engine,
     )
+    youtube_producer = build_youtube_discovery_producer(
+        config=config,
+        database=database,
+        soul_engine=soul_engine,
+        discovery_engine=discovery_engine,
+        llm_service=llm_service,
+        memory=cast("Any", memory_manager),
+        concurrency=concurrency,
+    )
     runtime_controller = ContinuousRefreshController(
         memory_manager=memory_manager,
         database=database,
@@ -157,14 +167,13 @@ def build_openclaw_adapter_services() -> OpenClawAdapterServices:
         signal_event_threshold=int(getattr(config.scheduler, "signal_event_threshold", 6)),
         trending_refresh_hours=int(getattr(config.scheduler, "trending_refresh_hours", 3)),
         explore_refresh_hours=int(getattr(config.scheduler, "explore_refresh_hours", 12)),
-        check_interval_seconds=int(
-            getattr(config.scheduler, "refresh_check_interval_seconds", 60)
-        ),
+        check_interval_seconds=int(getattr(config.scheduler, "refresh_check_interval_seconds", 60)),
         proactive_push_interval_seconds=int(
             getattr(config.scheduler, "proactive_push_interval_seconds", 120)
         ),
         discovery_limit=int(getattr(config.scheduler, "discovery_limit", 30)),
         douyin_producer=douyin_producer,
+        youtube_producer=youtube_producer,
         scheduler_config=config.scheduler,
         presence=presence,
     )

@@ -3982,7 +3982,11 @@
           <label for="cfgYoutubeRequestInterval">YouTube 请求间隔秒数</label>
           <input id="cfgYoutubeRequestInterval" type="number" min="0" step="1" placeholder="2">
         </div>
-        <p class="settings-hint">YouTube 没有独立插件 producer；这些值会限制 yt_search / yt_trending / yt_channel 三个 discovery 策略的单轮规模。</p>
+        <div class="settings-field">
+          <label for="cfgYoutubeMinInterval">YouTube 最小调度间隔分钟数</label>
+          <input id="cfgYoutubeMinInterval" type="number" min="0" step="1" placeholder="60">
+        </div>
+        <p class="settings-hint">YouTube 通过后端 producer 独立调度；预算按天限制 yt_search / yt_trending / yt_channel 的执行规模。</p>
       </div>
 
       <div class="settings-section settings-source-card" data-source-card="browser">

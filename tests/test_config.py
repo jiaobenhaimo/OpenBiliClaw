@@ -789,6 +789,7 @@ def test_sources_youtube_defaults() -> None:
     assert config.sources.youtube.daily_trending_budget == 50
     assert config.sources.youtube.daily_channel_budget == 10
     assert config.sources.youtube.request_interval_seconds == 2
+    assert config.sources.youtube.min_interval_minutes == 60
 
 
 def test_build_config_supports_sources_xiaohongshu(tmp_path: Path) -> None:
@@ -849,6 +850,7 @@ daily_search_budget = 4
 daily_trending_budget = 40
 daily_channel_budget = 7
 request_interval_seconds = 3
+min_interval_minutes = 45
 """.strip(),
         encoding="utf-8",
     )
@@ -860,6 +862,7 @@ request_interval_seconds = 3
     assert config.sources.youtube.daily_trending_budget == 40
     assert config.sources.youtube.daily_channel_budget == 7
     assert config.sources.youtube.request_interval_seconds == 3
+    assert config.sources.youtube.min_interval_minutes == 45
 
 
 def test_save_config_round_trips_sources_youtube(tmp_path: Path) -> None:
@@ -870,6 +873,7 @@ def test_save_config_round_trips_sources_youtube(tmp_path: Path) -> None:
     config.sources.youtube.daily_trending_budget = 42
     config.sources.youtube.daily_channel_budget = 8
     config.sources.youtube.request_interval_seconds = 4
+    config.sources.youtube.min_interval_minutes = 30
 
     save_config(config, config_path)
     loaded = load_config(config_path)
@@ -879,6 +883,7 @@ def test_save_config_round_trips_sources_youtube(tmp_path: Path) -> None:
     assert loaded.sources.youtube.daily_trending_budget == 42
     assert loaded.sources.youtube.daily_channel_budget == 8
     assert loaded.sources.youtube.request_interval_seconds == 4
+    assert loaded.sources.youtube.min_interval_minutes == 30
 
 
 def test_save_config_round_trips_sources_browser_cdp_url(tmp_path: Path) -> None:

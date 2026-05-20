@@ -27,7 +27,6 @@ _DEFAULT_PLATFORM_SOURCE_SHARES: dict[str, int] = {
 }
 _PLATFORM_SOURCE_ORDER = ("bilibili", "xiaohongshu", "douyin", "youtube")
 _BILIBILI_DISCOVERY_SOURCES = ("search", "related_chain", "trending", "explore")
-_YOUTUBE_DISCOVERY_SOURCES = ("yt_search", "yt_trending", "yt_channel")
 
 
 def _call_accepts_limit(fn: Any) -> bool:
@@ -177,6 +176,7 @@ class ContinuousRefreshController:
     event_hub: Any | None = None
     xhs_producer: Any | None = None
     douyin_producer: Any | None = None
+    youtube_producer: Any | None = None
     scheduler_config: Any = field(default_factory=SchedulerConfig)
     presence: PresenceTracker = field(default_factory=PresenceTracker)
     signal_event_threshold: int = 6
@@ -687,6 +687,7 @@ class ContinuousRefreshController:
             ├─ _loop_soul_pipeline()     60s   profile updates, speculator
             ├─ _loop_xhs_producer()      60s   xhs keyword generation
             ├─ _loop_douyin_producer()   60s   Douyin discovery when under quota
+            ├─ _loop_youtube_producer()  60s   YouTube discovery when under quota
             └─ _loop_proactive_push()    60s   delight + interest probe
         """
         if self._llm_work_allowed():
@@ -699,6 +700,7 @@ class ContinuousRefreshController:
             asyncio.create_task(self._loop_soul_pipeline()),
             asyncio.create_task(self._loop_xhs_producer()),
             asyncio.create_task(self._loop_douyin_producer()),
+            asyncio.create_task(self._loop_youtube_producer()),
             asyncio.create_task(self._loop_proactive_push()),
         ]
         try:
@@ -854,6 +856,16 @@ class ContinuousRefreshController:
                 await self._tick_douyin_producer()
             await asyncio.sleep(self.check_interval_seconds)
 
+    async def _loop_youtube_producer(self) -> None:
+        """YouTube production — backend-direct discovery when YouTube is below quota."""
+        while True:
+            if not self._llm_work_allowed():
+                await asyncio.sleep(self.check_interval_seconds)
+                continue
+            with suppress(Exception):
+                await self._tick_youtube_producer()
+            await asyncio.sleep(self.check_interval_seconds)
+
     async def _loop_proactive_push(self) -> None:
         """Delight + interest probe push — lightweight, never blocks.
 
@@ -928,6 +940,25 @@ class ContinuousRefreshController:
         if not self._is_initialized():
             return
         deficit = self._source_deficit("douyin")
+        if deficit <= 0:
+            return
+        produce_fn = getattr(producer, "produce_if_due", None)
+        if not callable(produce_fn):
+            return
+        limit = max(1, min(deficit, self.discovery_limit))
+        if _call_accepts_limit(produce_fn):
+            await produce_fn(limit=limit)
+        else:
+            await produce_fn()
+
+    async def _tick_youtube_producer(self) -> None:
+        """Invoke the YouTube discovery producer if YouTube is under quota."""
+        producer = self.youtube_producer
+        if producer is None:
+            return
+        if not self._is_initialized():
+            return
+        deficit = self._source_deficit("youtube")
         if deficit <= 0:
             return
         produce_fn = getattr(producer, "produce_if_due", None)
@@ -1445,8 +1476,6 @@ class ContinuousRefreshController:
                 # Bilibili is a platform quota now, but its implementation
                 # still fans out through four established strategy names.
                 plan.append((list(_BILIBILI_DISCOVERY_SOURCES), deficit))
-            elif source == "youtube":
-                plan.append((list(_YOUTUBE_DISCOVERY_SOURCES), deficit))
         return plan
 
     def _source_target_counts(self) -> dict[str, int]:
@@ -1501,9 +1530,7 @@ class ContinuousRefreshController:
                 stranded.append("xiaohongshu")
             elif source == "douyin" and self.douyin_producer is None:
                 stranded.append("douyin")
-            elif source == "youtube" and not self._has_registered_discovery_sources(
-                _YOUTUBE_DISCOVERY_SOURCES
-            ):
+            elif source == "youtube" and self.youtube_producer is None:
                 stranded.append("youtube")
             elif source not in {"bilibili", "xiaohongshu", "douyin", "youtube"}:
                 # Unknown source family with an explicit share.
@@ -1516,13 +1543,6 @@ class ContinuousRefreshController:
                 stranded,
                 {s: shares.get(s) for s in stranded},
             )
-
-    def _has_registered_discovery_sources(self, names: tuple[str, ...]) -> bool:
-        strategies = getattr(self.discovery_engine, "_strategies", None)
-        if strategies is None:
-            return True
-        registered = {str(getattr(strategy, "name", "")) for strategy in strategies}
-        return any(name in registered for name in names)
 
     def _normalized_pool_source_shares(self) -> dict[str, int]:
         raw = self.pool_source_shares or _DEFAULT_PLATFORM_SOURCE_SHARES

@@ -356,7 +356,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 │(Sat.filter)│(5-Layer)│(Neg.anchor)│  (Expression)   │
 ├─────────┴──────────┴───────────┴────────────────────┤
 │ LLM (API Key/Codex OAuth) · Bilibili API · Extension Proxy │
-│ Runtime: Account sync -> Memory/Soul auto-bootstrap        │
+│ Runtime: Account sync + XHS/DY/YouTube producers           │
 │ SQLite: events(inferred_satisfaction) · content_cache   │
 │         recommendations · chat_turns                    │
 └─────────────────────────────────────────────────────┘
@@ -364,7 +364,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 
 ### Content Discovery Engine
 
-Four Bilibili strategies work in coordination, each with independent API quota, and the source layer also accepts Xiaohongshu extension-proxy signals, YouTube init signals, plus Douyin init signals / plugin-signed search / hot / feed discovery:
+Four Bilibili strategies work in coordination, each with independent API quota, and the source layer also accepts Xiaohongshu extension-proxy signals, YouTube init signals plus a backend-direct YouTube producer, and Douyin init signals / plugin-signed search / hot / feed discovery:
 
 | Strategy | Description | Quota |
 |----------|-------------|-------|
@@ -375,9 +375,11 @@ Four Bilibili strategies work in coordination, each with independent API quota, 
 
 Results go through multi-dimensional diversity selection: platform-family reservation (saved default Bilibili / Xiaohongshu / Douyin / YouTube = 8 / 1 / 1 / 1, configurable via `[scheduler.pool_source_shares]`; the effective default only includes Bilibili until XHS / Douyin / YouTube are explicitly enabled) → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations. The four Bilibili strategies count as `bilibili`; XHS extension sources count as `xiaohongshu`; Douyin search / hot / feed count as `douyin`; YouTube `yt_search` / `yt_trending` / `yt_channel` count as `youtube`. Disabled platforms are removed from the effective runtime mix.
 
-For first-run profiling, `openbiliclaw init` can enqueue XHS, Douyin, and YouTube `bootstrap_profile` tasks. XHS opens Xiaohongshu in the user's logged-in browser session, navigates to the profile, parses saved / liked / explicit history state, and returns `partial` batches; the backend reuses recent XHS bootstrap tasks by default and marks a task `in_progress` before returning it to the extension so the same foreground favorites / likes pull is not opened repeatedly. Douyin visits post / favorite / like / follow scopes in the logged-in Douyin session and combines DOM extraction with a MAIN-world API harvester. YouTube visits watch history / subscriptions / liked videos pages and reads rendered DOM items. The backend converts all three sources into normal `view / favorite / like / follow` events and still does not crawl or log in to those sites directly.
+For first-run profiling, `openbiliclaw init` can enqueue XHS, Douyin, and YouTube `bootstrap_profile` tasks. XHS opens Xiaohongshu in the user's logged-in browser session, navigates to the profile, parses saved / liked / explicit history state, and returns `partial` batches; the backend reuses recent XHS bootstrap tasks by default and marks a task `in_progress` before returning it to the extension so the same foreground favorites / likes pull is not opened repeatedly. Douyin visits post / favorite / like / follow scopes in the logged-in Douyin session and combines DOM extraction with a MAIN-world API harvester. YouTube visits watch history / subscriptions / liked videos pages and reads rendered DOM items. The backend converts all three sources into normal `view / favorite / like / follow` events, keeps full raw task results for diagnostics, and filters already-seen bootstrap keys through `source_bootstrap_state.json` before old items can re-enter memory or the profile pipeline. It still does not crawl or log in to those sites directly.
 
 For steady-state Douyin content discovery, `DouyinDiscoveryService` uses the extension-backed `DouyinPluginSearchClient` for search, hot, and feed candidates. Search signs the normal search API from a background tab and enters the pool as `dy-plugin-search`; hot reads hot-board `sentence_id`, opens `/hot/{sentence_id}` in a background tab, resolves the redirected seed aweme, signs the related API, and enters the pool as `dy-plugin-hot-related`; feed signs `/aweme/v1/web/tab/feed/` on a background logged-in homepage and enters the pool as `dy-plugin-feed`. Results either write through `ContentDiscoveryEngine` or preview via `discover-douyin --no-cache`. The cookie is resolved from `OPENBILICLAW_DOUYIN_COOKIE` first, then from the extension-synced `data/douyin_cookie.json`.
+
+For steady-state YouTube content discovery, `YoutubeDiscoveryProducer` runs in its own backend loop when the YouTube platform family is under quota. It calls `yt_search`, `yt_trending`, and `yt_channel` directly through `ContentDiscoveryEngine`, throttled by `min_interval_minutes` and per-strategy daily execution ledgers. `yt_tasks` remains only for bootstrap-profile extension imports and smoke checks.
 
 ### Soul Engine
 

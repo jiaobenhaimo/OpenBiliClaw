@@ -4222,6 +4222,7 @@ function bindSettings() {
     setVal("cfgYoutubeDailyTrendingBudget", cfg.sources?.youtube?.daily_trending_budget);
     setVal("cfgYoutubeDailyChannelBudget", cfg.sources?.youtube?.daily_channel_budget);
     setVal("cfgYoutubeRequestInterval", cfg.sources?.youtube?.request_interval_seconds);
+    setVal("cfgYoutubeMinInterval", cfg.sources?.youtube?.min_interval_minutes);
 
     // General
     const lang = document.getElementById("cfgLanguage");
@@ -4379,6 +4380,7 @@ function bindSettings() {
           daily_trending_budget: getInt("cfgYoutubeDailyTrendingBudget", 50),
           daily_channel_budget: getInt("cfgYoutubeDailyChannelBudget", 10),
           request_interval_seconds: getInt("cfgYoutubeRequestInterval", 2),
+          min_interval_minutes: getInt("cfgYoutubeMinInterval", 60),
         },
       },
       scheduler: {
