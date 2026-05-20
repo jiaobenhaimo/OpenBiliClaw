@@ -91,10 +91,10 @@ python3 scripts/agent_bootstrap.py \
 | `--llm-api-key KEY` | 给当前（或 `--provider` 指定的）provider 写入 API Key。 |
 | `--llm-base-url URL` | （v0.3.5+）覆盖该 provider 的 `base_url`。**OpenAI 协议兼容服务必填**（Azure / vLLM / LMStudio / OneAPI / 自建网关）。 |
 | `--llm-model NAME` | （v0.3.5+）覆盖该 provider 的 chat 模型名。 |
-| `--embedding-provider NAME` | （v0.3.5+）embedding provider。空字符串 = 跟随主 LLM；填 `ollama` 走本地 bge-m3 兜底；填其他 provider 则单独走该家。 |
+| `--embedding-provider NAME` | （v0.3.5+）embedding provider。空字符串 = 不启用 embedding；填 `ollama` 走本地 bge-m3；填其他 provider 则单独走该家。 |
 | `--embedding-model NAME` | （v0.3.5+）embedding 模型名（典型: `bge-m3`、`text-embedding-3-small`）。 |
-| `--embedding-base-url URL` | （v0.3.5+）自托管 embedding 网关的 base_url，会写到对应 `[llm.<provider>]` 段。 |
-| `--embedding-api-key KEY` | （v0.3.5+）自托管 embedding 网关的 API Key。 |
+| `--embedding-base-url URL` | （v0.3.5+）自托管 embedding 网关的 base_url，会写到 `[llm.embedding].base_url`。 |
+| `--embedding-api-key KEY` | （v0.3.5+）自托管 embedding 网关的 API Key，会写到 `[llm.embedding].api_key`。 |
 | `--module-override MODULE=PROVIDER:MODEL` | （v0.3.5+，可重复）per-module LLM 覆盖。MODULE ∈ {soul, discovery, recommendation, evaluation}。例：`--module-override discovery=deepseek:deepseek-v4-flash`。 |
 | `--bilibili-cookie VALUE` | 直接写入 Bilibili Cookie，同时落盘到 `data/bilibili_cookie.json`。 |
 | `--interactive-confirm` | 人类直接运行 installer 时使用：bootstrap 会在终端里确认 embedding、B 站 Cookie 来源和 XHS / Douyin / YouTube opt-in。AI agent 通常自己问完用户后传显式参数。 |
@@ -182,8 +182,8 @@ docker exec -it openbiliclaw-backend openbiliclaw config-show
 
 **v0.3.30+ 又加了一道隐私 / 质量决策门槛，v0.3.67+ 增加抖音同意项，当前也要求 YouTube 同意项**：auto-init 只会在
 embedding 选择已显式传入（例如 `--embedding-provider ollama
---embedding-model bge-m3`，或 `--embedding-provider ""` 表示用户选择跟随主
-LLM）且小红书 / 抖音 / YouTube 决策都已显式传入（`--yes-xhs` / `--no-xhs`、`--yes-douyin` / `--no-douyin`、`--yes-youtube` / `--no-youtube`）时执行。如果缺少其中任一项，最后一条事件会是：
+--embedding-model bge-m3`，或 `--embedding-provider ""` 表示用户选择暂不启用
+embedding）且小红书 / 抖音 / YouTube 决策都已显式传入（`--yes-xhs` / `--no-xhs`、`--yes-douyin` / `--no-douyin`、`--yes-youtube` / `--no-youtube`）时执行。如果缺少其中任一项，最后一条事件会是：
 
 ```json
 {

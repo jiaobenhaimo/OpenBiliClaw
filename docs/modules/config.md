@@ -23,6 +23,7 @@ cp config.example.toml config.toml
 | 键 | 类型 | 默认值 | 说明 |
 |----|------|--------|------|
 | `default_provider` | string | `"openai"` | 默认 Provider：`openai` / `claude` / `gemini` / `deepseek` / `ollama` / `openrouter` / `openai_compatible` |
+| `fallback_enabled` | bool | `false` | LLM 请求失败时是否尝试其它已注册 provider。默认关闭，失败直接暴露，避免静默切模型 / 切费用来源 |
 
 ### `[llm.openai]`
 
@@ -116,16 +117,17 @@ Embedding 服务用于多个语义任务：discovery 内容兴趣预过滤、rec
 
 | 键 | 类型 | 默认值 | 说明 |
 |----|------|--------|------|
-| `provider` | string | `""` | 留空 = 跟随 `[llm].default_provider`；填 `"openai"` / `"gemini"` / `"ollama"` / `"openai_compatible"`。Claude / DeepSeek / OpenRouter 没有 embedding 接口 |
+| `provider` | string | `""` | 留空 = 不启用 embedding；不会跟随 `[llm].default_provider`。可填 `"openai"` / `"gemini"` / `"ollama"` / `"openai_compatible"`。Claude / DeepSeek / OpenRouter 没有 embedding 接口 |
 | `model` | string | `"gemini-embedding-001"` | embedding 模型名；按 provider 自动填合理默认：`gemini → gemini-embedding-001` / `openai → text-embedding-3-small` / `ollama → bge-m3` |
-| `api_key` | string | `""` | v0.3.32+ embedding 专属 API Key。留空走向后兼容路径（借用 `[llm.<provider>].api_key`，并打一条一次性 WARNING）。Ollama 不需要 |
+| `api_key` | string | `""` | v0.3.32+ embedding 专属 API Key。默认不会借用 `[llm.<provider>].api_key`；只有 `fallback_enabled=true` 时才允许旧配置借用 chat-side 凭据并打一条 WARNING。Ollama 不需要 |
 | `base_url` | string | `""` | v0.3.32+ embedding 专属 base URL。留空使用 provider 默认值（OpenAI → `api.openai.com/v1`、Ollama → `localhost:11434/v1`）。Gemini SDK 忽略此字段 |
 | `similarity_threshold` | float | `0.82` | 余弦相似度阈值，超过即视为"同主题" |
+| `fallback_enabled` | bool | `false` | Embedding provider 不可用时是否 fallback 到 `ollama → gemini → openai`，并允许借用对应 chat provider 凭据。默认关闭 |
 
 #### 启用本地 Ollama embedding（v0.3.0+，**v0.3.3 起真实生效**）
 
 > ⚠️ **如果你装的是 v0.3.0~v0.3.2**：`setup-embedding` 当时虽然写了 `[llm.embedding] provider="ollama"`，但 LLM 注册表静默回退到 default provider，embedding 实际仍走 Gemini。
-> **升级到 v0.3.3+ 重启 backend** 即可生效，不需要改配置；想"零悬念"的话可以再跑一次 `openbiliclaw setup-embedding`，向导会顺手补上 `[llm.ollama] base_url`。
+> **升级到 v0.3.3+ 重启 backend** 即可生效，不需要改配置；当前版本可再跑一次 `openbiliclaw setup-embedding`，向导会把 provider / model / base_url 写入独立的 `[llm.embedding]` 段。
 
 不想再多一份 embedding API Key、或要支持离线，可以用 Ollama + bge-m3 跑本地 embedding：
 

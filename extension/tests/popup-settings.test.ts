@@ -9,6 +9,8 @@ test("settings page exposes advanced config fields from backend schema", () => {
   const expectedIds = [
     "cfgBackendPort",
     "cfgDataDir",
+    "cfgLlmFallbackEnabled",
+    "cfgEmbeddingFallbackEnabled",
     "cfgOpenaiAuthMode",
     "cfgDeepseekReasoning",
     "cfgOpenrouterReferer",
@@ -209,6 +211,27 @@ test("settings page round-trips OpenAI auth mode", () => {
     /setVal\("cfgOpenaiAuthMode", cfg\.llm\?\.openai\?\.auth_mode \|\| "api_key"\)/,
   );
   assert.match(popupJs, /auth_mode: getVal\("cfgOpenaiAuthMode"\) \|\| "api_key"/);
+});
+
+test("settings page round-trips LLM and embedding fallback switches", () => {
+  const popupHtml = readFileSync(resolve("popup", "popup.html"), "utf8");
+  const popupJs = readFileSync(resolve("popup", "popup.js"), "utf8");
+
+  assert.match(popupHtml, /id="cfgLlmFallbackEnabled"/);
+  assert.match(popupHtml, /id="cfgEmbeddingFallbackEnabled"/);
+  assert.match(
+    popupJs,
+    /cfgLlmFallback\.checked = cfg\.llm\?\.fallback_enabled === true/,
+  );
+  assert.match(
+    popupJs,
+    /embeddingFallback\.checked = cfg\.llm\?\.embedding\?\.fallback_enabled === true/,
+  );
+  assert.match(popupJs, /fallback_enabled: checked\("cfgLlmFallbackEnabled"\)/);
+  assert.match(
+    popupJs,
+    /fallback_enabled: checked\("cfgEmbeddingFallbackEnabled"\)/,
+  );
 });
 
 test("settings page placeholders match config example defaults", () => {

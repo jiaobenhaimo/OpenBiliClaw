@@ -393,8 +393,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         choices=("", *SUPPORTED_PROVIDERS),
         help=(
-            "Embedding provider override. Empty string = follow primary LLM "
-            "provider. Use 'ollama' for local bge-m3 fallback, or pick any "
+            "Embedding provider override. Empty string = disable embedding. "
+            "Use 'ollama' for local bge-m3, or pick any "
             "supported provider for a dedicated embedding endpoint."
         ),
     )
@@ -1222,8 +1222,8 @@ def apply_embedding_config(
     """Write [llm.embedding] + (optionally) provider creds.
 
     Returns a structured summary so the bootstrap can emit a single event
-    listing exactly what was changed. Empty-string provider means "follow
-    primary"; missing fields are left untouched.
+    listing exactly what was changed. Empty-string provider means
+    "embedding disabled"; missing fields are left untouched.
     """
 
     config_path = project_dir / "config.toml"
@@ -1236,21 +1236,23 @@ def apply_embedding_config(
         written.append("llm.embedding.model")
 
     target_provider = (provider or "").strip()
-    if target_provider and (base_url is not None or api_key is not None):
-        if base_url is not None:
-            update_config_secret(config_path, f"llm.{target_provider}", "base_url", base_url)
-            written.append(f"llm.{target_provider}.base_url")
-        if api_key is not None:
-            update_config_secret(config_path, f"llm.{target_provider}", "api_key", api_key)
-            written.append(f"llm.{target_provider}.api_key")
+    if base_url is not None:
+        update_config_secret(config_path, "llm.embedding", "base_url", base_url)
+        written.append("llm.embedding.base_url")
+    if api_key is not None:
+        update_config_secret(config_path, "llm.embedding", "api_key", api_key)
+        written.append("llm.embedding.api_key")
 
-    # Mirror the wizard's side-effect: when embedding is ollama, seed
-    # llm.ollama.base_url so the registry actually wires the provider.
-    if target_provider == "ollama":
-        existing = read_simple_toml(config_path).get("llm", {}).get("ollama", {})
+    if target_provider == "ollama" and base_url is None:
+        existing = read_simple_toml(config_path).get("llm", {}).get("embedding", {})
         if not str(existing.get("base_url", "")).strip():
-            update_config_secret(config_path, "llm.ollama", "base_url", "http://localhost:11434/v1")
-            written.append("llm.ollama.base_url(seeded)")
+            update_config_secret(
+                config_path,
+                "llm.embedding",
+                "base_url",
+                "http://localhost:11434/v1",
+            )
+            written.append("llm.embedding.base_url(seeded)")
 
     return {"written": written, "provider": target_provider}
 
@@ -1991,51 +1993,7 @@ def run(args: argparse.Namespace) -> int:
         )
         emit(BootstrapResult("ok", "embedding_set", summary))
 
-    # When the primary LLM is a provider with no embeddings endpoint
-    # (Claude / DeepSeek / OpenRouter) AND the user explicitly chose
-    # "follow primary" for embedding, auto-wire local Ollama bge-m3.
-    # If the agent did not ask about embedding at all, leave it pending
-    # for detect_init_decisions() instead of silently choosing.
     auto_embedding_to_ollama = False
-    effective_provider = (args.provider or detect_missing_secrets(project_dir)["provider"]) or ""
-    embedding_follow_requested = (
-        args.embedding_provider == ""
-        and args.embedding_model is None
-        and args.embedding_base_url is None
-        and args.embedding_api_key is None
-    )
-    if effective_provider in PROVIDERS_WITHOUT_EMBED and embedding_follow_requested:
-        # Don't overwrite an existing [llm.embedding] provider that the
-        # user (or a prior bootstrap run) set. Only auto-wire when the
-        # field is empty.
-        existing_emb = (
-            read_simple_toml(project_dir / "config.toml")
-            .get("llm", {})
-            .get("embedding", {})
-            .get("provider", "")
-        )
-        if not str(existing_emb).strip():
-            apply_embedding_config(
-                project_dir,
-                provider="ollama",
-                model="bge-m3",
-                base_url=None,
-                api_key=None,
-            )
-            auto_embedding_to_ollama = True
-            emit(
-                BootstrapResult(
-                    "ok",
-                    "embedding_auto_ollama",
-                    {
-                        "primary_provider": effective_provider,
-                        "reason": (
-                            f"{effective_provider!r} has no embeddings endpoint; "
-                            "wired local Ollama bge-m3 so install pulls the model now"
-                        ),
-                    },
-                )
-            )
 
     if args.module_override:
         try:

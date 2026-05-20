@@ -12,7 +12,7 @@
 
 `docker-compose.yml` 现在多了一个 `ollama` 服务：自动拉 `bge-m3` 模型，对外暴露 `http://ollama:11434`，用 Docker 网络和后端互通。第一次 `docker compose up -d --build` 会多花 2–4 分钟下载模型（~568MB），之后用 named volume `openbiliclaw_ollama` 持久化，重建容器不重拉。
 
-后端容器首次启动时会自动把 `[llm.embedding] provider="ollama" model="bge-m3"` + `[llm.ollama] base_url="http://ollama:11434/v1"` 写进生成的 `config.toml`，所以你**只需要给一个 chat 模型的 Key**，embedding 完全免费 + 离线可用。
+后端容器首次启动时会自动把 `[llm.embedding] provider="ollama" model="bge-m3" base_url="http://ollama:11434/v1"` 写进生成的 `config.toml`，所以你**只需要给一个 chat 模型的 Key**，embedding 完全免费 + 离线可用。
 
 不需要这个 sidecar？删掉 `docker-compose.yml` 里 `ollama` 服务块和后端的 `OPENBILICLAW_SEED_OLLAMA_DEFAULTS` 环境变量即可。
 
@@ -75,11 +75,11 @@ docker exec -it openbiliclaw-backend openbiliclaw init
 3. **Phase 3 — Embedding（向量化，独立提问，3 选 1 + 高级）**：
    - **1) 本地 Ollama bge-m3**（默认推荐 / 免费 / 离线 / 不消耗主 LLM 配额）
    - **2) 云端 Gemini embedding**（质量略高 / 跨语言更稳 / 免费档每天 1500 次够用）
-   - **3) 跟随主 LLM**（最省事；主 LLM 是 Claude / DeepSeek / OpenRouter 时自动回退到选项 1）
+   - **3) 不启用 embedding**（可稍后在设置页或 `setup-embedding` 单独配置）
    - 高级：自定义 OpenAI 兼容服务 / 指定其他 provider（默认折叠）
 4. **Phase 4 — Per-module 覆盖（高级，默认跳过）**：可单独给 soul / discovery / recommendation / evaluation 指定不同模型。
 
-> 💡 **Embedding 选择**：交互式 `init` 会单独问；AI agent 一句话安装则必须在调用 `agent_bootstrap.py` 时显式传 `--embedding-provider ... --embedding-model ...`（默认推荐 `ollama` + `bge-m3`）。如果用户选择“跟随主 LLM”，传 `--embedding-provider ""`；主 LLM 是 Claude / DeepSeek / OpenRouter 时 bootstrap 会把它等价落到本地 Ollama bge-m3 并预拉模型。运行时 registry 仍有 `ollama → gemini → openai` 的 fallback 链兜底。
+> 💡 **Embedding 选择**：交互式 `init` 会单独问；AI agent 一句话安装则必须在调用 `agent_bootstrap.py` 时显式传 `--embedding-provider ... --embedding-model ...`（默认推荐 `ollama` + `bge-m3`）。Embedding 不再“跟随主 LLM”，传 `--embedding-provider ""` 表示不启用 embedding。运行时 embedding fallback 默认关闭；需要自动切 provider 或借用 chat-side 凭据时，在设置页打开 embedding fallback。
 
 接着 B 站登录态有 **2 种方式**（v0.3.12+）：
 
@@ -148,11 +148,11 @@ docker exec -it openbiliclaw-backend vi /app/runtime/config.toml
 
 | Provider | 是否要 Key | 适合谁 | 备注 |
 |---|---|---|---|
-| `deepseek` ★默认 | ✅ | 默认推荐 / 几乎免费 / 国内可直连 | ¥0.001/千 token，月费通常 ¥0.5-2，OpenAI 兼容协议。无 embedding 接口（v0.3.20+ 自动 fallback 到本地 Ollama bge-m3） |
+| `deepseek` ★默认 | ✅ | 默认推荐 / 几乎免费 / 国内可直连 | ¥0.001/千 token，月费通常 ¥0.5-2，OpenAI 兼容协议。无 embedding 接口；embedding 需在 `[llm.embedding]` 独立配置 |
 | `gemini` | ✅ | Google AI Studio 账户 | 免费档每天 1500 次够日常用；自带 embedding endpoint |
 | `openai` | ✅ | 已有 OpenAI 账户 | base_url 留空 = `https://api.openai.com/v1`；自带 embedding endpoint |
-| `claude` | ✅ | Anthropic 账户 | 高质量推理；无 embedding 接口（v0.3.20+ 自动 fallback） |
-| `openrouter` | ✅ | 想一个 Key 跑多家模型 | 按调用计费；embedding 不可靠（v0.3.20+ 自动 fallback） |
+| `claude` | ✅ | Anthropic 账户 | 高质量推理；无 embedding 接口，需独立配置 `[llm.embedding]` |
+| `openrouter` | ✅ | 想一个 Key 跑多家模型 | 按调用计费；embedding 不可靠，建议独立配置 Ollama / Gemini / OpenAI embedding |
 | `ollama` | ❌ | 完全离线 / 不要 Key / 16GB+ 内存 | CPU 推理首次响应慢（10-60s）。Docker 里 `[llm.ollama] base_url` 必须设成 `http://host.docker.internal:11434/v1` 才能从容器访问宿主机的 Ollama |
 | OpenAI 协议兼容自建网关（高级） | ✅ 通常需要 | 自己有 vLLM / LMStudio / Azure / OneAPI / 团队 LLM 网关 | 写到 `[llm.openai]` 同段，关键是显式 `base_url` 字段。**普通用户不要选这个** |
 
@@ -170,7 +170,7 @@ docker exec -it openbiliclaw-backend vi /app/runtime/config.toml
 # B 站认证登录
 docker exec -it openbiliclaw-backend openbiliclaw auth login
 
-# 可选：启用本地 Ollama 作为 embedding 兜底（v0.3.3+ 真实生效）
+# 可选：启用本地 Ollama 作为独立 embedding provider
 docker exec -it openbiliclaw-backend openbiliclaw setup-embedding
 
 # 手动触发内容发现
@@ -275,7 +275,7 @@ model = "llama3"
 base_url = "http://host.docker.internal:11434"
 ```
 
-### 本地 embedding 兜底（Ollama + bge-m3）
+### 本地 embedding provider（Ollama + bge-m3）
 
 不想再多一份 embedding API Key、或想让系统在断网时仍能跑相似度计算，可以让 Ollama 同时承担 embedding 服务：
 
@@ -293,9 +293,10 @@ docker exec -it openbiliclaw-backend uv run openbiliclaw setup-embedding
 [llm.embedding]
 provider = "ollama"
 model = "bge-m3"
+base_url = "http://host.docker.internal:11434/v1"
 ```
 
-注意：容器需要能访问宿主机的 Ollama，确认 `[llm.ollama] base_url` 已经设到 `http://host.docker.internal:11434`，embedding 会自动复用同一连接。
+注意：容器需要能访问宿主机的 Ollama；embedding 现在读取 `[llm.embedding].base_url`，不会自动复用 `[llm.ollama].base_url`。
 
 ## 常见问题
 

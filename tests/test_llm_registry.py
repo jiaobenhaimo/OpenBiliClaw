@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from openbiliclaw.config import Config, LLMConfig, LLMProviderConfig
+from openbiliclaw.config import Config, EmbeddingConfig, LLMConfig, LLMProviderConfig
 from openbiliclaw.llm.base import (
     LLMFallbackError,
     LLMProvider,
@@ -406,7 +406,7 @@ def test_ollama_embedding_with_empty_credentials_uses_local_default_without_warn
     assert "back-compat" not in caplog.text.lower()
 
 
-def test_ollama_embedding_uses_chat_base_url_without_warning(
+def test_ollama_embedding_without_base_url_uses_local_default(
     tmp_path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -419,7 +419,7 @@ def test_ollama_embedding_uses_chat_base_url_without_warning(
     config = Config(
         llm=LLMConfig(
             default_provider="openai",
-            ollama=LLMProviderConfig(model="", base_url="http://localhost:11434"),
+            ollama=LLMProviderConfig(model="", base_url="http://remote-ollama:11434"),
             embedding=EmbeddingConfig(provider="ollama", model="bge-m3"),
         ),
         data_dir=str(tmp_path),
@@ -457,6 +457,7 @@ def test_build_embedding_service_falls_back_when_claude_is_default(
             default_provider="claude",
             claude=LLMProviderConfig(api_key="claude-key"),
             ollama=LLMProviderConfig(model="llama3", base_url="http://localhost:11434/v1"),
+            embedding=EmbeddingConfig(fallback_enabled=True),
         ),
         data_dir=str(tmp_path),
     )
@@ -479,6 +480,7 @@ def test_build_embedding_service_falls_back_when_deepseek_is_default(
             default_provider="deepseek",
             deepseek=LLMProviderConfig(api_key="deepseek-key"),
             ollama=LLMProviderConfig(model="llama3", base_url="http://localhost:11434/v1"),
+            embedding=EmbeddingConfig(fallback_enabled=True),
         ),
         data_dir=str(tmp_path),
     )
@@ -503,6 +505,42 @@ def test_build_embedding_service_returns_none_with_no_capable_provider(
     )
     registry = build_llm_registry(config)
     service = build_embedding_service(config, registry)
+    assert service is None
+
+
+def test_build_embedding_service_empty_provider_does_not_follow_default_llm(
+    tmp_path,
+) -> None:
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(api_key="openai-key"),
+            embedding=EmbeddingConfig(provider="", fallback_enabled=False),
+        ),
+        data_dir=str(tmp_path),
+    )
+    registry = build_llm_registry(config)
+
+    service = build_embedding_service(config, registry)
+
+    assert service is None
+
+
+def test_build_embedding_service_does_not_borrow_chat_credentials_when_disabled(
+    tmp_path,
+) -> None:
+    config = Config(
+        llm=LLMConfig(
+            default_provider="openai",
+            openai=LLMProviderConfig(api_key="openai-key"),
+            embedding=EmbeddingConfig(provider="openai", api_key="", fallback_enabled=False),
+        ),
+        data_dir=str(tmp_path),
+    )
+    registry = build_llm_registry(config)
+
+    service = build_embedding_service(config, registry)
+
     assert service is None
 
 
@@ -540,7 +578,11 @@ def test_openai_primary_with_default_embedding_model_uses_correct_default(
         llm=LLMConfig(
             default_provider="openai",
             openai=LLMProviderConfig(api_key="openai-key"),
-            embedding=EmbeddingConfig(provider="", model=""),
+            embedding=EmbeddingConfig(
+                provider="openai",
+                model="",
+                api_key="openai-key",
+            ),
         ),
         data_dir=str(tmp_path),
     )
@@ -651,7 +693,7 @@ def test_embedding_back_compat_falls_back_to_chat_block(tmp_path) -> None:
                 api_key="legacy-chat-side-key",
                 base_url="https://api.openai.com/v1",
             ),
-            embedding=EmbeddingConfig(provider="openai", model=""),
+            embedding=EmbeddingConfig(provider="openai", model="", fallback_enabled=True),
         ),
         data_dir=str(tmp_path),
     )
@@ -680,7 +722,12 @@ def test_openai_embedding_chat_credential_fallback_still_warns_once(
         llm=LLMConfig(
             default_provider="openai",
             openai=LLMProviderConfig(api_key="sk-test", base_url=""),
-            embedding=EmbeddingConfig(provider="openai", api_key="", base_url=""),
+            embedding=EmbeddingConfig(
+                provider="openai",
+                api_key="",
+                base_url="",
+                fallback_enabled=True,
+            ),
         ),
         data_dir=str(tmp_path),
     )
@@ -748,11 +795,39 @@ def test_openai_provider_supports_embedding_flag_is_set() -> None:
 
 
 @pytest.mark.asyncio
+async def test_registry_complete_does_not_fallback_when_disabled() -> None:
+    openai = FakeProvider("openai", errors=[LLMProviderError("down")])
+    claude = FakeProvider("claude", responses=[LLMResponse(content="ok", provider="claude")])
+    registry = build_llm_registry(
+        Config(
+            llm=LLMConfig(
+                default_provider="openai",
+                fallback_enabled=False,
+                openai=LLMProviderConfig(api_key="openai-key"),
+                claude=LLMProviderConfig(api_key="claude-key"),
+            )
+        ),
+        provider_overrides={
+            "openai": openai,
+            "claude": claude,
+        },
+        fallback_order=["openai", "claude"],
+    )
+
+    with pytest.raises(LLMFallbackError):
+        await registry.complete([{"role": "user", "content": "hi"}])
+
+    assert openai.call_count == 1
+    assert claude.call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_registry_falls_back_on_retryable_errors() -> None:
     registry = build_llm_registry(
         Config(
             llm=LLMConfig(
                 default_provider="openai",
+                fallback_enabled=True,
                 openai=LLMProviderConfig(api_key="openai-key"),
             )
         ),
@@ -778,6 +853,7 @@ async def test_registry_does_not_fallback_on_response_error() -> None:
         Config(
             llm=LLMConfig(
                 default_provider="openai",
+                fallback_enabled=True,
                 openai=LLMProviderConfig(api_key="openai-key"),
             )
         ),
@@ -801,6 +877,7 @@ async def test_registry_health_check_all() -> None:
         Config(
             llm=LLMConfig(
                 default_provider="openai",
+                fallback_enabled=True,
                 openai=LLMProviderConfig(api_key="openai-key"),
             )
         ),
@@ -831,6 +908,7 @@ async def test_registry_temporarily_cools_down_rate_limited_provider(
         Config(
             llm=LLMConfig(
                 default_provider="openai",
+                fallback_enabled=True,
                 openai=LLMProviderConfig(api_key="openai-key"),
             )
         ),
@@ -976,10 +1054,11 @@ async def test_ollama_with_explicit_chat_model_is_chat_capable() -> None:
     didn't accidentally exclude every Ollama from chat.)
     """
     cfg = Config(
-        llm=LLMConfig(
-            default_provider="openai",
-            openai=LLMProviderConfig(api_key="openai-key"),
-            ollama=LLMProviderConfig(
+            llm=LLMConfig(
+                default_provider="openai",
+                fallback_enabled=True,
+                openai=LLMProviderConfig(api_key="openai-key"),
+                ollama=LLMProviderConfig(
                 api_key="ollama",
                 model="llama3",  # ← explicit chat model
                 base_url="http://localhost:11434/v1",

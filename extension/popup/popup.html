@@ -3650,6 +3650,11 @@
             <option value="openai_compatible">OpenAI 协议兼容 (Groq/Together/Azure/vLLM)</option>
           </select>
         </div>
+        <div class="settings-field-row">
+          <label for="cfgLlmFallbackEnabled">LLM 请求失败时切换 Provider</label>
+          <input id="cfgLlmFallbackEnabled" type="checkbox">
+        </div>
+        <p class="settings-hint">默认关闭；关闭时只调用当前默认 Provider，失败后直接报错。</p>
         <!-- OpenAI -->
         <div class="settings-provider-fields" data-provider="openai">
           <div class="settings-field">
@@ -3775,18 +3780,23 @@
       <div class="settings-section">
         <h3><span class="section-icon">&#x1F50D;</span> Embedding 模型</h3>
         <p class="settings-hint">
-          Embedding 与 LLM 各自独立配置，互不共用 API Key。Claude / DeepSeek / OpenRouter 没有 embedding 接口，未在此列出。
+          Embedding 与 LLM 各自独立配置，Provider 留空时不会跟随默认 LLM。Claude / DeepSeek / OpenRouter 没有 embedding 接口，未在此列出。
         </p>
         <div class="settings-field">
           <label for="cfgEmbeddingProvider">Provider</label>
           <select id="cfgEmbeddingProvider">
-            <option value="">(跟随默认 LLM Provider)</option>
+            <option value="">(不启用 embedding)</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
             <option value="ollama">Ollama (本地)</option>
             <option value="openai_compatible">OpenAI 协议兼容 (Together/vLLM/Azure 等)</option>
           </select>
         </div>
+        <div class="settings-field-row">
+          <label for="cfgEmbeddingFallbackEnabled">Embedding 不可用时启用 fallback</label>
+          <input id="cfgEmbeddingFallbackEnabled" type="checkbox">
+        </div>
+        <p class="settings-hint">默认关闭；开启后才会尝试其它 embedding provider 或借用对应 chat provider 凭据。</p>
         <div class="settings-field" data-embedding-field="api_key">
           <label for="cfgEmbeddingApiKey">Embedding API Key</label>
           <input id="cfgEmbeddingApiKey" type="password" autocomplete="off" placeholder="sk-...">
