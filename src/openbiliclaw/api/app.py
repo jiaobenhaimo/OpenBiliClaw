@@ -3606,6 +3606,7 @@ def create_app(
             degraded_reason=degraded_reason,
             llm=LLMConfigOut(
                 default_provider=cfg.llm.default_provider,
+                fallback_enabled=cfg.llm.fallback_enabled,
                 openai=_provider_out(cfg.llm.openai),
                 claude=_provider_out(cfg.llm.claude),
                 gemini=_provider_out(cfg.llm.gemini),
@@ -3619,6 +3620,7 @@ def create_app(
                     api_key=_mask(cfg.llm.embedding.api_key),
                     base_url=cfg.llm.embedding.base_url,
                     similarity_threshold=cfg.llm.embedding.similarity_threshold,
+                    fallback_enabled=cfg.llm.embedding.fallback_enabled,
                 ),
                 soul=ModuleLLMConfigOut(
                     provider=cfg.llm.soul.provider,
@@ -3798,6 +3800,8 @@ def create_app(
             llm_data = update["llm"]
             if "default_provider" in llm_data:
                 cfg.llm.default_provider = str(llm_data["default_provider"])
+            if "fallback_enabled" in llm_data:
+                cfg.llm.fallback_enabled = _as_bool(llm_data["fallback_enabled"])
             for provider_name in (
                 "openai",
                 "claude",
@@ -3866,6 +3870,8 @@ def create_app(
                         cfg.llm.embedding.base_url = new_base_url
                 if "similarity_threshold" in emb:
                     cfg.llm.embedding.similarity_threshold = float(emb["similarity_threshold"])
+                if "fallback_enabled" in emb:
+                    cfg.llm.embedding.fallback_enabled = _as_bool(emb["fallback_enabled"])
             for module_name in ("soul", "discovery", "recommendation", "evaluation"):
                 if module_name in llm_data and isinstance(llm_data[module_name], dict):
                     mod_cfg = getattr(cfg.llm, module_name)

@@ -1286,29 +1286,21 @@ def _save_embedding_config(
 
     For OpenAI-compatible providers the wizard may collect a custom
     ``base_url`` / ``api_key`` (e.g. a self-hosted vLLM gateway running
-    bge-m3 over the OpenAI protocol). We write those into the matching
-    ``[llm.<provider>]`` block so the registry can resolve them at runtime.
-
-    When ``provider="ollama"``, also fill ``[llm.ollama] base_url`` so the
-    LLM registry's ``_maybe_ollama_provider`` actually registers Ollama
-    (otherwise ``build_embedding_service`` can't resolve the provider and
-    silently falls back to the default LLM provider for embedding).
+    bge-m3 over the OpenAI protocol). These are written into
+    ``[llm.embedding]`` because embedding is independent from chat
+    provider configuration.
     """
     from openbiliclaw.config import load_config_with_diagnostics, save_config
 
     config, diagnostics = load_config_with_diagnostics()
     config.llm.embedding.provider = provider
     config.llm.embedding.model = model
-
-    provider_config = getattr(config.llm, provider, None)
-    if provider_config is not None:
-        if base_url and hasattr(provider_config, "base_url"):
-            provider_config.base_url = base_url.strip()
-        if api_key and hasattr(provider_config, "api_key"):
-            provider_config.api_key = api_key.strip()
-
-    if provider == "ollama" and not config.llm.ollama.base_url.strip():
-        config.llm.ollama.base_url = "http://localhost:11434/v1"
+    if base_url:
+        config.llm.embedding.base_url = base_url.strip()
+    elif provider == "ollama" and not config.llm.embedding.base_url.strip():
+        config.llm.embedding.base_url = "http://localhost:11434/v1"
+    if api_key:
+        config.llm.embedding.api_key = api_key.strip()
     save_config(config, diagnostics.config_path)
 
 
@@ -1661,12 +1653,12 @@ def _interactive_embedding_setup(default_provider: str) -> None:
         ),
         (
             "3",
-            "跟随你刚才选的 LLM",
-            "OpenAI/Gemini 用自家 endpoint;Claude/DeepSeek/OpenRouter 自动回退到选项 1",
+            "暂不启用 embedding",
+            "保留独立配置为空;不会跟随主 LLM,也不会自动 fallback",
         ),
         ("4", "(高级)自定义 OpenAI 兼容服务", "vLLM / OneAPI / 自建网关 —— 自填 base_url"),
         ("5", "(高级)指定其他 provider", "手动选 provider + 模型 + 可选 base_url"),
-        ("0", "跳过(等同于 3 跟随主 LLM)", ""),
+        ("0", "跳过(不修改当前 embedding 配置)", ""),
     )
     table = Table(show_lines=False, show_header=True)
     table.add_column("#", style="cyan", no_wrap=True)
@@ -1683,7 +1675,7 @@ def _interactive_embedding_setup(default_provider: str) -> None:
     choice = typer.prompt("请选择 embedding 方案", default="1").strip()
 
     if choice in {"0", "skip", "跳过"}:
-        console.print("[dim]已跳过 embedding 配置,将沿用默认(跟随主 provider)。[/dim]")
+        console.print("[dim]已跳过 embedding 配置,不修改当前设置。[/dim]")
         return
 
     if choice in {"1", "ollama", ""}:
@@ -1691,8 +1683,7 @@ def _interactive_embedding_setup(default_provider: str) -> None:
         # branch — share the helpers so the user doesn't have to learn
         # different setups for chat vs embedding.
         if not _ollama_install_if_missing():
-            console.print("[yellow]Ollama 装机失败,降级为'跟随主 LLM'(选项 3)。[/yellow]")
-            _save_embedding_config(provider="", model="")
+            console.print("[yellow]Ollama 装机失败,未启用本地 embedding。[/yellow]")
             return
         if not _ollama_start_serve_background():
             console.print("[red]Ollama 已装好但服务没起来。请手动跑 `ollama serve` 后重试。[/red]")
@@ -1735,8 +1726,7 @@ def _interactive_embedding_setup(default_provider: str) -> None:
                 show_default=False,
             ).strip()
             if not api_key:
-                console.print("[yellow]Key 为空,降级为'跟随主 LLM'(选项 3)。[/yellow]")
-                _save_embedding_config(provider="", model="")
+                console.print("[yellow]Key 为空,未启用 Gemini embedding。[/yellow]")
                 return
 
         _save_embedding_config(
@@ -1750,8 +1740,8 @@ def _interactive_embedding_setup(default_provider: str) -> None:
     if choice in {"3", "follow"}:
         _save_embedding_config(provider="", model="")
         console.print(
-            "[green]已设置为跟随主 LLM。"
-            "若主 LLM 是 Claude/DeepSeek/OpenRouter,运行时会自动回退到 Ollama bge-m3。[/green]"
+            "[green]已设置为不启用 embedding。需要语义去重/相似度时,可之后运行 "
+            "`openbiliclaw setup-embedding` 单独配置。[/green]"
         )
         return
 
@@ -1774,7 +1764,7 @@ def _interactive_embedding_setup(default_provider: str) -> None:
         )
         console.print(
             "[bold green]已配置自定义 OpenAI 兼容 embedding 服务"
-            r"(写入 \[llm.openai] 段)。[/bold green]"
+            r"(写入 \[llm.embedding] 段)。[/bold green]"
         )
         return
 

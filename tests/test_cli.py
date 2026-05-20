@@ -3700,9 +3700,7 @@ def test_save_embedding_config_writes_to_toml(
     reloaded, _ = load_config_with_diagnostics()
     assert reloaded.llm.embedding.provider == "ollama"
     assert reloaded.llm.embedding.model == "bge-m3"
-    # And the side-effect: ollama base_url gets seeded so the registry
-    # actually wires up the Ollama provider for embedding.
-    assert reloaded.llm.ollama.base_url.strip() != ""
+    assert reloaded.llm.embedding.base_url == "http://localhost:11434/v1"
 
 
 def test_save_embedding_config_custom_openai_compat(
@@ -3737,8 +3735,8 @@ def test_save_embedding_config_custom_openai_compat(
     reloaded, _ = load_config_with_diagnostics()
     assert reloaded.llm.embedding.provider == "openai"
     assert reloaded.llm.embedding.model == "bge-m3"
-    assert reloaded.llm.openai.base_url == "http://localhost:8000/v1"
-    assert reloaded.llm.openai.api_key == "sk-local"
+    assert reloaded.llm.embedding.base_url == "http://localhost:8000/v1"
+    assert reloaded.llm.embedding.api_key == "sk-local"
 
 
 def test_save_module_overrides_writes_per_module_blocks(

@@ -3017,11 +3017,13 @@ class TestBackendAPI:
         cfg = Config(
             llm=LLMConfig(
                 default_provider="gemini",
+                fallback_enabled=True,
                 gemini=LLMProviderConfig(api_key="test-gemini-key", model="gemini-2.5-flash"),
                 embedding=EmbeddingConfig(
                     provider="gemini",
                     model="gemini-embedding-001",
                     similarity_threshold=0.85,
+                    fallback_enabled=True,
                 ),
             ),
         )
@@ -3041,6 +3043,7 @@ class TestBackendAPI:
 
         # LLM provider fields
         assert data["llm"]["default_provider"] == "gemini"
+        assert data["llm"]["fallback_enabled"] is True
         assert data["llm"]["gemini"]["api_key"] == "test-gemini-key"
         assert data["llm"]["gemini"]["model"] == "gemini-2.5-flash"
 
@@ -3048,6 +3051,7 @@ class TestBackendAPI:
         assert data["llm"]["embedding"]["provider"] == "gemini"
         assert data["llm"]["embedding"]["model"] == "gemini-embedding-001"
         assert data["llm"]["embedding"]["similarity_threshold"] == 0.85
+        assert data["llm"]["embedding"]["fallback_enabled"] is True
 
     def test_get_config_masks_api_keys_by_default(
         self,
@@ -3134,10 +3138,12 @@ class TestBackendAPI:
             json={
                 "llm": {
                     "default_provider": "ollama",
+                    "fallback_enabled": True,
                     "embedding": {
                         "provider": "openai",
                         "model": "text-embedding-3-small",
                         "similarity_threshold": 0.78,
+                        "fallback_enabled": True,
                     },
                 },
             },
@@ -3146,6 +3152,8 @@ class TestBackendAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["ok"] is True
+        assert data["config"]["llm"]["fallback_enabled"] is True
+        assert data["config"]["llm"]["embedding"]["fallback_enabled"] is True
 
         # Verify the embedding was updated on the config object
         assert cfg.llm.embedding.provider == "openai"

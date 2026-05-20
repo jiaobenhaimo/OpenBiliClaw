@@ -121,6 +121,27 @@ def test_init_decisions_required_for_all_optional_sources(tmp_path: Path) -> Non
     assert decisions["missing"] == ["xhs", "douyin", "youtube"]
 
 
+def test_apply_embedding_config_writes_embedding_owned_credentials(tmp_path: Path) -> None:
+    _write_minimal_config(tmp_path)
+
+    result = bootstrap.apply_embedding_config(
+        tmp_path,
+        provider="openai",
+        model="text-embedding-3-small",
+        base_url="https://embed.example.com/v1",
+        api_key="sk-embedding",
+    )
+
+    text = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    assert "llm.embedding.base_url" in result["written"]
+    assert "llm.embedding.api_key" in result["written"]
+    assert '[llm.embedding]' in text
+    assert 'provider = "openai"' in text
+    assert 'model = "text-embedding-3-small"' in text
+    assert 'base_url = "https://embed.example.com/v1"' in text
+    assert 'api_key = "sk-embedding"' in text
+
+
 def test_build_init_command_appends_all_source_flags_for_local(tmp_path: Path) -> None:
     command = bootstrap.build_init_command(
         "local", tmp_path, "--no-xhs", "--no-douyin", "--yes-youtube"

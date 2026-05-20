@@ -34,7 +34,7 @@ openbiliclaw [--log-level DEBUG|INFO|WARNING|ERROR] <命令>
 | `fetch-xhs` | 单独触发小红书 bootstrap 拉取（不重建画像；默认复用近期任务） | ✅ |
 | `fetch-youtube` | 单独触发 YouTube bootstrap 拉取（不重建画像；默认复用近期任务） | ✅ |
 | `import-youtube <path>` | 从 Google Takeout 导入 YouTube 历史 / 订阅 / 点赞 | ✅ |
-| `setup-embedding` | 配置本地 Ollama 作为 embedding 兜底服务（可选） | ✅ |
+| `setup-embedding` | 配置本地 Ollama 作为独立 embedding provider（可选） | ✅ |
 | `recommend` | 查看推荐 | ✅ |
 | `feedback <id> <like\|dislike\|comment>` | 对推荐提交反馈 | ✅ |
 | `profile` | 查看用户画像 | ✅ |
@@ -389,10 +389,10 @@ Embedding(向量化)服务
  #   方案                                  说明
  1   本地 Ollama bge-m3 ★默认推荐           免费 / 离线 / 不消耗主 LLM 配额(自动装 Ollama + 拉 568MB 模型)
  2   云端 Gemini embedding                 质量略高 / 跨语言更稳;免费档每天 1500 次,日常够用,需 Gemini Key
- 3   跟随你刚才选的 LLM                    OpenAI/Gemini 用自家 endpoint;Claude/DeepSeek/OpenRouter 自动回退到选项 1
+ 3   暂不启用 embedding                    保留独立配置为空;不会跟随主 LLM,也不会自动 fallback
  4   (高级)自定义 OpenAI 兼容服务           vLLM / OneAPI / 自建网关 —— 自填 base_url
  5   (高级)指定其他 provider               手动选 provider + 模型 + 可选 base_url
- 0   跳过(等同于 3 跟随主 LLM)
+ 0   跳过(不修改当前 embedding 配置)
 
 Tip:不确定就选 1。日常推荐质量已经够用且不消耗主 LLM 配额。想再准一点选 2(Gemini),需要去 https://aistudio.google.com/apikey 拿 Key。
 请选择 embedding 方案 [1]:
@@ -448,10 +448,10 @@ $ openbiliclaw setup-embedding
  #   方案                                  说明
  1   本地 Ollama bge-m3 ★默认推荐           免费 / 离线 / 不消耗主 LLM 配额(自动装 Ollama + 拉 568MB 模型)
  2   云端 Gemini embedding                 质量略高 / 跨语言更稳;免费档每天 1500 次,日常够用,需 Gemini Key
- 3   跟随你刚才选的 LLM                    OpenAI/Gemini 用自家 endpoint;Claude/DeepSeek/OpenRouter 自动回退到选项 1
+ 3   暂不启用 embedding                    保留独立配置为空;不会跟随主 LLM,也不会自动 fallback
  4   (高级)自定义 OpenAI 兼容服务           vLLM / OneAPI / 自建网关 —— 自填 base_url
  5   (高级)指定其他 provider               手动选 provider + 模型 + 可选 base_url
- 0   跳过(等同于 3 跟随主 LLM)
+ 0   跳过(不修改当前 embedding 配置)
 请选择 embedding 方案 [1]:
 ```
 
@@ -459,19 +459,19 @@ $ openbiliclaw setup-embedding
 
 | 选项 | 行为 | 写入字段 |
 |---|---|---|
-| 1 | 本地 Ollama，自动探测 + 拉取 `bge-m3` | `[llm.embedding] provider="ollama" model="bge-m3"` 并 seed `[llm.ollama] base_url` |
-| 2 | 云端 Gemini embedding，可复用已有 Gemini Key | `[llm.embedding] provider="gemini" model="gemini-embedding-001"`，必要时写 `[llm.gemini] api_key` |
-| 3 | 跟随主 provider；主 provider 无 embedding 时自动回退本地 Ollama | `[llm.embedding] provider=""`，DeepSeek / Claude / OpenRouter 会等价落到 Ollama bge-m3 |
-| 4 | 自填 base_url + api_key + model | `[llm.embedding] provider="openai" model="..."` + `[llm.openai] base_url/api_key`（用 openai 协议族指向你的网关） |
-| 5 | 选另一个已知 provider 走 embedding | `[llm.embedding] provider="<target>" model="..."` + 对应 `[llm.<target>]` base_url/api_key |
-| 0 | 跳过，等同于选 3 跟随主 provider | 不主动写入新 embedding 配置 |
+| 1 | 本地 Ollama，自动探测 + 拉取 `bge-m3` | `[llm.embedding] provider="ollama" model="bge-m3" base_url="http://localhost:11434/v1"` |
+| 2 | 云端 Gemini embedding，可复用已有 Gemini Key | `[llm.embedding] provider="gemini" model="gemini-embedding-001" api_key="..."` |
+| 3 | 暂不启用 embedding | `[llm.embedding] provider="" model=""`；运行时不会跟随主 LLM |
+| 4 | 自填 base_url + api_key + model | `[llm.embedding] provider="openai" model="..." base_url="..." api_key="..."` |
+| 5 | 选另一个已知 provider 走 embedding | `[llm.embedding] provider="<target>" model="..." base_url="..." api_key="..."` |
+| 0 | 跳过 | 不主动写入新 embedding 配置 |
 
 选项 1 时向导会按顺序：
 
 1. 探测 `localhost:11434/api/version`，确认 Ollama 服务在跑
 2. 通过 `/api/tags` 检查 `bge-m3` 是否已 pull
 3. 没拉就流式 `POST /api/pull`，进度直接打到终端
-4. 把 `[llm.embedding] provider="ollama" model="bge-m3"` 写入 `config.toml`，并自动 seed `[llm.ollama] base_url="http://localhost:11434/v1"`（v0.3.3+ 修复：以前不写这一项 registry 不会注册 Ollama）
+4. 把 `[llm.embedding] provider="ollama" model="bge-m3" base_url="http://localhost:11434/v1"` 写入 `config.toml`
 
 适合：
 

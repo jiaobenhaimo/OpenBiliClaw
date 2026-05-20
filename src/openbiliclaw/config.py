@@ -100,16 +100,16 @@ class EmbeddingConfig:
 
     v0.3.32+ owns its own ``api_key`` / ``base_url`` so the embedding
     provider is fully independent from ``[llm].default_provider`` and the
-    chat-side ``[llm.<name>]`` blocks. Old configs that left these blank
-    fall back to ``[llm.<provider>]`` credentials with a one-time WARNING
-    (see ``registry.build_embedding_service``).
+    chat-side ``[llm.<name>]`` blocks. Fallback to other embedding
+    providers or chat-side credentials is opt-in via ``fallback_enabled``.
     """
 
-    provider: str = ""  # Empty = use LLM default_provider
+    provider: str = ""  # Empty = embedding disabled until explicitly configured
     model: str = "gemini-embedding-001"
     api_key: str = ""
     base_url: str = ""
     similarity_threshold: float = 0.82
+    fallback_enabled: bool = False
 
 
 @dataclass
@@ -125,6 +125,7 @@ class LLMConfig:
     """LLM configuration with global defaults and per-module overrides."""
 
     default_provider: str = "openai"
+    fallback_enabled: bool = False
     openai: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     claude: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     gemini: LLMProviderConfig = field(default_factory=LLMProviderConfig)
@@ -471,6 +472,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     embedding_raw = llm_raw.get("embedding", {})
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
+        fallback_enabled=bool(llm_raw.get("fallback_enabled", False)),
         openai=LLMProviderConfig(**llm_raw.get("openai", {})),
         claude=LLMProviderConfig(**llm_raw.get("claude", {})),
         gemini=LLMProviderConfig(**llm_raw.get("gemini", {})),
@@ -482,7 +484,15 @@ def _build_config(raw: dict[str, Any]) -> Config:
             **{
                 k: v
                 for k, v in embedding_raw.items()
-                if k in ("provider", "model", "api_key", "base_url", "similarity_threshold")
+                if k
+                in (
+                    "provider",
+                    "model",
+                    "api_key",
+                    "base_url",
+                    "similarity_threshold",
+                    "fallback_enabled",
+                )
             }
         ),
         soul=ModuleLLMConfig(
@@ -883,6 +893,7 @@ def _render_config_toml(config: Config) -> str:
         "",
         "[llm]",
         f"default_provider = {_toml_string(config.llm.default_provider)}",
+        f"fallback_enabled = {_toml_bool(config.llm.fallback_enabled)}",
         "",
     ]
     lines.extend(_render_provider_section("openai", config.llm.openai))
@@ -900,6 +911,7 @@ def _render_config_toml(config: Config) -> str:
             f"api_key = {_toml_string(config.llm.embedding.api_key)}",
             f"base_url = {_toml_string(config.llm.embedding.base_url)}",
             f"similarity_threshold = {config.llm.embedding.similarity_threshold}",
+            f"fallback_enabled = {_toml_bool(config.llm.embedding.fallback_enabled)}",
             "",
             "# Per-module LLM overrides (empty = use global default)",
             "[llm.soul]",

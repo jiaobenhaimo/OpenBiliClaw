@@ -531,6 +531,7 @@ class EmbeddingConfigOut(BaseModel):
     api_key: str = ""
     base_url: str = ""
     similarity_threshold: float = 0.82
+    fallback_enabled: bool = False
 
 
 class ModuleLLMConfigOut(BaseModel):
@@ -540,6 +541,7 @@ class ModuleLLMConfigOut(BaseModel):
 
 class LLMConfigOut(BaseModel):
     default_provider: str = "openai"
+    fallback_enabled: bool = False
     openai: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     claude: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)
     gemini: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)

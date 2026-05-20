@@ -141,6 +141,7 @@ class LLMRegistry:
         self._providers: dict[str, LLMProvider] = {}
         self._default: str = ""
         self._rate_limited_until: dict[str, float] = {}
+        self.fallback_enabled: bool = False
         # Names of providers that should NOT appear in the chat-completion
         # fallback chain — typically an Ollama instance registered solely
         # for embedding (see register(..., chat_capable=False)).
@@ -341,8 +342,8 @@ class LLMRegistry:
 
         Skips providers registered with ``chat_capable=False`` (the
         embedding-only Ollama case). The default provider is honored
-        whenever it's chat-capable; if the user picked an embedding-only
-        provider as default we still skip it from the chat chain.
+        whenever it's chat-capable; if fallback is disabled the returned
+        order contains only the effective default chat provider.
         """
         chat_pool = [name for name in self.available_providers if name not in self._chat_disabled]
         if not chat_pool:
@@ -352,11 +353,15 @@ class LLMRegistry:
             # to process the request.").
             return []
         if self._default and self._default in chat_pool:
-            return [
+            ordered = [
                 self._default,
                 *[name for name in chat_pool if name != self._default],
             ]
-        return chat_pool
+        else:
+            ordered = chat_pool
+        if not self.fallback_enabled:
+            return ordered[:1]
+        return ordered
 
     def _provider_on_cooldown(self, provider_name: str) -> bool:
         until = self._rate_limited_until.get(provider_name)

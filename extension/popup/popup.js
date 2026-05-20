@@ -4145,6 +4145,8 @@ function bindSettings() {
     // LLM
     providerSelect.value = cfg.llm?.default_provider || "openai";
     showProviderFields(providerSelect.value);
+    const cfgLlmFallback = document.getElementById("cfgLlmFallbackEnabled");
+    if (cfgLlmFallback) cfgLlmFallback.checked = cfg.llm?.fallback_enabled === true;
 
     setVal("cfgOpenaiAuthMode", cfg.llm?.openai?.auth_mode || "api_key");
     setVal("cfgOpenaiKey", cfg.llm?.openai?.api_key);
@@ -4182,6 +4184,10 @@ function bindSettings() {
     // Embedding (v0.3.32+ — owns its own api_key/base_url)
     const embProvider = document.getElementById("cfgEmbeddingProvider");
     if (embProvider) embProvider.value = cfg.llm?.embedding?.provider || "";
+    const embeddingFallback = document.getElementById("cfgEmbeddingFallbackEnabled");
+    if (embeddingFallback) {
+      embeddingFallback.checked = cfg.llm?.embedding?.fallback_enabled === true;
+    }
     setVal("cfgEmbeddingApiKey", cfg.llm?.embedding?.api_key);
     setVal("cfgEmbeddingBaseUrl", cfg.llm?.embedding?.base_url);
     setVal("cfgEmbeddingModel", cfg.llm?.embedding?.model);
@@ -4285,6 +4291,7 @@ function bindSettings() {
       data_dir: getVal("cfgDataDir"),
       llm: {
         default_provider: providerSelect.value,
+        fallback_enabled: checked("cfgLlmFallbackEnabled"),
         openai: {
           auth_mode: getVal("cfgOpenaiAuthMode") || "api_key",
           api_key: getVal("cfgOpenaiKey"),
@@ -4327,6 +4334,7 @@ function bindSettings() {
           base_url: getVal("cfgEmbeddingBaseUrl"),
           model: getVal("cfgEmbeddingModel"),
           similarity_threshold: getFloat("cfgEmbeddingSimilarity", 0.82),
+          fallback_enabled: checked("cfgEmbeddingFallbackEnabled"),
         },
         soul: {
           provider: getVal("cfgModuleSoulProvider"),
