@@ -111,7 +111,7 @@ body {
 
 .badge-btn {
   position: relative;
-  width: 36px; height: 36px;
+  width: 44px; height: 44px;
   display: flex; align-items: center; justify-content: center;
   border-radius: 50%;
   cursor: pointer;
@@ -140,11 +140,12 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 4px 16px;
+  padding: 8px 16px;
   cursor: pointer;
   color: var(--text-muted);
   transition: color 0.2s;
   min-width: 64px;
+  min-height: 44px;
 }
 
 .tab-item.active { color: var(--brand); }
@@ -302,7 +303,7 @@ body {
 }
 
 .delight-nav-btn {
-  width: 32px; height: 32px;
+  width: 44px; height: 44px;
   border-radius: 50%;
   background: var(--surface);
   display: flex; align-items: center; justify-content: center;
@@ -709,7 +710,7 @@ body {
 }
 
 .messages-close {
-  width: 32px; height: 32px;
+  width: 44px; height: 44px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
@@ -854,7 +855,7 @@ body {
 }
 
 .activity-strip-toggle {
-  width: 28px; height: 28px;
+  width: 44px; height: 44px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;

@@ -82,11 +82,22 @@ const TABS = [
 
 function renderTabBar() {
   $tabBar.innerHTML = "";
+  $tabBar.setAttribute("role", "tablist");
   for (const tab of TABS) {
-    const el = document.createElement("div");
-    el.className = `tab-item${state.activeTab === tab.id ? " active" : ""}`;
-    el.innerHTML = `<span class="tab-icon">${tab.icon}</span><span class="tab-label">${tab.label}</span>`;
+    const isActive = state.activeTab === tab.id;
+    const el = document.createElement("button");
+    el.className = `tab-item${isActive ? " active" : ""}`;
+    el.setAttribute("role", "tab");
+    el.setAttribute("aria-selected", String(isActive));
+    el.tabIndex = isActive ? 0 : -1;
+    el.innerHTML = `<span class="tab-icon" aria-hidden="true">${tab.icon}</span><span class="tab-label">${tab.label}</span>`;
     el.addEventListener("click", () => navigateToTab(tab.id));
+    el.addEventListener("keydown", (e) => {
+      let target = null;
+      if (e.key === "ArrowRight") target = TABS[(TABS.indexOf(tab) + 1) % TABS.length];
+      else if (e.key === "ArrowLeft") target = TABS[(TABS.indexOf(tab) - 1 + TABS.length) % TABS.length];
+      if (target) { e.preventDefault(); navigateToTab(target.id); $tabBar.querySelector(`[aria-selected="true"]`)?.focus(); }
+    });
     $tabBar.appendChild(el);
   }
 }
