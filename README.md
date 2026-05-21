@@ -21,7 +21,7 @@
 
 ## 📌 v0.3.88 重要更新（2026-05-21）
 
-- **📱 移动端 Web 成为主入口之一** —— 同局域网手机访问 `/m/` 可看推荐、画像、聊一聊、消息和惊喜推荐，推荐页与聊天页已对齐插件主体验。
+- **📱 移动端 Web 成为主入口之一** —— 同局域网手机访问 `/m/` 可看推荐、画像、聊一聊、消息和惊喜推荐；插件顶部手机图标可直接弹出扫码入口。
 - **🚫 LLM fallback 默认关闭** —— `[llm].fallback_enabled` 默认 `false`，请求失败直接暴露而非静默切 provider。
 - **🚫 Embedding fallback 默认关闭** —— `[llm.embedding].fallback_enabled` 默认 `false`，不再借用 chat-side 凭据或切换 embedding provider。
 - **🔌 Embedding 完全独立** —— embedding provider 留空即禁用，不再跟随 `[llm].default_provider`；两套配置彻底解耦。
@@ -86,6 +86,28 @@
       <img src="docs/images/screenshot-chat.png" width="200" /><br/>
       <b>对话调教</b><br/>
       <sub>聊天告诉它你想看什么</sub>
+    </td>
+  </tr>
+</table>
+
+### 📱 移动端 Web 预览
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-recommend.png" width="210" /><br/>
+      <b>手机推荐页</b><br/>
+      <sub>换一批、加载更多、喜欢 / 不喜欢、聊一聊</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-profile.png" width="210" /><br/>
+      <b>手机画像页</b><br/>
+      <sub>核心画像、兴趣、认知更新</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-chat.png" width="210" /><br/>
+      <b>手机对话页</b><br/>
+      <sub>与插件共享主聊天历史</sub>
     </td>
   </tr>
 </table>
@@ -189,6 +211,8 @@ http://<你的电脑局域网 IP>:8420/m/
 ```
 
 页面包含「推荐 / 画像 / 对话」三个底部 Tab，推荐页支持「换一批 / 加载更多 / 喜欢 / 不喜欢 / 写一句 / 聊一聊」，画像页展示核心画像、兴趣和认知更新，对话页与插件共享主聊天历史。
+
+也可以直接点插件顶部的手机图标，弹出二维码后用手机扫码打开当前后端对应的 `/m/`。
 
 <details>
 <summary>不用 AI 助手：直接跑一句话安装脚本</summary>
@@ -520,7 +544,7 @@ OpenBiliClaw/
 
 ## 📜 更新日志
 
-最新版本：**v0.3.88 / extension v0.3.38: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
+最新版本：**v0.3.88 / extension v0.3.39: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）**。README 顶部保留最新重要更新；完整历史见 [docs/changelog.md](docs/changelog.md)。插件包见 [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases)，后端源码更新看 `backend-v*` tag，不发布后端桌面包。
 
 ## 🗺️ 后续规划
 

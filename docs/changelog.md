@@ -4,7 +4,7 @@
 
 ---
 
-## v0.3.88: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）
+## v0.3.88 / extension v0.3.39: 移动端 Web 主入口与 fallback 默认关闭（2026-05-21）
 
 - `[llm].fallback_enabled` 新增为默认关闭的 LLM 请求 fallback 开关；关闭时 `LLMRegistry.complete()` 只调用默认 provider，失败直接暴露。
 - `[llm.embedding].fallback_enabled` 新增为默认关闭的 embedding fallback 开关；关闭时不切 provider、不借用 `[llm.<provider>]` 凭据，且 embedding provider 留空表示不启用，不再跟随默认 LLM。
@@ -16,7 +16,8 @@
 - 移动 Web 画像页补齐与插件一致的画像细节：MBTI 显示可信度，使用场景显示“模式”，内容口味把 `long/slow` 等 raw 值本地化为中文标签，认知更新卡片保留后端 `context_line` 与 `source_label`。
 - 移动 Web 对话页对齐插件主聊天会话：读取和提交都使用 `session=popup&scope=chat`，聊天回复完成后会刷新画像和活动流；消息 overlay 内的兴趣探测动作改为「喜欢 / 不喜欢 / 多聊聊」，惊喜推荐动作补齐「喜欢」，聊天输入框固定在底部并以两行高度起步，保留更多历史上下文可视空间。
 - 新增移动 Web 原生重设计 spec，明确 `/m/` 与浏览器插件在推荐、画像、对话、消息和 delight 工作流上的功能对齐范围，以及手机端独立信息架构。
-- 后端源码版本记录为 v0.3.88，并通过 `backend-v0.3.88` source tag 标记；不发布 backend GitHub Release / 桌面包，远端 `backend-v*` workflow 改为只校验 tag 与 `pyproject.toml` 版本一致。浏览器插件版本仍为 extension v0.3.38。
+- 插件顶部功能区新增移动端二维码入口：点击手机图标会按当前插件后端地址生成 `/m/` 本地二维码，手机可直接扫码打开移动端 Web；若仍是 `127.0.0.1` / `localhost` 会提示先切到电脑局域网 IP。README 同步补充移动端推荐 / 画像 / 对话截图和扫码使用方式。
+- 后端源码版本记录为 v0.3.88，并通过 `backend-v0.3.88` source tag 标记；不发布 backend GitHub Release / 桌面包，远端 `backend-v*` workflow 改为只校验 tag 与 `pyproject.toml` 版本一致。浏览器插件版本提升到 extension v0.3.39，准备发布 `extension-v0.3.39`。
 
 ---
 

@@ -19,7 +19,7 @@
 
 ## 📌 v0.3.88 Highlights (2026-05-21)
 
-- **📱 Mobile Web is now a primary surface** — open `/m/` from a phone on the same LAN to view recommendations, profile, chat, messages, and delight candidates; the recommendation and chat tabs are aligned with the extension experience.
+- **📱 Mobile Web is now a primary surface** — open `/m/` from a phone on the same LAN to view recommendations, profile, chat, messages, and delight candidates; the phone icon in the extension header now opens a scan-ready QR code.
 - **🚫 LLM fallback off by default** — `[llm].fallback_enabled` defaults to `false`; failures surface immediately instead of silently switching providers.
 - **🚫 Embedding fallback off by default** — `[llm.embedding].fallback_enabled` defaults to `false`; no more borrowing chat-side credentials or falling through to other embedding providers.
 - **🔌 Embedding fully independent** — empty embedding provider means disabled, no longer follows `[llm].default_provider`; the two config surfaces are fully decoupled.
@@ -56,6 +56,28 @@ All data lives in a single SQLite file on your disk. LLM calls use your own API 
 > | Data ownership | Platform-owned | Usually cloud | 100% local |
 > | Explains why | "Guess you'll like" | None | Friend-like explanations |
 > | Customizable | No | Low | Swap LLMs / edit profile / write Skills |
+
+## 📱 Mobile Web Preview
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-recommend.png" width="210" /><br/>
+      <b>Recommendations</b><br/>
+      <sub>Reshuffle, load more, like / dislike, and chat</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-profile.png" width="210" /><br/>
+      <b>Profile</b><br/>
+      <sub>Core profile, interests, and cognition updates</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/mobile-chat.png" width="210" /><br/>
+      <b>Chat</b><br/>
+      <sub>Shared main chat history with the extension</sub>
+    </td>
+  </tr>
+</table>
 
 ## 🚀 Quick Start
 
@@ -131,6 +153,8 @@ http://<your-computer-LAN-IP>:8420/m/
 ```
 
 The app has three bottom tabs: Recommendations, Profile, and Chat. Recommendations support reshuffle, load more, like, dislike, comments, and contextual chat. Profile shows the core profile, interests, and cognition updates. Chat shares the main chat history with the extension.
+
+You can also click the phone icon in the extension header and scan the QR code for the current backend's `/m/` URL.
 
 <details>
 <summary>No AI agent: run the one-line installer yourself</summary>
@@ -457,7 +481,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.88 / extension v0.3.38: Mobile Web as a primary surface and fallback off by default (2026-05-21)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
+Latest: **v0.3.88 / extension v0.3.39: Mobile Web as a primary surface and fallback off by default (2026-05-21)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 
