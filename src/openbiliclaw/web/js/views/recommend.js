@@ -226,7 +226,7 @@ function renderDelightTray() {
     for (const b of btns) {
       const btn = document.createElement("button");
       btn.className = `btn ${b.action === "view" ? "btn-brand" : "btn-outline"}`;
-      btn.style.cssText = "flex:1;font-size:12px;padding:8px 4px;min-height:36px";
+      btn.style.cssText = "flex:1;font-size:12px;padding:8px 4px;min-height:44px";
       btn.textContent = b.label;
       btn.addEventListener("click", () => handleDelightAction(d, b.action));
       actions.appendChild(btn);
