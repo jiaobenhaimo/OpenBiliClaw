@@ -67,37 +67,38 @@ function render() {
   // Temporarily point $root at the fragment so sub-renderers append there.
   const realRoot = $root;
   $root = frag;
+  try {
+    renderRecommendationHeader();
 
-  renderRecommendationHeader();
+    // Delight tray
+    renderDelightTray();
 
-  // Delight tray
-  renderDelightTray();
+    // Recommendation cards
+    const recs = state.recommendations;
+    if (recs.length === 0 && !loading) {
+      const hint = getReadyRecommendationHint(state.runtimeStatus);
+      const empty = document.createElement("div");
+      empty.className = "empty-state";
+      empty.innerHTML = `<div class="empty-state-icon">\u{1F30A}</div><div class="empty-state-text">${esc(hint.message)}</div>`;
+      frag.appendChild(empty);
+    }
 
-  // Recommendation cards
-  const recs = state.recommendations;
-  if (recs.length === 0 && !loading) {
-    const hint = getReadyRecommendationHint(state.runtimeStatus);
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.innerHTML = `<div class="empty-state-icon">\u{1F30A}</div><div class="empty-state-text">${esc(hint.message)}</div>`;
-    frag.appendChild(empty);
+    for (const item of recs) {
+      frag.appendChild(renderCard(item));
+    }
+
+    renderLoadMoreRow();
+
+    if (loading) {
+      const sp = document.createElement("div");
+      sp.style.padding = "20px";
+      sp.innerHTML = `<div class="spinner"></div>`;
+      frag.appendChild(sp);
+    }
+  } finally {
+    // Always restore real root — even if a sub-renderer throws.
+    $root = realRoot;
   }
-
-  for (const item of recs) {
-    frag.appendChild(renderCard(item));
-  }
-
-  renderLoadMoreRow();
-
-  if (loading) {
-    const sp = document.createElement("div");
-    sp.style.padding = "20px";
-    sp.innerHTML = `<div class="spinner"></div>`;
-    frag.appendChild(sp);
-  }
-
-  // Restore real root and swap the DOM in one shot — no white flash.
-  $root = realRoot;
   $root.replaceChildren(frag);
 
   // Feedback bottom sheet
