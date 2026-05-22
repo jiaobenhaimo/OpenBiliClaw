@@ -58,6 +58,10 @@ const warmingImages = new Map();
 let autoAppendObserver = null;
 let scrollPreheatObserver = null;
 let autoAppendExhausted = false;
+const RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS = 1000;
+let recommendationItemsRefreshTimer = null;
+let recommendationItemsRefreshInFlight = false;
+let recommendationItemsRefreshPending = false;
 
 // ── Escape helper ────────────────────────────────────────────
 function esc(s) {
@@ -1009,12 +1013,20 @@ async function hydrateDelightTurns() {
 }
 
 // ── Load ─────────────────────────────────────────────────────
+function rememberRecommendationFeedback(normalizedRecs) {
+  for (const rec of normalizedRecs) {
+    if (rec.feedback_type && !feedbackDone.has(rec.id)) {
+      feedbackDone.set(rec.id, rec.feedback_type);
+    }
+  }
+}
+
 async function loadData() {
   loading = true;
   render();
   try {
     const [recs, status, delights, activity] = await Promise.all([
-      reshuffleRecommendations().then((r) => r.items || []).catch(() => fetchRecommendations()),
+      fetchRecommendations(),
       fetchRuntimeStatus().catch(() => null),
       fetchDelightBatch().catch(() => []),
       fetchActivityFeed({ limit: 5 }).catch(() => null),
@@ -1022,11 +1034,7 @@ async function loadData() {
     const normalizedRecs = recs.map(normalizeRecommendation);
     autoAppendExhausted = false;
     // Restore feedback state from backend so it survives page refresh.
-    for (const rec of normalizedRecs) {
-      if (rec.feedback_type && !feedbackDone.has(rec.id)) {
-        feedbackDone.set(rec.id, rec.feedback_type);
-      }
-    }
+    rememberRecommendationFeedback(normalizedRecs);
     patchState({
       recommendations: normalizedRecs,
       runtimeStatus: status ? normalizeRuntimeStatus(status) : state.runtimeStatus,
@@ -1039,6 +1047,40 @@ async function loadData() {
   render();
   // Hydrate durable delight chat turns after initial render
   hydrateDelightTurns();
+}
+
+function scheduleRecommendationItemsRefresh() {
+  if (recommendationItemsRefreshTimer !== null) {
+    clearTimeout(recommendationItemsRefreshTimer);
+  }
+  recommendationItemsRefreshTimer = setTimeout(
+    runScheduledRecommendationItemsRefresh,
+    RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS,
+  );
+}
+
+async function runScheduledRecommendationItemsRefresh() {
+  recommendationItemsRefreshTimer = null;
+  if (recommendationItemsRefreshInFlight) {
+    recommendationItemsRefreshPending = true;
+    return;
+  }
+  recommendationItemsRefreshInFlight = true;
+  try {
+    const recs = await fetchRecommendations();
+    const normalizedRecs = recs.map(normalizeRecommendation);
+    rememberRecommendationFeedback(normalizedRecs);
+    autoAppendExhausted = false;
+    patchState({ recommendations: normalizedRecs });
+    render();
+  } catch { /* best-effort live refresh */ }
+  finally {
+    recommendationItemsRefreshInFlight = false;
+    if (recommendationItemsRefreshPending) {
+      recommendationItemsRefreshPending = false;
+      scheduleRecommendationItemsRefresh();
+    }
+  }
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -1056,11 +1098,12 @@ export function initRecommendView(root) {
 export function onStreamEvent(payload) {
   const type = payload?.type || payload?.event;
   if (type === "refresh.pool_updated") {
-    // Merge runtime status from event
+    // Merge runtime status and coalesce the recommendation list fetch.
     patchState({
       runtimeStatus: mergeRuntimeStatusEvent(state.runtimeStatus, payload.data || payload),
     });
-    loadData();
+    rerenderHeaderOnly();
+    scheduleRecommendationItemsRefresh();
   } else if (type === "refresh.started" || type === "refresh.strategy") {
     patchState({ runtimeEvent: payload.data || payload });
     rerenderHeaderOnly();
