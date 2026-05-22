@@ -439,7 +439,11 @@
       });
     }
 
-    function removeRecommendationCard(item, card, message, delayMs = 2400) {
+    function recommendationRemoveDelay() {
+      return isMobileViewport() ? 1000 : 2400;
+    }
+
+    function removeRecommendationCard(item, card, message, delayMs = recommendationRemoveDelay()) {
       const key = recommendationKey(item);
       window.setTimeout(() => {
         if (card) card.classList.add("is-removing");
