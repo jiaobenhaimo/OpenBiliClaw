@@ -48,10 +48,10 @@ let loading = false;
 let feedbackSheet = null; // { itemId, note, submitState }
 const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
 const COVER_PRELOAD_BATCH_SIZE = 12;
-const COVER_PRELOAD_WAIT_TIMEOUT_MS = 1200;
-const AUTO_APPEND_ROOT_MARGIN = "700px 0px 900px 0px";
-const SCROLL_PREHEAT_LOOKAHEAD = 6;
-const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 800px 0px";
+const COVER_PRELOAD_WAIT_TIMEOUT_MS = 3000;
+const AUTO_APPEND_ROOT_MARGIN = "700px 0px 1400px 0px";
+const SCROLL_PREHEAT_LOOKAHEAD = 8;
+const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 1200px 0px";
 const warmedCoverUrls = new Set();
 const decodedCoverUrls = new Set();
 const warmingImages = new Map();
@@ -894,7 +894,7 @@ async function handleAppend() {
     const result = await appendRecommendations(existing);
     const newItems = (result.items || []).map(normalizeRecommendation);
     autoAppendExhausted = newItems.length === 0;
-    await warmRecommendationCovers(newItems, { waitForDecode: true });
+    await warmRecommendationCovers(newItems, { limit: newItems.length, waitForDecode: true });
     patchState({ recommendations: [...state.recommendations, ...newItems] });
 
     // Append new cards before the load-more row without rebuilding existing ones.

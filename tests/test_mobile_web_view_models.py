@@ -203,7 +203,8 @@ class TestMobileWebViewModels:
         assert "new Image()" in recommend_js
         assert ".decode()" in recommend_js
         assert "waitForDecode" in recommend_js
-        assert "await warmRecommendationCovers(newItems, { waitForDecode: true })" in recommend_js
+        assert "await warmRecommendationCovers(newItems," in recommend_js
+        assert "waitForDecode: true" in recommend_js
         assert 'loading="${esc(imageAttrs.loading)}"' in recommend_js
         assert 'fetchpriority="${esc(imageAttrs.fetchPriority)}"' in recommend_js
         assert "AUTO_APPEND_ROOT_MARGIN" in recommend_js
