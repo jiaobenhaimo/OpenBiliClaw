@@ -212,6 +212,7 @@ class ContinuousRefreshController:
     pool_source_shares: dict[str, int] = field(
         default_factory=lambda: dict(_DEFAULT_PLATFORM_SOURCE_SHARES)
     )
+    hibernate_sleep_seconds: int = 3600
     # v0.3.63+: optional registry so detached tasks (manual-refresh
     # background work, per-strategy precompute fire-and-forget) can be
     # cancelled by ``RuntimeContext.rebuild_from_config`` before the
@@ -811,9 +812,16 @@ class ContinuousRefreshController:
             else:
                 with suppress(Exception):
                     await self._on_profile_ready_if_first_time()
+                result = None
                 with suppress(Exception):
-                    await self.refresh_if_needed()
-            await asyncio.sleep(self.check_interval_seconds)
+                    result = await self.refresh_if_needed()
+                # Hibernate when pool is full — sleep longer instead of
+                # waking every check_interval_seconds just to find the
+                # pool still at cap.
+                if result and result.get("reason") == "pool_at_cap":
+                    await asyncio.sleep(self.hibernate_sleep_seconds)
+                else:
+                    await asyncio.sleep(self.check_interval_seconds)
 
     async def _loop_pool_precompute(self) -> None:
         """v0.3.60+: drain pool_expression / pool_topic_label independently.

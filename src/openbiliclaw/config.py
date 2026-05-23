@@ -30,6 +30,7 @@ _DEFAULT_EXPLORE_REFRESH_HOURS = 12
 _DEFAULT_DISCOVERY_LIMIT = 30
 _DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS = 120
 _DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES = 30
+_DEFAULT_HIBERNATE_SLEEP_SECONDS = 3600  # 1 hour when pool is full
 _DEFAULT_FEEDBACK_BATCH_THRESHOLD = 3
 DEFAULT_LLM_CONCURRENCY = 3
 _MIN_LLM_CONCURRENCY = 1
@@ -187,6 +188,7 @@ class SchedulerConfig:
     discovery_limit: int = _DEFAULT_DISCOVERY_LIMIT
     proactive_push_interval_seconds: int = _DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS
     speculator_idle_interval_minutes: int = _DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES
+    hibernate_sleep_seconds: int = _DEFAULT_HIBERNATE_SLEEP_SECONDS
     speculation_interval_minutes: int = 10
     speculation_ttl_days: int = 3
     speculation_cooldown_days: int = 7
@@ -728,6 +730,11 @@ def _build_config(raw: dict[str, Any]) -> Config:
                     sched_raw.get("speculator_idle_interval_minutes"),
                     default=_DEFAULT_SPECULATOR_IDLE_INTERVAL_MINUTES,
                     min_value=5,
+                ),
+                "hibernate_sleep_seconds": _normalize_scheduler_int(
+                    sched_raw.get("hibernate_sleep_seconds"),
+                    default=_DEFAULT_HIBERNATE_SLEEP_SECONDS,
+                    min_value=60,
                 ),
             }
         ),

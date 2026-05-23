@@ -528,6 +528,9 @@ class RuntimeContext:
                 getattr(new_config.scheduler, "proactive_push_interval_seconds", 120)
             ),
             discovery_limit=int(getattr(new_config.scheduler, "discovery_limit", 30)),
+            hibernate_sleep_seconds=int(
+                getattr(new_config.scheduler, "hibernate_sleep_seconds", 3600)
+            ),
             event_hub=self.event_hub,
             xhs_producer=new_xhs_producer,
             douyin_producer=new_douyin_producer,
