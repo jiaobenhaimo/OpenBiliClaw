@@ -17,6 +17,8 @@ import logging
 import re
 import socket
 import time
+import urllib.parse
+import urllib.request
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -538,16 +540,11 @@ def _has_chinese_content(title: str, description: str = "") -> bool:
     """Return True if the title or description contains Chinese characters."""
     if re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", title):
         return True
-    if description and re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", description):
-        return True
-    return False
+    return bool(description and re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", description))
 
 
 def _search_bilibili(query: str, max_results: int = 5) -> list[dict[str, Any]]:
     """Search Bilibili for videos matching *query*. Returns raw result entries."""
-    import urllib.request
-    import urllib.parse
-
     url = f"https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword={urllib.parse.quote(query)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -565,7 +562,9 @@ def _search_bilibili(query: str, max_results: int = 5) -> list[dict[str, Any]]:
 
 
 def find_on_bilibili(title: str, author: str = "", description: str = "") -> dict[str, Any] | None:
-    """Search Bilibili for a video matching *title*. Returns ``{bvid, url, title, up_name, cover_url}`` on match."""
+    """Search Bilibili for a video matching *title*.
+    Returns ``{bvid, url, title, up_name, cover_url}`` on match.
+    """
     query = _build_search_query(title)
     if not query or len(query) < 5:
         return None
@@ -608,7 +607,11 @@ def find_on_bilibili(title: str, author: str = "", description: str = "") -> dic
         "url": url,
         "title": best_clean,
         "up_name": str(best.get("author", "") or ""),
-        "cover_url": pic_url if pic_url.startswith("http") else f"https:{pic_url}" if pic_url else "",
+        "cover_url": (
+            pic_url
+            if pic_url.startswith("http")
+            else f"https:{pic_url}" if pic_url else ""
+        ),
     }
 
 
@@ -629,7 +632,8 @@ def replace_if_from_bilibili(
       - No good B站 match is found
       - The result is cached as ``None`` (unless ``force=True``)
 
-    Returns a dict with ``bvid`` (B站), ``url`` (B站 URL), ``title``, ``up_name``, ``cover_url`` on match.
+    Returns a dict with ``bvid`` (B站), ``url`` (B站 URL), ``title``,
+    ``up_name``, ``cover_url`` on match.
     """
     _load_cache(data_dir)
 

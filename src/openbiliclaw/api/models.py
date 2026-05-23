@@ -432,7 +432,7 @@ class FeedbackResponse(BaseModel):
     """Response after accepting recommendation feedback."""
 
     ok: bool
-    recommendation_id: int
+    recommendation_id: int | None = None
     feedback_type: str
 
 
