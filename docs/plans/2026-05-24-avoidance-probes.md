@@ -481,6 +481,9 @@ async def apply_new_dislikes(
     topics: Sequence[str],
 ) -> list[str]:
     ...
+
+def topics_for_confirmed_avoidance(avoidance: SpeculativeAvoidance) -> list[str]:
+    ...
 ```
 
 Responsibilities:
@@ -500,6 +503,9 @@ Responsibilities:
   first persist the layer, then sync derived files. Finally it calls
   `purge_pool_for_new_dislikes()` for `actually_added`.
 - `apply_new_dislikes()` should no-op the purge when `actually_added` is empty.
+- `topics_for_confirmed_avoidance()` returns valid specific names first and only
+  falls back to the avoidance domain when the specifics list is empty. Keep it in
+  this module so pipeline auto-promote and API confirm import the same helper.
 
 Then modify `soul/layer_updaters.py`:
 
@@ -637,16 +643,14 @@ path focused on `profile.interest.likes`.
 - Pass `avoidance_probe_feedback_history` from runtime state into
   `avoidance_speculator.tick(...)`.
 - Inspect `avoidance_tick_result.promoted`.
-- Convert each promoted avoidance into writeback topics using the confirmation
-  semantics from the design doc: if valid specifics exist, write those specifics;
-  otherwise write the domain.
-- Put that conversion in a small shared helper, e.g.
-  `topics_for_confirmed_avoidance(avoidance)`, so pipeline auto-promote and API
-  confirm cannot diverge.
+- Convert each promoted avoidance into writeback topics using
+  `topics_for_confirmed_avoidance(avoidance)` from
+  `soul.dislike_writeback`, so pipeline auto-promote and API confirm cannot
+  diverge.
 - Call `apply_new_dislikes(...)` from Task 3.5 with
   `database=getattr(self._memory, "_database", None)`,
-  `embedding_service=self._embedding_service`, and the LLM service available to
-  the pipeline.
+  `embedding_service=self._embedding_service`, and
+  `llm_service=getattr(self._preference_analyzer, "registry", None)`.
 - Append a `LayerUpdateResult` and changelog entry when any topics were added.
 
 The speculator must remain IO-free: `promote_ready_avoidances(state)` only moves
@@ -781,7 +785,7 @@ append can be lost on the next rebuild.
 
 `topics_for_confirmed_avoidance()` should be conservative: if the confirmed
 avoidance has valid specifics, write those specifics; write the domain only when
-there are no specifics or the candidate is explicitly domain-level.
+the specifics list is empty.
 
 **Step 4: Run tests**
 
