@@ -419,6 +419,13 @@ class ContinuousRefreshController:
             reason="manual",
         )
 
+    def _pool_full(self) -> bool:
+        """Quick check: is the candidate pool at/above the target count?"""
+        try:
+            return int(self.database.count_pool_candidates()) >= self.pool_target_count
+        except Exception:
+            return False
+
     def _enforce_pool_cap(self) -> bool:
         """Trim any overflow and report whether the pool is at/above target.
 
@@ -976,6 +983,9 @@ class ContinuousRefreshController:
             if not self._llm_work_allowed():
                 await asyncio.sleep(self.check_interval_seconds)
                 continue
+            if self._pool_full():
+                await asyncio.sleep(self.hibernate_sleep_seconds)
+                continue
             with suppress(Exception):
                 await self._tick_xhs_producer()
             await asyncio.sleep(self.check_interval_seconds)
@@ -986,6 +996,9 @@ class ContinuousRefreshController:
             if not self._llm_work_allowed():
                 await asyncio.sleep(self.check_interval_seconds)
                 continue
+            if self._pool_full():
+                await asyncio.sleep(self.hibernate_sleep_seconds)
+                continue
             with suppress(Exception):
                 await self._tick_douyin_producer()
             await asyncio.sleep(self.check_interval_seconds)
@@ -995,6 +1008,9 @@ class ContinuousRefreshController:
         while True:
             if not self._llm_work_allowed():
                 await asyncio.sleep(self.check_interval_seconds)
+                continue
+            if self._pool_full():
+                await asyncio.sleep(self.hibernate_sleep_seconds)
                 continue
             with suppress(Exception):
                 await self._tick_youtube_producer()
