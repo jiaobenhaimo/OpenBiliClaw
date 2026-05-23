@@ -601,6 +601,13 @@ class TestMobileWebViewModels:
         assert "renderSpecAvoidances" in profile_js
         assert "respondToAvoidanceProbe" in profile_js
 
+    def test_desktop_web_knows_avoidance_probe_endpoint(self) -> None:
+        source = Path("src/openbiliclaw/web/desktop/assets/js/app.js").read_text()
+
+        assert "avoidanceProbeRespond" in source
+        assert "avoidance.probe" in source
+        assert "确实不喜欢" in source
+
     def test_profile_display_helpers_preserve_plugin_semantics(self) -> None:
         _assert_js(
             dedent("""
