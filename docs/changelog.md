@@ -6,6 +6,8 @@
 
 ## v0.3.89 / extension v0.3.44: 惊喜推荐内联多轮聊天（2026-05-22）
 
+- 修复用户显式配置 `[llm.embedding].provider = "openrouter"` 仍然报 `No embedding-capable provider available (requested='openrouter')` 并禁用 embedding 的 bug：`_EMBEDDING_CAPABLE_PROVIDERS` 漏了 `openrouter`，dedicated 构建分支也没有 OpenRouter 路径。现在 registry 显式支持 OpenRouter embedding（必须配 `model = "<vendor>/<model>"`，例如 `google/gemini-embedding-2-preview`；无显式 model 时拒绝构建，避免运行时 404），`[llm.openrouter]` 的 `http_referer` / `x_title` 也会透传到 embedding 实例。`OpenRouterProvider.supports_embedding` 仍保持 `False` —— 只有用户显式选 openrouter 才走这条 dedicated 路径，不污染 chat-side 的自动回退链。
+- 修复桌面 Web 推荐卡片点击「忽略」时 `/api/feedback` 返回 422 的回归：`feedback_type` 白名单新增 `dismiss`（CLI / API / OpenClaw adapter 同步放行）。dismiss 走「软移除」语义——`content_cache.pool_status` 标记为 `feedbacked` 让候选不再被重新发现，前端按 `feedback_type` 非空过滤掉已忽略卡片；soul 与 preference 分析忽略 dismiss 事件，不会把单次软忽略升成话题级负反馈。`activity_feed._feedback_items` 现会显示「这条你忽略了：{title}」而不是落到 fallback 的「写了一句反馈」。
 - 浏览器插件版本提升到 extension v0.3.44，准备发布 `extension-v0.3.44`；后端源码版本仍为 v0.3.89，不发布新的后端 tag。
 - 移动 Web 惊喜推荐的「聊一聊」不再切到对话 tab，而是在当前惊喜卡片内展开 16px textarea composer，提交后就地显示用户气泡、AI thinking、完成回复或失败提示。
 - 移动 Web 和插件的惊喜推荐内聊统一走 durable `/api/chat/turns`，按 `scope=delight` + `subject_id` 归并历史；pending turn 会轮询恢复，reload 后可重新 hydrate。
