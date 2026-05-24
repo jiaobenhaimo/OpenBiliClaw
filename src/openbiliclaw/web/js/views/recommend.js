@@ -992,7 +992,12 @@ function renderCard(rawItem, index = 0) {
         // Update the expression text in the card
         const exprEl = card.querySelector(".card-expression");
         if (exprEl) exprEl.textContent = data.expression || exprEl.textContent;
-        if (data.direction === "youtube_to_bilibili") {
+        if (data.was_false_positive) {
+          btn.title = "⚠️ 误报已清除，已还原为 B站原版";
+          btn.style.opacity = "1";
+          const label = card.querySelector(".card-source");
+          if (label) label.textContent = "Bilibili";
+        } else if (data.direction === "youtube_to_bilibili") {
           if (data.source_url) {
             item.content_url = data.source_url;
             item.source_platform = "bilibili";

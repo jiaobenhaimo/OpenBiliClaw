@@ -5532,7 +5532,36 @@ def create_app(
                     skip_detection=True,
                 )
                 if result is None:
-                    return {"ok": False, "reason": "no_match"}
+                    # No B站 original found → the automatic repost detection was
+                    # a false positive. Restore the original B站 link and report
+                    # success with `was_false_positive=True` so the frontend
+                    # can surface a clear "误报已清除" message.
+                    ctx.database.clear_youtube_repost(bvid)
+                    new_expression = None
+                    if recommendation_id is not None:
+                        rec = ctx.database.get_recommendation_by_id(recommendation_id)
+                        if rec is not None:
+                            original_expr = str(rec.get("expression") or "")
+                            suffix = "\n⚠️ 之前误判为搬运，已还原为 Bilibili 原版链接"
+                            new_expression = (
+                                (original_expr + suffix)
+                                if original_expr
+                                else "之前误判为搬运，已还原为 Bilibili 原版链接"
+                            )
+                            ctx.database.update_recommendation_content(
+                                recommendation_id,
+                                expression=new_expression,
+                                topic=str(rec.get("topic") or ""),
+                            )
+                    bili_url = f"https://www.bilibili.com/video/{bvid}"
+                    return {
+                        "ok": True,
+                        "was_false_positive": True,
+                        "source_url": bili_url,
+                        "source_bvid": bvid,
+                        "expression": new_expression,
+                        "direction": "youtube_to_bilibili",
+                    }
                 source_url = str(result.get("url") or "")
                 source_title = str(result.get("title") or "")
                 source_up = str(result.get("up_name") or "")

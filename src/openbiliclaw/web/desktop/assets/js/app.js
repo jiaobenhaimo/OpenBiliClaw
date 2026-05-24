@@ -710,29 +710,43 @@
           // Bidirectional: B站→YT uses yt_url, YT→B站 uses source_url.
           const direction = data.direction || "bilibili_to_youtube";
           if (data && data.ok) {
-            const srcUrl = direction === "youtube_to_bilibili" ? data.source_url : data.yt_url;
-            if (srcUrl) {
+            if (data.was_false_positive) {
+              // Automatic repost detection was wrong — restore B站 link.
               setMarkRepostState(btn, glyph, "done");
-              const label = direction === "youtube_to_bilibili" ? "Bilibili" : "YouTube";
-              btn.setAttribute("title", `已记录搬运，原视频在 ${label}：${srcUrl}`);
-              status.textContent = `已记录搬运。原视频：${srcUrl}`;
-              showToast(`已重定向到 ${label} 原版`);
-              if (direction !== "youtube_to_bilibili") {
-                const platformEl = card.querySelector(".platform");
-                if (platformEl) platformEl.textContent = "YouTube";
-                const cover = card.querySelector(".cover");
-                if (cover) cover.dataset.platform = "youtube";
-                item.content_url = data.yt_url;
-                item.platform = "youtube";
-              }
-            } else if (data.pending) {
-              btn.disabled = false;
-              setMarkRepostState(btn, glyph, "idle");
-              status.textContent = "服务器暂时连不上目标平台；网络恢复后请再点一次。";
+              btn.setAttribute("title", "误报已清除，已还原为 Bilibili 原链接");
+              status.textContent = "⚠️ 之前误判为搬运，已还原为 Bilibili 原版链接";
+              showToast("误报已清除，还原为 B站原版");
+              const cover = card.querySelector(".cover");
+              if (cover) cover.dataset.platform = "bilibili";
+              const platformEl = card.querySelector(".platform");
+              if (platformEl) platformEl.textContent = "Bilibili";
+              item.content_url = data.source_url;
+              item.platform = "bilibili";
             } else {
-              btn.disabled = false;
-              setMarkRepostState(btn, glyph, "idle");
-              status.textContent = "没搜到匹配的原版视频。";
+              const srcUrl = direction === "youtube_to_bilibili" ? data.source_url : data.yt_url;
+              if (srcUrl) {
+                setMarkRepostState(btn, glyph, "done");
+                const label = direction === "youtube_to_bilibili" ? "Bilibili" : "YouTube";
+                btn.setAttribute("title", `已记录搬运，原视频在 ${label}：${srcUrl}`);
+                status.textContent = `已记录搬运。原视频：${srcUrl}`;
+                showToast(`已重定向到 ${label} 原版`);
+                if (direction !== "youtube_to_bilibili") {
+                  const platformEl = card.querySelector(".platform");
+                  if (platformEl) platformEl.textContent = "YouTube";
+                  const cover = card.querySelector(".cover");
+                  if (cover) cover.dataset.platform = "youtube";
+                  item.content_url = data.yt_url;
+                  item.platform = "youtube";
+                }
+              } else if (data.pending) {
+                btn.disabled = false;
+                setMarkRepostState(btn, glyph, "idle");
+                status.textContent = "服务器暂时连不上目标平台；网络恢复后请再点一次。";
+              } else {
+                btn.disabled = false;
+                setMarkRepostState(btn, glyph, "idle");
+                status.textContent = "没搜到匹配的原版视频。";
+              }
             }
           } else if (data && data.reason === "no_match") {
             btn.disabled = false;
@@ -1098,9 +1112,15 @@
                 const srcUrl = data.source_url || "";
                 if (srcUrl) {
                   setMarkRepostState(btn, glyph, "done");
-                  btn.setAttribute("title", `已在 Bilibili 找到原版：${srcUrl}`);
-                  if (status) status.textContent = `已在 Bilibili 找到原版：${srcUrl}`;
-                  showToast("已找到 Bilibili 原版");
+                  if (data.was_false_positive) {
+                    btn.setAttribute("title", "误报已清除，已还原为 Bilibili 原链接");
+                    if (status) status.textContent = "⚠️ 之前误判为搬运，已还原为 Bilibili 原版链接";
+                    showToast("误报已清除，还原为 B站原版");
+                  } else {
+                    btn.setAttribute("title", `已在 Bilibili 找到原版：${srcUrl}`);
+                    if (status) status.textContent = `已在 Bilibili 找到原版：${srcUrl}`;
+                    showToast("已找到 Bilibili 原版");
+                  }
                 }
               } else {
                 const ytUrl = data.yt_url || "";

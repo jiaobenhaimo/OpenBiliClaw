@@ -2604,6 +2604,30 @@ class Database:
             (expression, topic, recommendation_id),
         )
 
+    def clear_youtube_repost(
+        self,
+        bvid: str,
+    ) -> None:
+        """Undo a youtube_repost mark: restore content_cache to original B站 state.
+
+        Called when the user marks a YouTube card as repost but no B站 original
+        is found — the automatic repost detection was a false positive.
+        Reconstructs the B站 URL from the bvid since the original was overwritten.
+        """
+        if not bvid:
+            return
+        bili_url = f"https://www.bilibili.com/video/{bvid}"
+        self._execute_write(
+            """
+            UPDATE content_cache
+            SET content_url = ?,
+                source_platform = 'bilibili',
+                cover_url = ''
+            WHERE bvid = ?
+            """,
+            (bili_url, bvid),
+        )
+
     def mark_content_as_youtube_repost(
         self,
         bvid: str,
