@@ -3822,6 +3822,10 @@
           <input id="cfgLlmConcurrency" type="number" min="1" max="16" step="1" placeholder="3">
         </div>
         <div class="settings-field">
+          <label for="cfgLlmTimeout">LLM 超时 (秒)</label>
+          <input id="cfgLlmTimeout" type="number" min="10" max="600" step="10" placeholder="300">
+        </div>
+        <div class="settings-field">
           <label for="cfgLlmFallbackProvider">备选 Provider</label>
           <select id="cfgLlmFallbackProvider">
             <option value="">(不启用 fallback)</option>
@@ -4290,6 +4294,10 @@
         <div class="settings-field">
           <label for="cfgSignalEventThreshold">行为触发阈值</label>
           <input id="cfgSignalEventThreshold" type="number" min="1" step="1" placeholder="6">
+        </div>
+        <div class="settings-field">
+          <label for="cfgFeedbackBatchThreshold">反馈分析积累阈值</label>
+          <input id="cfgFeedbackBatchThreshold" type="number" min="1" step="1" placeholder="3">
         </div>
         <div class="settings-field">
           <label for="cfgTrendingRefreshHours">热门刷新小时</label>

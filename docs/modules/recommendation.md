@@ -29,7 +29,7 @@
 | M118 topic_key 多样性强化 | ✅ | discovery pool 现在会持久化 `topic_key`，推荐层会优先按 `topic_key` 分桶再回填，减少同一 seed chain 或同类 query 连续刷屏 |
 | M119 风格多样性与快速文案增强 | ✅ | `reshuffle` 现在会同时约束 `topic_key + style_key`，并把快速 fallback 文案润色成更自然的老B友短句 |
 | M120 来源上限与硬配比 | ✅ | `reshuffle` 现在会对 `topic_key + style_key + source` 同时加硬上限，小批次优先保留不同来源，10 条一批时单一来源最多 3 条 |
-| M121 推荐自动续页 | ✅ | popup 与移动 Web 滚到底附近时会调用 `append` 从 discovery pool 再续 10 条，不再只能整组“换一批”；移动 Web 仍保留底部「加载更多」按钮作为兜底，并会在插入追加卡片前预热封面，减少高速滑动白屏 |
+| M121 推荐自动续页 | ✅ | popup 与移动 Web 滚到底附近时会调用 `append` 从 discovery pool 再续 10 条，不再只能整组“换一批”；插件 / side panel 与移动 Web 的自动续页都需要用户向下滚动 / 翻页先触发一次意图门闩，后台 `refresh.pool_updated` 或列表重渲染不会空转消耗候选池；底部「加载更多」按钮仍作为兜底，并会在插入追加卡片前预热封面 |
 | M122 来源优先补齐 | ✅ | 推荐选片时会先补齐不同 `source`，再限制重复 `style`，避免 `explore` 把 `search/trending` 挤出同一批结果 |
 | M123 上游来源配额补货 | ✅ | discovery pool 低于目标值时，runtime 会先补足来源缺口，减少推荐层长期面对“explore 过满、trending 过少”的偏池子 |
 | M124 generate 路径丰富度修正 | ✅ | `generate_recommendations()` 现在也会先对缓存候选做来源均衡，再分阶段放宽 `topic/style/source` 约束，避免高分 `related_chain` 长时间吃掉整批名额 |
@@ -46,6 +46,8 @@
 | v0.3.44 MMR 多样化 | ✅ | `_select_diversified_batch` 引入 Maximum Marginal Relevance：`score = α*relevance - β*max_cos_to_picked`，靠 embedding 余弦把 LLM 误聚到同一 `topic_label` 伞标签下的硬核内容真正打散。每轮 unique_topics=10/10、top_topic_share≤10% |
 | v0.3.45 MMR embedding 提前 warm | ✅ | `warm_mmr_embeddings` 在 discovery 入池 + `classify_pool_backlog` 落库后立即并行 warm L2 SQLite embedding cache（cache key 文本由 `_mmr_embedding_text` 静态方法做 single source of truth），serve() 用 `asyncio.gather` 并行兜底,新增 `MMR embedding fetch: coverage=N/M elapsed=Xms` 埋点。换一批 P50 双峰（0.7s / 6-10s）收敛到稳定 <1s |
 | v0.3.57 pool gate on precomputed copy | ✅ | `get_pool_candidates` / `count_pool_candidates` SQL 加 `AND COALESCE(pool_expression, '') != '' AND COALESCE(pool_topic_label, '') != ''` —— 未 precompute 的 row 对 serve() 不可见,消除"discovery 完成→precompute 完成"60–90s 窗口内 popup 显示占位模板的旧 bug。`engine.py:320` 的 `_fallback_expression` 路径变成 race-window 安全网,触发即 `logger.warning("Pool gate leak: ...")` |
+| v0.3.66 pool gate on classification | ✅ | `get_pool_candidates` / `count_pool_candidates` 现在同样要求 `style_key` 与 `topic_group` 非空；`get_pool_candidates_needing_copy` 也只挑已分类但缺文案的候选，避免未分类跨源内容先生成 copy 后绕过 serve 分类口径 |
+| v0.3.90 servable pool count | ✅ | `count_pool_candidates()` 在读取前刷新 SQLite/WAL snapshot，并新增 `count_pool_readiness()` 拆分 `available/raw/pending`；`serve()` 零候选 warning 会输出 `raw/servable/pending`，用于定位“池子有素材但暂不可换”的真实原因。 |
 | v0.3.74 recommendation/delight JSON 容错统一 | ✅ | `RecommendationEngine` 的内容分类、单条表达和批量表达解析，以及 `delight.precompute_delight_scores()` 的 batch scorer 都改用 `llm.json_utils`。MiMo / OpenAI-compatible provider 返回 object wrapper、fenced JSON、JSONL、schema echo 或 malformed `{ [ ... ] }` 时会优先提取满足字段 predicate 的真实结果 |
 | v0.3.81 批量结果按内容 ID 绑定 | ✅ | 批量推荐文案和源无关内容分类的 prompt 都带 `bvid/content_id`，解析时优先按返回 ID 写回。模型乱序、漏项或只返回部分条目时不再按数组下标把原因写到错误视频；无 ID 且数量不完整的文案批次会降级单条生成，分类批次会标记失败避免错写 |
 | v0.3.x 批量文案限流保护 | ✅ | `_precompute_batch()` 遇到 LLM provider rate limit / cooldown / quota 时不再进入逐条 `_try_generate_expression()` fallback；本轮预生成计为 0，保留空 `pool_expression/topic_label` 等后续调度重试 |
@@ -110,6 +112,7 @@ items = await engine.reshuffle_recommendations(
 - runtime 会把 discovery pool 持续补到 `pool_target_count` 附近，默认目标现在是 `300`（允许配置到 `600`）；达到目标后停止 discover，等池子掉回目标以下再补货，保证 popup 连续“换一批”和自动续页时尽量随时有货，同时避免无谓的远端调用。补货和 trim 会按 `[scheduler.pool_source_shares]` 做平台级硬配比，默认保存 B 站 / 小红书 / 抖音 / YouTube = 8 / 1 / 1 / 1，但小红书、抖音、YouTube 默认关闭，运行时有效配比默认只有 B 站；显式启用某个平台后才会按保存 share 获得配额。单个平台族超过配额时会被先压回目标内；少量补货时 discovery 会收缩 LLM 评估窗口，只评估可被当前平台缺口吸收的过采样候选
 - runtime 补货在调用 discovery 前会构建候选池分布 snapshot，把当前来源缺口和饱和方向作为可选上下文传给兼容的 discovery strategy
 - pool-aware discovery 只改变上游补货时的 query 软指导和入池前软重排；`reshuffle` 的服务路径、候选过滤、文案 gating、推荐记录写入和多样性选择逻辑保持不变
+- `count_pool_candidates()` 是“真实可换”口径，必须与 `get_pool_candidates()` 的 fresh/readiness/viewed/linkability gates 保持一致；素材库存和待整理内容通过 `count_pool_readiness()` 的 `raw/pending` 诊断字段暴露给 runtime。
 - refresh 结束后还会顺手压一轮 `explore` 的高风险相邻子簇，避免制造 / 工艺 / 材料、博弈 / 桌游 / 机制这类方向把剩余可换窗口挤成单一口味
 
 ### RecommendationEngine.append_recommendations
@@ -141,7 +144,7 @@ count = await engine.precompute_pool_copy(
 
 行为说明：
 
-- 从 discovery pool 中筛出还缺 `pool_expression / pool_topic_label` 的 fresh 候选
+- 从 discovery pool 中筛出已具备 `style_key / topic_group`、但还缺 `pool_expression / pool_topic_label` 的 fresh 候选
 - 低并发批量调用 `generate_expression()` 的 LLM 主链生成朋友式推荐文案
 - 解析批量 LLM 响应时通过共享 JSON helper 接受 `results/items/data/output` 等 wrapper、fenced JSON、JSONL 和回显 schema 后的最终结果，但仍要求每条结果具备推荐表达所需字段
 - 批量 prompt 会把每条候选的 `bvid/content_id` 交给 LLM；如果响应带回 ID，写库时按 ID 匹配，不信任数组顺序。响应没有 ID 且数量不完整时会降级到单条生成，避免把后续视频的文案整体前移
@@ -212,17 +215,19 @@ Recommendation(
 
 ### Unified Feedback Entry
 
-当前支持三种反馈信号：
+当前支持四种反馈信号：
 
 - `like`
 - `dislike`
-- `comment`
+- `comment`（必须带 `note`）
+- `dismiss`（v0.3.89+）：软移除单条推荐，不更新画像也不下调话题/作者权重。`update_recommendation_feedback` 会把 `content_cache.pool_status` 标记为 `feedbacked`，所以同一条候选不会再次进入发现池；前端按 `feedback_type` 非空过滤掉已忽略卡片。`/api/feedback` 不要求 dismiss 携带 `note`；事件层照常上报 `feedback` 事件，但 `inferred_satisfaction` 维持 `unknown` 以避免把单次软忽略误读为话题级负反馈。
 
 统一入口包括：
 
-- CLI：`openbiliclaw feedback <id> <like|dislike|comment> [--note ...]`
+- CLI：`openbiliclaw feedback <id> <like|dislike|comment|dismiss> [--note ...]`
 - API：`POST /api/feedback`
 - 插件 popup：卡片上的 `喜欢` / `不喜欢` / `写一句`
+- 桌面 Web：推荐卡片底部「喜欢 / 不感兴趣 / 忽略」三连按钮，「忽略」走 `dismiss` 通道
 - 移动 Web：推荐卡片反馈与惊喜推荐「喜欢 / 不感兴趣」共用后端反馈语义，惊喜推荐直接写入 `/api/delight/respond`
 
 ### PoolCurator
@@ -380,3 +385,4 @@ report: PoolHealthReport = curator.check_pool_health()
 17. **来源补齐优先于风格重复**：如果 `trending` 还没出场，就不该因为它和 `search` 同属 `light_chat` 而被挡在批次外；先让不同来源进来，再做风格均摊
 18. **下游挑得再花，也救不了偏掉的池子**：推荐层的多样性约束只能做第二道保险；真正想让一批内容更丰富，必须让 runtime 在补货时先把各来源补到合理区间
 19. **延迟分类也要消费负反馈样本**：非 B 站内容可能先进入池子、稍后才由推荐层补 `style_key/topic_group/relevance_score`；这条补评估路径必须和 discovery batch evaluator 一样读取 `negative_examples`，否则用户刚刚不喜欢的话术模式会在跨源内容里重新漏进来
+20. **分类先于推荐文案**：`precompute_pool_copy` 只处理 `style_key/topic_group` 已补齐的候选。未分类内容应先走 `classify_pool_backlog`，否则文案、topic label 与后续多样性/负反馈口径可能不一致。

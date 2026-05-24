@@ -110,6 +110,7 @@ class TestMobileWebViewModels:
               "getPoolStatusSummary", "normalizeRuntimeStatus", "mergeRuntimeStatusEvent",
               "getReadyRecommendationHint",
               "getRecommendationCoverPreloadUrls", "getRecommendationImageLoadingAttrs",
+              "shouldAutoAppendRecommendations",
               "formatRelativeTimestamp",
               "normalizeSourcePlatform", "getSourceLabel",
               "normalizeCoverUrl", "getCoverImageAttrs",
@@ -134,6 +135,50 @@ class TestMobileWebViewModels:
         assert "card-cover-frame" in app_css
         assert ".card-cover-frame.is-error" in app_css
         assert ".card-cover::after" not in app_css
+
+    def test_runtime_status_normalizes_pool_readiness_counts(self) -> None:
+        _assert_js(
+            dedent("""
+            import assert from "node:assert/strict";
+            import {
+              mergeRuntimeStatusEvent,
+              normalizeRuntimeStatus,
+            } from "./src/openbiliclaw/web/js/view-models.js";
+
+            assert.deepEqual(
+              normalizeRuntimeStatus({ initialized: true }),
+              {
+                initialized: true,
+                recommendation_count: 0,
+                pending_signal_events: 0,
+                last_refresh_at: "",
+                last_notification_at: "",
+                unread_count: 0,
+                pool_available_count: 0,
+                pool_raw_count: 0,
+                pool_pending_count: 0,
+                pool_target_count: 0,
+                last_discovered_count: 0,
+                last_replenished_count: 0,
+                recent_pool_topics: [],
+                manual_refresh_state: "idle",
+                manual_refresh_message: "",
+              },
+            );
+
+            const merged = mergeRuntimeStatusEvent(
+              { initialized: true, pool_available_count: 0 },
+              {
+                pool_available_count: 10,
+                pool_raw_count: 152,
+                pool_pending_count: 142,
+              },
+            );
+            assert.equal(merged.pool_available_count, 10);
+            assert.equal(merged.pool_raw_count, 152);
+            assert.equal(merged.pool_pending_count, 142);
+        """)
+        )
 
     def test_recommendation_cover_preload_helpers(self) -> None:
         _assert_js(
@@ -205,6 +250,64 @@ class TestMobileWebViewModels:
         assert "observeAutoAppendSentinel" in recommend_js
         assert ".load-more-row" in recommend_js
         assert "handleAppend();" in recommend_js
+        assert "shouldAutoAppendRecommendations" in recommend_js
+        assert "autoAppendUserArmed" in recommend_js
+
+    def test_mobile_auto_append_requires_user_scroll_intent(self) -> None:
+        _assert_js(
+            dedent("""
+            import assert from "node:assert/strict";
+            import {
+              shouldAutoAppendRecommendations,
+            } from "./src/openbiliclaw/web/js/view-models.js";
+
+            assert.equal(
+              shouldAutoAppendRecommendations({
+                loading: false,
+                autoAppendExhausted: false,
+                activeTab: "recommend",
+                userArmed: false,
+              }),
+              false,
+            );
+            assert.equal(
+              shouldAutoAppendRecommendations({
+                loading: false,
+                autoAppendExhausted: false,
+                activeTab: "recommend",
+                userArmed: true,
+              }),
+              true,
+            );
+            assert.equal(
+              shouldAutoAppendRecommendations({
+                loading: true,
+                autoAppendExhausted: false,
+                activeTab: "recommend",
+                userArmed: true,
+              }),
+              false,
+            );
+            assert.equal(
+              shouldAutoAppendRecommendations({
+                loading: false,
+                autoAppendExhausted: true,
+                activeTab: "recommend",
+                userArmed: true,
+              }),
+              false,
+            );
+            assert.equal(
+              shouldAutoAppendRecommendations({
+                loading: false,
+                autoAppendExhausted: false,
+                activeTab: "profile",
+                userArmed: true,
+              }),
+              false,
+            );
+        """)
+        )
 
     def test_normalize_recommendation_defaults(self) -> None:
         _assert_js(
@@ -381,6 +484,17 @@ class TestMobileWebViewModels:
               manual_refresh_state: "idle",
             });
             assert.equal(internal.topics, "小红书任务 / 小红书探索");
+
+            const pending = getPoolStatusSummary({
+              initialized: true,
+              pool_available_count: 0,
+              pool_pending_count: 142,
+              pool_target_count: 300,
+              manual_refresh_state: "running",
+            });
+            assert.equal(pending.available, "找到 142 条素材，正在整理成可换内容");
+            assert.equal(pending.replenished, "正在整理");
+            assert.equal(pending.topics, "整理好就能换，不会把素材数当可换数");
         """)
         )
 
@@ -441,6 +555,24 @@ class TestMobileWebViewModels:
                 ["当前可换", "600 条"],
                 ["最近补进", "补进 1 条"],
                 ["现在在忙", "小红书任务 / 探索"],
+              ],
+            );
+
+            const pending = getMobileRecommendationHeaderState({
+              runtimeStatus: {
+                initialized: true,
+                pool_available_count: 0,
+                pool_pending_count: 142,
+                pool_target_count: 300,
+                manual_refresh_state: "running",
+              },
+            });
+            assert.deepEqual(
+              pending.poolChips.map((chip) => [chip.label, chip.value]),
+              [
+                ["当前可换", "0 条"],
+                ["素材整理", "142 条"],
+                ["现在在忙", "整理好就能换，不会把素材数当可换数"],
               ],
             );
         """)
