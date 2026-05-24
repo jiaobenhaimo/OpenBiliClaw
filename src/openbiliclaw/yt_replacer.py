@@ -82,6 +82,10 @@ _AI_DUB_KEYWORDS = [
     "AI voice", "AI dub", "AI dubbing", "AI translate", "AI voiceover",
     "TTS配音", "TTS 配音", "TTS翻译", "TTS 翻译",
     "自动配音", "自动翻译",
+    # Broader AI dubbing signals — some creators don't write "AI" explicitly
+    "配音译制", "译制配音", "中英双语配音", "配音翻译",
+    "外语中文配音", "英文中配", "英语中配",
+    "智能配音", "智能翻译", "语音合成",
 ]
 
 # Signals in description that hint the video is an AI-dubbed repost
@@ -93,6 +97,12 @@ _AI_DUB_DESC_SIGNALS = [
     "本视频为AI", "AI配音视频", "AI翻译视频",
     "机器翻译视频", "机翻视频",
     "字幕翻译", "音频翻译",
+    # Broader description signals
+    "转载自油管", "转载自YouTube", "来源油管",
+    "视频来源", "素材来源", "原作者",
+    "原视频链接", "原地址", "原链接",
+    "出自YouTube", "采集自", "自译",
+    "翻译自", "译自",
 ]
 
 # Comment keywords that strongly suggest a video is a repost
@@ -242,6 +252,14 @@ def is_likely_repost(title: str, description: str = "", comments: list[str] | No
     english_terms = _extract_english_terms(title)
     meaningful = [t for t in english_terms if len(t) >= 6]
     has_meaningful = len(meaningful) >= 2 or (len(meaningful) == 1 and len(meaningful[0]) >= 10)
+
+    # Signal 0: Description directly contains a YouTube link — strong evidence of repost
+    if description and re.search(
+        r"(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[a-zA-Z0-9_-]{11}",
+        description,
+    ):
+        logger.debug("YT replacer: YT link in desc of %r", title)
+        return True
 
     # Signal 1: High Latin ratio — title is mostly English
     if latin_ratio > 0.35:

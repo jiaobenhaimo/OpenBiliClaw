@@ -433,7 +433,6 @@
       grid.replaceChildren(...items.map((item) => {
         const card = document.createElement("article");
         card.className = "video-card";
-        card.dataset.platform = item.platform;
         card.innerHTML = `
           <div class="cover" data-platform="${escapeHtml(item.platform)}">
             <button class="cover-btn" type="button" aria-label="打开 ${escapeHtml(item.title)}">

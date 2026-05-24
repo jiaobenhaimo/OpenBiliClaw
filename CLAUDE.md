@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Core Philosophy — 八耻八荣
+
+> 以下八条必须严格遵守，每条都是代码工作中的底线原则。
+
+| # | 耻（Never） | 荣（Always） |
+|---|------------|------------|
+| 1 | 以暗猜接口为耻 | 以认真查阅为荣 — 调用任何 API / 函数前先查阅其文档、签名、现有调用方式 |
+| 2 | 以模糊执行为耻 | 以寻求确认为荣 — 遇到不确定的需求/实现路径时主动向用户确认，不猜 |
+| 3 | 以盲想业务为耻 | 以人类确认为荣 — 不要替用户决定业务流程/UI/文案，需要先问 |
+| 4 | 以创造接口为耻 | 以复用现有为荣 — 优先寻找已有函数/类/模式，不轻易造新接口 |
+| 5 | 以跳过验证为耻 | 以主动测试为荣 — 修改代码后必须跑关联测试，新增功能必须补测试 |
+| 6 | 以破坏架构为耻 | 以遵循规范为荣 — 保持模块边界、数据流方向、现有代码风格，不动架构地基 |
+| 7 | 以假装理解为耻 | 以诚实无知为荣 — 不清楚的就承认不清楚，查阅/确认后再行动 |
+| 8 | 以盲目修改为耻 | 以谨慎重构为荣 — 先理解代码意图和作用范围，再小步修改，每步验证 |
+
 ## Project Overview
 
 OpenBiliClaw is an AI Agent for personalized Bilibili content recommendation. It builds a deep psychological profile ("Soul") of users through behavioral analysis, then proactively discovers and recommends content with warm, friend-like explanations. The project is bilingual (Chinese primary, English supported) and in pre-alpha (v0.1-dev).

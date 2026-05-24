@@ -1883,7 +1883,11 @@ def create_app(
                             latin_ratio > 0.05
                             or any(
                                 kw in combined
-                                for kw in ("配音", "翻译", "搬运", "ai", "youtube", "油管")
+                                for kw in ("配音", "翻译", "搬运", "ai", "youtube", "油管",
+                                           "双语", "中字", "字幕", "英配", "熟肉", "译制",
+                                           "外网", "国外视频", "海外", "原视频", "原版",
+                                           "转载", "转录", "素材来源", "视频来源", "原作者",
+                                           "CC", "sub", "dub", "clone", "voiceover")
                             )
                         )
                         if borderline:
