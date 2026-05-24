@@ -5569,10 +5569,9 @@ def create_app(
                 pending = False
 
                 if source_url:
-                    ctx.database.mark_content_as_youtube_repost(
+                    ctx.database.clear_youtube_repost(
                         bvid,
-                        yt_url=source_url,
-                        yt_cover_url=str(result.get("cover_url") or ""),
+                        cover_url=str(result.get("cover_url") or ""),
                     )
 
                 new_expression = None

@@ -2607,12 +2607,17 @@ class Database:
     def clear_youtube_repost(
         self,
         bvid: str,
+        cover_url: str = "",
     ) -> None:
         """Undo a youtube_repost mark: restore content_cache to original B站 state.
 
         Called when the user marks a YouTube card as repost but no B站 original
         is found — the automatic repost detection was a false positive.
         Reconstructs the B站 URL from the bvid since the original was overwritten.
+
+        When ``cover_url`` is provided (e.g. from a successful B站 match during
+        reverse search), the cover image is updated too. Otherwise it is cleared
+        and the frontend will generate a fallback from the video ID.
         """
         if not bvid:
             return
@@ -2622,10 +2627,10 @@ class Database:
             UPDATE content_cache
             SET content_url = ?,
                 source_platform = 'bilibili',
-                cover_url = ''
+                cover_url = ?
             WHERE bvid = ?
             """,
-            (bili_url, bvid),
+            (bili_url, cover_url, bvid),
         )
 
     def mark_content_as_youtube_repost(
