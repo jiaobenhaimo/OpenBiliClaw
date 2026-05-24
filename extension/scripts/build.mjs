@@ -99,8 +99,11 @@ if (isFirefox || isSafari) {
     await readFile(resolve(root, sourceManifestName), "utf-8"),
   );
   // Preserve source manifest field order: insert version right after `name`.
+  // Skip any pre-existing version field in the source manifest — the
+  // canonical version always comes from manifest.json (single source of truth).
   const merged = {};
   for (const [key, value] of Object.entries(sourceManifest)) {
+    if (key === "version") continue;
     merged[key] = value;
     if (key === "name") merged.version = chromeManifest.version;
   }
