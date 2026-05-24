@@ -2226,10 +2226,6 @@
       if (closeId) closePanel(closeId);
     });
 
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeSideDrawer();
-    });
-
     function setActiveSettingsPanel(panelName = "models") {
       document.querySelectorAll("[data-settings-tab]").forEach((tab) => {
         const isActive = tab.dataset.settingsTab === panelName;
