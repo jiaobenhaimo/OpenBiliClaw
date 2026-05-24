@@ -251,6 +251,36 @@
       window.setTimeout(() => toast.classList.remove("is-open"), 2600);
     }
 
+    function showChatModal(title, message, reply) {
+      // Remove existing modal if any
+      const existing = document.getElementById("chatReplyModal");
+      if (existing) existing.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "chatReplyModal";
+      overlay.className = "chat-reply-modal";
+      overlay.innerHTML = `
+        <div class="chat-reply-content">
+          <div class="chat-reply-header">
+            <span class="chat-reply-label">💬 阿b的回复</span>
+            <button class="chat-reply-close" aria-label="关闭">✕</button>
+          </div>
+          <div class="chat-reply-context"><strong>${escapeHtml(title)}</strong></div>
+          <div class="chat-reply-message"><em>你说：${escapeHtml(message)}</em></div>
+          <div class="chat-reply-body">${escapeHtml(reply)}</div>
+        </div>`;
+      overlay.querySelector(".chat-reply-close").addEventListener("click", () => overlay.remove());
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+      requestAnimationFrame(() => overlay.classList.add("is-open"));
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
     function openPanel(id) { document.getElementById(id)?.classList.add("is-open"); }
     function closePanel(id) {
       const panel = document.getElementById(id);
@@ -403,6 +433,7 @@
       grid.replaceChildren(...items.map((item) => {
         const card = document.createElement("article");
         card.className = "video-card";
+        card.dataset.platform = item.platform;
         card.innerHTML = `
           <div class="cover" data-platform="${escapeHtml(item.platform)}">
             <button class="cover-btn" type="button" aria-label="打开 ${escapeHtml(item.title)}">
@@ -433,8 +464,8 @@
               ${item.bvid ? `<span class="feedback-separator" aria-hidden="true">/</span>
               <button class="feedback-icon-btn mark-repost-btn" data-action="mark-as-repost" data-state="idle" type="button" aria-label="标记为搬运" title="检测是否为搬运内容"><svg class="mark-repost-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/><line x1="15" y1="3" x2="21" y2="3"/><line x1="21" y1="3" x2="21" y2="9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>` : ""}
             </div>
-            <div class="comment-field"><input placeholder="想说点什么？（仅作为反馈记录，不会触发对话）" aria-label="想说点什么？"></div>
-            <button class="small-btn chat-action" data-action="comment" type="button">留个想法</button>
+            <div class="comment-field"><input placeholder="想围绕这条聊什么？" aria-label="想围绕这条聊什么？"></div>
+            <button class="small-btn chat-action" data-action="comment" type="button">聊一聊</button>
           </div>
           <p class="status-line"></p>`;
         card.querySelector(".cover-btn").addEventListener("click", () => openRecommendation(item, card));
@@ -724,7 +755,7 @@
       try {
         if (action === "send-comment") {
           const input = card.querySelector(".comment-field input");
-          const note = input.value.trim();
+          const note = input?.value.trim();
           if (!note) {
             delete card.dataset.feedbackPending;
             card.querySelectorAll(".card-actions button, .card-actions input").forEach((control) => { control.disabled = false; });
@@ -732,10 +763,32 @@
             input?.focus();
             return;
           }
+          // Record feedback for profile learning
           await submitFeedback(item, "comment", note);
           if (input) input.value = "";
           closeCardComposer(card);
-          status.textContent = "已记录你的想法，几秒后从当前列表移除。";
+          // Start real chat with the AI about this video
+          status.textContent = "阿b正在思考你的想法…";
+          try {
+            const chatResp = await fetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: `关于《${item.title || item.bvid}》我想说：${note}` }),
+            });
+            let reply = null;
+            if (chatResp.ok) {
+              const chatData = await chatResp.json();
+              reply = chatData?.reply;
+            }
+            if (reply) {
+              showChatModal(item.title || item.bvid, note, reply);
+              status.textContent = "阿b回复了你的想法。";
+            } else {
+              status.textContent = "已记录你的想法，后台正忙稍后再聊。";
+            }
+          } catch {
+            status.textContent = "已记录你的想法，阿b有点卡，稍后再试试聊。";
+          }
           removeRecommendationCard(item, card, "已记录想法");
           return;
         }
@@ -895,7 +948,7 @@
               <button class="wl-feedback-btn" data-wl-action="comment" type="button" aria-label="聊一聊" title="聊一聊">${chatIcon}</button>
               <button class="wl-feedback-btn" data-watch-later-remove="${escapeHtml(bvid)}" type="button" aria-label="移除" title="移除">${trashIcon}</button>
             </div>
-            <div class="comment-field"><input placeholder="想说点什么？（仅作为反馈记录，不会触发对话）" aria-label="想说点什么？"></div>
+            <div class="comment-field"><input placeholder="想围绕这条聊什么？" aria-label="想围绕这条聊什么？"></div>
             <p class="status-line"></p>
           </article>`;
       }).join("");
@@ -985,8 +1038,27 @@
                 chatBtn.dataset.wlAction = "comment";
                 chatBtn.innerHTML = chatIcon;
               }
-              if (status) status.textContent = "已记录你的想法。";
-              showToast("已记录想法");
+              // Start real chat with the AI
+              const title = card.querySelector(".watch-later-title-link")?.textContent || bvid;
+              if (status) status.textContent = "阿b正在思考你的想法…";
+              try {
+                const chatResp = await fetch("/api/chat", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ message: `关于《${title}》我想说：${note}` }),
+                });
+                if (chatResp.ok) {
+                  const chatData = await chatResp.json();
+                  if (chatData?.reply) {
+                    showChatModal(title, note, chatData.reply);
+                    if (status) status.textContent = "阿b回复了你的想法。";
+                  } else {
+                    if (status) status.textContent = "已记录你的想法，后台正忙稍后再聊。";
+                  }
+                }
+              } catch {
+                if (status) status.textContent = "已记录你的想法，阿b有点卡。";
+              }
               state.watchLaterItems = state.watchLaterItems.filter((x) => x.bvid !== bvid);
               state.watchLaterTotal = Math.max(0, (state.watchLaterTotal || 1) - 1);
               updateWatchLaterCount();

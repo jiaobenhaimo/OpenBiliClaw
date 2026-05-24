@@ -803,6 +803,9 @@ function initAutoAppendIntent() {
 }
 
 // ── Recommendation Card ──────────────────────────────────────
+// Repost icon SVG (external link arrow)
+const REPOST_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:12px;height:12px;vertical-align:middle"><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/><line x1="15" y1="3" x2="21" y2="3"/><line x1="21" y1="3" x2="21" y2="9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>';
+
 function renderCard(rawItem, index = 0) {
   const item = normalizeRecommendation(rawItem);
   const card = document.createElement("div");
@@ -822,8 +825,9 @@ function renderCard(rawItem, index = 0) {
       <div class="card-meta">
         <span class="card-source" data-source="${item.source_platform}">${esc(getSourceLabel(item.source_platform))}</span>
         ${item.up_name ? `<span>${esc(item.up_name)}</span>` : ""}
-        ${item.topic_label ? `<span style="color:var(--text-muted)">${esc(item.topic_label)}</span>` : ""}
-      </div>
+      ${item.topic_label ? `<span style="color:var(--text-muted)">${esc(item.topic_label)}</span>` : ""}
+      ${item.bvid ? `<button class="mark-repost-btn-sm" data-bvid="${esc(item.bvid)}" data-action="mark-as-repost" type="button" title="标记为搬运" aria-label="标记为搬运">${REPOST_SVG}</button>` : ""}
+    </div>
       ${item.expression ? `<div class="card-expression">${esc(item.expression)}</div>` : ""}
     </div>`;
 
@@ -883,7 +887,7 @@ function renderCard(rawItem, index = 0) {
   if (alreadyFeedback === "dislike") dislikeBtn.disabled = true;
 
   const commentBtn = createCardAction("\u{1F4AC}", () => {
-    feedbackSheet = { itemId: item.id, note: "", submitState: "idle" };
+    feedbackSheet = { itemId: item.id, note: "", submitState: "idle", title: item.title || item.bvid };
     renderFeedbackSheet();
   });
 
@@ -960,11 +964,53 @@ function renderCard(rawItem, index = 0) {
   // Whole card click (except action row)
   if (url) {
     card.style.cursor = "pointer";
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (e) => {
+      // Don't navigate if clicking on mark-as-repost button
+      const target = e.target.closest("[data-action=mark-as-repost]");
+      if (target) return;
       reportClick({ bvid: item.bvid, title: item.title, recommendation_id: item.id, topic_label: item.topic_label, up_name: item.up_name });
       window.open(url, "_blank");
     });
   }
+
+  // Mark-as-repost handler — event delegation on the card
+  card.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action=mark-as-repost]");
+    if (!btn || !item.bvid) return;
+    e.stopPropagation();
+    e.preventDefault();
+    btn.disabled = true;
+    btn.style.opacity = "0.5";
+    try {
+      const resp = await fetch("/api/yt-replacer/mark-as-repost", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bvid: item.bvid, recommendation_id: item.id, source_platform: item.source_platform || "bilibili" }),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        // Update the expression text in the card
+        const exprEl = card.querySelector(".card-expression");
+        if (exprEl) exprEl.textContent = data.expression || exprEl.textContent;
+        if (data.direction === "youtube_to_bilibili") {
+          if (data.source_url) {
+            item.content_url = data.source_url;
+            item.source_platform = "bilibili";
+          }
+        } else if (data.yt_url) {
+          // Update the card's content url for the open button
+          item.content_url = data.yt_url;
+          item.source_platform = "youtube";
+        }
+      }
+      btn.title = data.ok ? "✓ 已标记" : (data.reason === "not_found" ? "未找到原视频" : "标记失败");
+      btn.style.opacity = data.ok ? "1" : "0.5";
+    } catch {
+      btn.disabled = false;
+      btn.style.opacity = "1";
+      btn.title = "标记失败，请重试";
+    }
+  });
 
   return card;
 }
@@ -1030,6 +1076,20 @@ function renderFeedbackSheet() {
       feedbackSheet.submitState = "success";
       renderFeedbackSheet();
       setTimeout(() => { feedbackSheet = null; renderFeedbackSheet(); }, 1200);
+      // Real chat with AI about this video
+      try {
+        const chatResp = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: `关于《${feedbackSheet.title || ""}》我想说：${feedbackSheet.note}` }),
+        });
+        if (chatResp.ok) {
+          const chatData = await chatResp.json();
+          if (chatData?.reply) {
+            showMobileChatReply(feedbackSheet.title || "", feedbackSheet.note, chatData.reply);
+          }
+        }
+      } catch { /* Chat is non-critical */ }
     } catch {
       feedbackSheet.submitState = "error";
       renderFeedbackSheet();
@@ -1316,4 +1376,26 @@ export function onStreamEvent(payload) {
       }
     }
   }
+}
+
+// ── Mobile Chat Reply ──────────────────────────────────────
+function showMobileChatReply(title, message, reply) {
+  const existing = document.querySelector(".mobile-chat-reply");
+  if (existing) existing.remove();
+  const container = document.createElement("div");
+  container.className = "mobile-chat-reply";
+  container.innerHTML = `
+    <div class="mobile-chat-reply-panel">
+      <div class="mobile-chat-reply-header">
+        <span>💬 阿b的回复</span>
+        <button class="mobile-chat-reply-close">✕</button>
+      </div>
+      <div class="mobile-chat-reply-title">${esc(title)}</div>
+      <div class="mobile-chat-reply-message">你说：${esc(message)}</div>
+      <div class="mobile-chat-reply-body">${esc(reply)}</div>
+    </div>`;
+  container.querySelector(".mobile-chat-reply-close").addEventListener("click", () => container.remove());
+  container.addEventListener("click", (e) => { if (e.target === container) container.remove(); });
+  document.body.appendChild(container);
+  requestAnimationFrame(() => container.classList.add("is-open"));
 }
