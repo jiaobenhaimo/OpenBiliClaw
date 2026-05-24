@@ -63,15 +63,18 @@ class OpenAIProvider(LLMProvider):
         base_url: str = "",
         provider_name: str = "openai",
         token_provider: Callable[[bool], Awaitable[str]] | None = None,
+        timeout: float = 300.0,
     ) -> None:
         self._model = model
         self._provider_name = provider_name
         self.base_url = base_url or ""
         self._token_provider = token_provider
+        self._timeout = timeout
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url or None,
             max_retries=0,
+            timeout=timeout,
         )
 
     @property
@@ -407,12 +410,14 @@ class DeepSeekProvider(OpenAIProvider):
         model: str = "deepseek-v4-flash",
         *,
         reasoning_effort: str = "",
+        timeout: float = 300.0,
     ) -> None:
         super().__init__(
             api_key=api_key,
             model=model,
             base_url="https://api.deepseek.com",
             provider_name="deepseek",
+            timeout=timeout,
         )
         self._reasoning_effort = reasoning_effort.strip()
 

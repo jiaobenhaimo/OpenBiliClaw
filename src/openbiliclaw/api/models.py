@@ -93,6 +93,8 @@ class RuntimeStatusResponse(BaseModel):
     last_notification_at: str = ""
     unread_count: int
     pool_available_count: int = 0
+    pool_raw_count: int = 0
+    pool_pending_count: int = 0
     pool_target_count: int = 0
     last_discovered_count: int = 0
     last_replenished_count: int = 0
@@ -543,6 +545,7 @@ class ModuleLLMConfigOut(BaseModel):
 class LLMConfigOut(BaseModel):
     default_provider: str = "openai"
     concurrency: int = 3
+    timeout: int = 300
     fallback_enabled: bool = False
     fallback_provider: str = ""
     openai: LLMProviderConfigOut = Field(default_factory=LLMProviderConfigOut)

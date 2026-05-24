@@ -12,6 +12,7 @@ import {
   getDelightUiState,
   getDisplayedPoolStatusSummary,
   getNextExpandedCognitionIndex,
+  getManualRefreshResultHint,
   getReadyRecommendationHint,
   getHintBannerState,
   getRuntimeRefreshSubmissionState,
@@ -21,7 +22,9 @@ import {
   mergeRuntimeStatusEvent,
   mergeDelightCandidate,
   normalizeActivityFeed,
+  normalizeRuntimeStatus,
   normalizeProfileSummary,
+  shouldAutoLoadRecommendations,
   shouldFetchProfileSummary,
   shouldSubmitChatOnEnter,
   validateCommentInput,
@@ -107,6 +110,7 @@ const RUNTIME_REFRESH_DEBOUNCE_MS = 1000;
 let recommendationsRefreshTimer = null;
 let recommendationsRefreshInFlight = false;
 let recommendationsRefreshPending = false;
+let manualRefreshInFlight = false;
 let activityFeedRefreshTimer = null;
 let activityFeedRefreshInFlight = false;
 let activityFeedRefreshPending = false;
@@ -191,6 +195,9 @@ async function setProxyImageSrc(image, coverUrl) {
 }
 
 let recommendationLoadCheckTimer = null;
+let recommendationAutoLoadUserArmed = false;
+let recommendationAutoLoadTouchY = null;
+let recommendationAutoLoadIntentInitialized = false;
 let runtimeStreamClient = null;
 const CHAT_SESSION = "popup";
 const CHAT_POLL_INTERVAL_MS = 1200;
@@ -298,6 +305,64 @@ function queueRecommendationLoadCheck() {
     recommendationLoadCheckTimer = null;
     maybeLoadMoreRecommendations();
   }, 0);
+}
+
+function resetRecommendationAutoLoadIntent() {
+  recommendationAutoLoadUserArmed = false;
+  recommendationAutoLoadTouchY = null;
+}
+
+function armRecommendationAutoLoadIntent() {
+  if (state.activeTab === "recommend") {
+    recommendationAutoLoadUserArmed = true;
+  }
+}
+
+function initRecommendationAutoLoadIntent() {
+  if (recommendationAutoLoadIntentInitialized) {
+    return;
+  }
+  recommendationAutoLoadIntentInitialized = true;
+
+  if (elements.content instanceof HTMLElement) {
+    elements.content.addEventListener(
+      "wheel",
+      (event) => {
+        if (event.deltaY > 0) {
+          armRecommendationAutoLoadIntent();
+        }
+      },
+      { passive: true },
+    );
+    elements.content.addEventListener(
+      "touchstart",
+      (event) => {
+        recommendationAutoLoadTouchY = event.touches?.[0]?.clientY ?? null;
+      },
+      { passive: true },
+    );
+    elements.content.addEventListener(
+      "touchmove",
+      (event) => {
+        const nextY = event.touches?.[0]?.clientY ?? null;
+        if (
+          recommendationAutoLoadTouchY !== null &&
+          nextY !== null &&
+          recommendationAutoLoadTouchY - nextY > 12
+        ) {
+          armRecommendationAutoLoadIntent();
+        }
+        recommendationAutoLoadTouchY = nextY;
+      },
+      { passive: true },
+    );
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "PageDown", "End", " "].includes(event.key)) {
+      armRecommendationAutoLoadIntent();
+    }
+  });
 }
 
 function setActiveTab(tabName) {
@@ -3583,17 +3648,21 @@ async function loadMoreRecommendations() {
 
 function maybeLoadMoreRecommendations() {
   if (
-    state.activeTab !== "recommend" ||
     !(elements.content instanceof HTMLElement) ||
     elements.viewRecommend.hidden ||
-    state.loadingMore ||
-    !state.hasMoreRecommendations
+    !shouldAutoLoadRecommendations({
+      activeTab: state.activeTab,
+      loadingMore: state.loadingMore,
+      hasMoreRecommendations: state.hasMoreRecommendations,
+      userArmed: recommendationAutoLoadUserArmed,
+    })
   ) {
     return;
   }
 
   const remaining = elements.content.scrollHeight - elements.content.scrollTop - elements.content.clientHeight;
   if (remaining <= 96) {
+    recommendationAutoLoadUserArmed = false;
     void loadMoreRecommendations();
   }
 }
@@ -3887,6 +3956,7 @@ async function initializeRecommendations() {
   await loadActivityFeed();
 
   if (recommendationResult.status === "fulfilled") {
+    resetRecommendationAutoLoadIntent();
     state.recommendations = recommendationResult.value;
     state.loadingMore = false;
     state.hasMoreRecommendations = state.recommendations.length >= 10;
@@ -3914,6 +3984,12 @@ async function initializeRecommendations() {
 }
 
 async function handleManualRefresh() {
+  if (manualRefreshInFlight) {
+    return;
+  }
+  manualRefreshInFlight = true;
+  const hadAdvertisedInventory =
+    normalizeRuntimeStatus(state.runtimeStatus).pool_available_count > 0;
   setRefreshButtonState(true, "正在给你换一批…");
   try {
     const result = await reshuffleRecommendations();
@@ -3921,6 +3997,7 @@ async function handleManualRefresh() {
       setHint("先执行 openbiliclaw init，再回来刷新。", "error");
       return;
     }
+    resetRecommendationAutoLoadIntent();
     state.recommendations = result.items;
     state.loadingMore = false;
     state.hasMoreRecommendations = result.items.length >= 10;
@@ -3933,15 +4010,17 @@ async function handleManualRefresh() {
         runtimeStatus: state.runtimeStatus,
       }),
     );
-    setHint(
-      result.items.length > 0 ? "先给你换了一批新的，后台还在继续补货。" : "池子里这会儿还没刷出新的，稍后再试。",
-      result.items.length > 0 ? "success" : "error",
-    );
+    const hint = getManualRefreshResultHint({
+      itemCount: result.items.length,
+      hadAdvertisedInventory,
+    });
+    setHint(hint.message, hint.tone);
     await loadActivityFeed();
     void refreshRecommendations().catch(() => undefined);
   } catch {
     setHint("这次没换出来新的，稍后再试。", "error");
   } finally {
+    manualRefreshInFlight = false;
     setRefreshButtonState(false);
   }
 }
@@ -4389,6 +4468,7 @@ function bindSettings() {
     providerSelect.value = cfg.llm?.default_provider || "openai";
     showProviderFields(providerSelect.value);
     setVal("cfgLlmConcurrency", cfg.llm?.concurrency ?? 3);
+    setVal("cfgLlmTimeout", cfg.llm?.timeout ?? 300);
     setVal("cfgLlmFallbackProvider", cfg.llm?.fallback_provider);
 
     setVal("cfgOpenaiAuthMode", cfg.llm?.openai?.auth_mode || "api_key");
@@ -4488,6 +4568,7 @@ function bindSettings() {
     setVal("cfgAccountSyncInterval", cfg.scheduler?.account_sync_interval_hours);
     setVal("cfgRefreshCheckInterval", cfg.scheduler?.refresh_check_interval_seconds);
     setVal("cfgSignalEventThreshold", cfg.scheduler?.signal_event_threshold);
+    setVal("cfgFeedbackBatchThreshold", cfg.scheduler?.feedback_batch_threshold);
     setVal("cfgTrendingRefreshHours", cfg.scheduler?.trending_refresh_hours);
     setVal("cfgExploreRefreshHours", cfg.scheduler?.explore_refresh_hours);
     setVal("cfgDiscoveryLimit", cfg.scheduler?.discovery_limit);
@@ -4534,6 +4615,7 @@ function bindSettings() {
       llm: {
         default_provider: providerSelect.value,
         concurrency: getInt("cfgLlmConcurrency", 3),
+        timeout: getInt("cfgLlmTimeout", 300),
         fallback_enabled: Boolean(llmFallbackProvider),
         fallback_provider: llmFallbackProvider,
         openai: {
@@ -4644,6 +4726,7 @@ function bindSettings() {
         account_sync_interval_hours: getInt("cfgAccountSyncInterval", 6),
         refresh_check_interval_seconds: getInt("cfgRefreshCheckInterval", 60),
         signal_event_threshold: getInt("cfgSignalEventThreshold", 6),
+        feedback_batch_threshold: getInt("cfgFeedbackBatchThreshold", 3),
         trending_refresh_hours: getInt("cfgTrendingRefreshHours", 3),
         explore_refresh_hours: getInt("cfgExploreRefreshHours", 12),
         discovery_limit: getInt("cfgDiscoveryLimit", 30),
@@ -4843,6 +4926,7 @@ async function initializePopup() {
   state.delightHighlightBvid = params.get("delight")?.trim() || "";
   bindTabs();
   bindProfileHistoryLoading();
+  initRecommendationAutoLoadIntent();
   bindRefreshButton();
   bindActivityToggle();
   bindChat();

@@ -100,6 +100,13 @@ _EMBEDDING_CAPABLE_PROVIDERS: tuple[str, ...] = (
     # supply an explicit embedding provider in [llm.embedding] — this
     # candidate only kicks in when they actively requested it.
     "openai_compatible",
+    # OpenRouter routes embeddings per ``<vendor>/<model>`` slug
+    # (e.g. ``google/gemini-embedding-2-preview``,
+    # ``openai/text-embedding-3-small``). Coverage is spotty per-route
+    # so it stays out of the chat-side ``supports_embedding`` flag —
+    # users must opt in by setting ``[llm.embedding].provider =
+    # "openrouter"`` with an explicit ``model``.
+    "openrouter",
 )
 _DEFAULT_EMBEDDING_MODEL_BY_PROVIDER: dict[str, str] = {
     "gemini": "gemini-embedding-001",
@@ -147,7 +154,7 @@ def build_embedding_service(
         # [llm].default_provider; embedding is an independent config
         # surface.
         fallback_order: list[str] = []
-        fallback_candidates: tuple[str, ...] = ((fallback_provider,) if fallback_provider else ())
+        fallback_candidates: tuple[str, ...] = (fallback_provider,) if fallback_provider else ()
         for name in ((requested_name,) if requested_name else ()) + fallback_candidates:
             if name in _EMBEDDING_CAPABLE_PROVIDERS and name not in fallback_order:
                 fallback_order.append(name)
@@ -321,6 +328,29 @@ def _build_dedicated_embedding_provider(
             effective_model,
         )
 
+    if candidate == "openrouter":
+        # OpenRouter requires an explicit ``<vendor>/<model>`` slug — no
+        # safe default since routing depends on it. Refuse to construct
+        # without one rather than 404 at first embed call.
+        if not api_key:
+            return None
+        if candidate == requested_name and not emb_cfg.model.strip():
+            return None
+        # Pass through optional attribution headers from [llm.openrouter]
+        # so the embedding traffic shows up under the same OpenRouter
+        # account dashboard as chat traffic.
+        chat_openrouter = config.llm.openrouter
+        return (
+            OpenRouterProvider(
+                api_key=api_key,
+                model=effective_model,
+                base_url=base_url or "https://openrouter.ai/api/v1",
+                http_referer=chat_openrouter.http_referer,
+                x_title=chat_openrouter.x_title,
+            ),
+            effective_model,
+        )
+
     return None
 
 
@@ -368,6 +398,7 @@ def _maybe_openai_provider(config: Config, overrides: dict[str, LLMProvider]) ->
             model=config.llm.openai.model or "gpt-4o",
             base_url=config.llm.openai.base_url,
             token_provider=_codex_token_provider,
+            timeout=float(config.llm.timeout),
         )
     if not config.llm.openai.api_key.strip():
         return None
@@ -375,6 +406,7 @@ def _maybe_openai_provider(config: Config, overrides: dict[str, LLMProvider]) ->
         api_key=config.llm.openai.api_key,
         model=config.llm.openai.model or "gpt-4o",
         base_url=config.llm.openai.base_url,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -386,6 +418,7 @@ def _maybe_claude_provider(config: Config, overrides: dict[str, LLMProvider]) ->
     return ClaudeProvider(
         api_key=config.llm.claude.api_key,
         model=config.llm.claude.model or "claude-sonnet-4-20250514",
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -400,6 +433,7 @@ def _maybe_deepseek_provider(
         api_key=config.llm.deepseek.api_key,
         model=config.llm.deepseek.model or "deepseek-v4-flash",
         reasoning_effort=config.llm.deepseek.reasoning_effort,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -420,6 +454,7 @@ def _maybe_gemini_provider(config: Config, overrides: dict[str, LLMProvider]) ->
     return GeminiProvider(
         api_key=api_key,
         model=config.llm.gemini.model or "gemini-2.5-flash",
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -450,6 +485,7 @@ def _maybe_ollama_provider(config: Config, overrides: dict[str, LLMProvider]) ->
         api_key=config.llm.ollama.api_key or "ollama",
         model=model or "llama3",
         base_url=base_url,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -494,6 +530,7 @@ def _maybe_openrouter_provider(
         base_url=config.llm.openrouter.base_url or "https://openrouter.ai/api/v1",
         http_referer=config.llm.openrouter.http_referer,
         x_title=config.llm.openrouter.x_title,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -522,4 +559,5 @@ def _maybe_openai_compatible_provider(
         model=cfg.model or "gpt-4o-mini",
         base_url=cfg.base_url,
         provider_name="openai_compatible",
+        timeout=float(config.llm.timeout),
     )

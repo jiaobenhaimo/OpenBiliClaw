@@ -692,10 +692,6 @@ def create_app(
     async def _run_post_feedback_tasks() -> None:
         with suppress(Exception):
             await ctx.soul_engine.process_feedback_batch_if_needed()
-        refresh_after_feedback = getattr(ctx.runtime_controller, "refresh_after_feedback", None)
-        if callable(refresh_after_feedback):
-            with suppress(Exception):
-                await refresh_after_feedback()
 
     async def _ingest_profile_update_events(events: list[dict[str, Any]]) -> None:
         """Feed source task events into the profile-update pipeline when ready.
@@ -2160,7 +2156,6 @@ def create_app(
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             reply = await asyncio.wait_for(ctx.dialogue.respond(contextual_message), timeout=30)
         except TimeoutError:
@@ -2214,11 +2209,10 @@ def create_app(
         message = payload.message.strip()
         if not message:
             raise HTTPException(status_code=422, detail="Chat message is required.")
-        # Pause discovery LLM calls and wait for RPM window to clear
+        # Pause discovery LLM calls while user is chatting
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)  # Let RPM window drain
         try:
             # Bumped from 30s to 120s — deepseek with reasoning_effort=max
             # routinely takes 60-90s for one dialogue turn, so a 30s budget
@@ -2428,6 +2422,7 @@ def create_app(
                     temperature=0.0,
                     json_mode=False,
                     caller="api.sentiment",
+                    bypass_semaphore=True,
                 ),
                 timeout=15,
             )
@@ -2462,7 +2457,6 @@ def create_app(
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             async with chat_turn_lock:
                 reply = await asyncio.wait_for(
@@ -2605,6 +2599,31 @@ def create_app(
         await publish()
         return {"ok": True, "action": "probe_triggered"}
 
+    @app.get("/api/interest-probes/pending")
+    async def pending_interest_probes() -> dict[str, Any]:
+        """Return active speculative interests that the user hasn't responded to.
+
+        The mobile web UI polls this on page load / bell-click so probes
+        survive page refreshes (unlike WebSocket-only delivery).
+        """
+        try:
+            from openbiliclaw.soul.speculator import load_speculative_state
+
+            spec_state = load_speculative_state(ctx.config.data_path)
+            active = [item for item in spec_state.active if item.status == "active"]
+            items = [
+                {
+                    "domain": item.domain,
+                    "reason": item.reason,
+                    "confidence": item.confidence,
+                    "status": item.status,
+                }
+                for item in active[:6]
+            ]
+            return {"items": items}
+        except Exception:
+            return {"items": []}
+
     @app.post("/api/interest-probes/respond")
     async def respond_to_interest_probe(payload: dict[str, Any]) -> Any:
         """User responds to a speculated interest probe.
@@ -2721,11 +2740,10 @@ def create_app(
         contextual_message = f"[关于猜测兴趣「{domain}」的反馈] {raw_message}"
         if ctx.dialogue is None:
             return {"ok": False, "action": "chat", "domain": domain, "reply": "对话引擎暂不可用。"}
-        # Pause discovery LLM calls and wait for RPM window to clear
+        # Pause discovery LLM calls while user is chatting
         concurrency = getattr(ctx.discovery_engine, "_concurrency", None)
         if concurrency is not None:
             concurrency.chat_active = True
-            await asyncio.sleep(3)
         try:
             reply = await asyncio.wait_for(
                 ctx.dialogue.respond(contextual_message),
@@ -2796,7 +2814,7 @@ def create_app(
     async def feedback(payload: FeedbackIn) -> FeedbackResponse:
         feedback_type = payload.feedback_type.strip().lower()
         note = payload.note.strip()
-        if feedback_type not in {"like", "dislike", "comment"}:
+        if feedback_type not in {"like", "dislike", "comment", "dismiss"}:
             raise HTTPException(status_code=422, detail="Unsupported feedback type.")
         if feedback_type == "comment" and not note:
             raise HTTPException(status_code=422, detail="Comment feedback requires note.")
@@ -2823,6 +2841,7 @@ def create_app(
             "like": "点赞了",
             "dislike": "踩了",
             "comment": "评论了",
+            "dismiss": "忽略了",
         }.get(feedback_type, "反馈了")
         feedback_context = f"在 B 站{feedback_label}《{rec_title}》"
         if note:
@@ -3906,6 +3925,7 @@ def create_app(
             llm=LLMConfigOut(
                 default_provider=cfg.llm.default_provider,
                 concurrency=int(getattr(cfg.llm, "concurrency", 3)),
+                timeout=int(getattr(cfg.llm, "timeout", 300)),
                 fallback_enabled=cfg.llm.fallback_enabled,
                 fallback_provider=cfg.llm.fallback_provider,
                 openai=_provider_out(cfg.llm.openai),
@@ -4055,6 +4075,7 @@ def create_app(
         from openbiliclaw.config import (
             _DEFAULT_DISCOVERY_LIMIT,
             _DEFAULT_EXPLORE_REFRESH_HOURS,
+            _DEFAULT_FEEDBACK_BATCH_THRESHOLD,
             _DEFAULT_PROACTIVE_PUSH_INTERVAL_SECONDS,
             _DEFAULT_REFRESH_CHECK_INTERVAL_SECONDS,
             _DEFAULT_SIGNAL_EVENT_THRESHOLD,
@@ -4105,6 +4126,10 @@ def create_app(
                 cfg.llm.default_provider = str(llm_data["default_provider"])
             if "concurrency" in llm_data:
                 cfg.llm.concurrency = _normalize_llm_concurrency(llm_data["concurrency"])
+            if "timeout" in llm_data:
+                from openbiliclaw.config import _normalize_llm_timeout
+
+                cfg.llm.timeout = _normalize_llm_timeout(llm_data["timeout"])
             if "fallback_enabled" in llm_data:
                 cfg.llm.fallback_enabled = _as_bool(llm_data["fallback_enabled"])
             if "fallback_provider" in llm_data:
@@ -4283,6 +4308,11 @@ def create_app(
                     5,
                     None,
                 ),
+                "feedback_batch_threshold": (
+                    _DEFAULT_FEEDBACK_BATCH_THRESHOLD,
+                    1,
+                    None,
+                ),
             }
             for key in (
                 "enabled",
@@ -4307,6 +4337,7 @@ def create_app(
                 "speculation_max_secondary_interests",
                 "auto_update_enabled",
                 "auto_update_check_interval_hours",
+                "feedback_batch_threshold",
             ):
                 if key in sdata:
                     current_val = getattr(cfg.scheduler, key)

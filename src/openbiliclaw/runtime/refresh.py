@@ -79,6 +79,7 @@ class SupportsEventDatabase(Protocol):
     def count_recommendations(self) -> int: ...
     def count_unread_recommendations(self) -> int: ...
     def count_pool_candidates(self) -> int: ...
+    def count_pool_readiness(self) -> dict[str, int]: ...
     def count_pool_candidates_by_source(self) -> dict[str, int]: ...
     def get_pool_distribution_counts(self) -> dict[str, dict[str, int]]: ...
     def trim_explore_cluster_overflow(self, *, max_per_cluster: int = 3) -> int: ...
@@ -279,6 +280,28 @@ class ContinuousRefreshController:
             self._last_llm_gate_allowed = allowed
         return allowed
 
+    def _pool_readiness_counts(self) -> dict[str, int]:
+        """Return normalized pool readiness counts for status payloads."""
+        try:
+            readiness = self.database.count_pool_readiness()
+            available = int(readiness.get("available", 0))
+            return {
+                "available": max(0, available),
+                "raw": max(0, int(readiness.get("raw", available))),
+                "pending": max(0, int(readiness.get("pending", 0))),
+            }
+        except Exception:
+            available = int(self.database.count_pool_candidates())
+            return {"available": max(0, available), "raw": max(0, available), "pending": 0}
+
+    @staticmethod
+    def _pool_count_payload(counts: dict[str, int]) -> dict[str, int]:
+        return {
+            "pool_available_count": int(counts.get("available", 0)),
+            "pool_raw_count": int(counts.get("raw", counts.get("available", 0))),
+            "pool_pending_count": int(counts.get("pending", 0)),
+        }
+
     def get_runtime_status(self) -> dict[str, object]:
         """Build a lightweight runtime summary for popup or diagnostics."""
         state = self.memory_manager.load_discovery_runtime_state()
@@ -298,6 +321,7 @@ class ContinuousRefreshController:
             pending_delight_count = self.database.count_delight_candidates(
                 min_delight_score=DEFAULT_DELIGHT_THRESHOLD,
             )
+        pool_counts = self._pool_readiness_counts()
         return {
             "initialized": self._is_initialized(),
             "recommendation_count": self.database.count_recommendations(),
@@ -305,7 +329,7 @@ class ContinuousRefreshController:
             "last_refresh_at": last_refresh_at,
             "last_notification_at": str(state.get("last_notification_at", "")),
             "unread_count": self.database.count_unread_recommendations(),
-            "pool_available_count": self.database.count_pool_candidates(),
+            **self._pool_count_payload(pool_counts),
             "pool_target_count": self.pool_target_count,
             "last_discovered_count": self._int_state_value(state, "last_discovered_count"),
             "last_replenished_count": self._int_state_value(state, "last_replenished_count"),
@@ -339,6 +363,9 @@ class ContinuousRefreshController:
         ``refresh_if_needed`` entry does, so callers reaching it from
         different paths can't double-acquire.
         """
+        if not self._llm_work_allowed():
+            return {"refreshed": False, "strategies": [], "reason": "llm_paused"}
+
         if self._refresh_lock.locked():
             logger.debug("refresh_if_needed skipped: another refresh in flight")
             return {"skipped": True, "reason": "another refresh holds lock"}
@@ -821,7 +848,8 @@ class ContinuousRefreshController:
     ) -> None:
         """Report candidates that became usable during the standalone drain."""
         try:
-            after_pool_count = int(self.database.count_pool_candidates())
+            after_pool_counts = self._pool_readiness_counts()
+            after_pool_count = int(after_pool_counts["available"])
         except Exception:
             return
         replenished_count = max(0, after_pool_count - int(before_pool_count))
@@ -845,7 +873,7 @@ class ContinuousRefreshController:
                 "type": "refresh.pool_updated",
                 "phase": "done",
                 "message": f"刚补进 {replenished_count} 条新的",
-                "pool_available_count": after_pool_count,
+                **self._pool_count_payload(after_pool_counts),
                 "last_discovered_count": discovered_count,
                 "last_replenished_count": replenished_count,
                 "recent_pool_topics": recent_pool_topics,
@@ -1115,7 +1143,7 @@ class ContinuousRefreshController:
                     "type": "refresh.failed",
                     "phase": "failed",
                     "message": self._manual_refresh_message,
-                    "pool_available_count": self.database.count_pool_candidates(),
+                    **self._pool_count_payload(self._pool_readiness_counts()),
                 }
             )
             return
@@ -1142,7 +1170,7 @@ class ContinuousRefreshController:
                 "type": "refresh.pool_updated",
                 "phase": "done",
                 "message": self._manual_refresh_message,
-                "pool_available_count": self.database.count_pool_candidates(),
+                **self._pool_count_payload(self._pool_readiness_counts()),
             }
         )
 
@@ -1154,7 +1182,8 @@ class ContinuousRefreshController:
         plan: list[tuple[list[str], int]],
         reason: str,
     ) -> dict[str, object]:
-        before_pool_count = self.database.count_pool_candidates()
+        before_pool_counts = self._pool_readiness_counts()
+        before_pool_count = before_pool_counts["available"]
         initial_pool_below_target = before_pool_count < self.pool_target_count
         all_discovered: list[Any] = []
         flattened_strategies: list[str] = []
@@ -1174,12 +1203,13 @@ class ContinuousRefreshController:
                 "type": "refresh.started",
                 "phase": "running",
                 "message": "开始给你补候选了",
-                "pool_available_count": before_pool_count,
+                **self._pool_count_payload(before_pool_counts),
             }
         )
 
         for strategies, requested_limit in plan:
-            current_pool_count = self.database.count_pool_candidates()
+            current_pool_counts = self._pool_readiness_counts()
+            current_pool_count = current_pool_counts["available"]
             if current_pool_count >= self.pool_target_count:
                 break
 
@@ -1189,7 +1219,7 @@ class ContinuousRefreshController:
                     "phase": "running",
                     "strategy": "+".join(strategies),
                     "message": self._strategy_message(strategies),
-                    "pool_available_count": current_pool_count,
+                    **self._pool_count_payload(current_pool_counts),
                 }
             )
 
@@ -1327,7 +1357,8 @@ class ContinuousRefreshController:
             state["last_trending_refresh_at"] = now
         if "explore" in flattened_strategies:
             state["last_explore_refresh_at"] = now
-        after_pool_count = self.database.count_pool_candidates()
+        after_pool_counts = self._pool_readiness_counts()
+        after_pool_count = after_pool_counts["available"]
         state["last_discovered_count"] = len(all_discovered)
         state["last_replenished_count"] = max(0, after_pool_count - before_pool_count)
         if replenished_topics:
@@ -1348,7 +1379,7 @@ class ContinuousRefreshController:
                         else "这轮没补进新的候选"
                     )
                 ),
-                "pool_available_count": after_pool_count,
+                **self._pool_count_payload(after_pool_counts),
                 "last_discovered_count": discovered_count,
                 "last_replenished_count": replenished_count,
                 "recent_pool_topics": self._list_state_value(state, "recent_pool_topics"),
@@ -1375,7 +1406,8 @@ class ContinuousRefreshController:
         steady-state ticks don't spam the WebSocket stream.
         """
         try:
-            current = int(self.database.count_pool_candidates())
+            pool_counts = self._pool_readiness_counts()
+            current = int(pool_counts["available"])
         except Exception:
             return
         if current == self._last_published_pool_count:
@@ -1384,7 +1416,7 @@ class ContinuousRefreshController:
         await self._publish_event(
             {
                 "type": "pool_status",
-                "pool_available_count": current,
+                **self._pool_count_payload(pool_counts),
                 "pool_target_count": int(self.pool_target_count),
             }
         )
@@ -1402,10 +1434,12 @@ class ContinuousRefreshController:
         except Exception:
             return 0
 
-    async def _publish_event(self, event: dict[str, object]) -> None:
+    async def _publish_event(self, event: dict[str, object]) -> bool:
         publish = getattr(self.event_hub, "publish", None)
         if callable(publish):
-            await publish(event)
+            result = await publish(event)
+            return True if result is None else bool(result)
+        return False
 
     async def _publish_delight_if_available(self) -> None:
         """Check for a pending delight candidate and push it via WebSocket."""
@@ -1471,17 +1505,10 @@ class ContinuousRefreshController:
         if not domain:
             return
 
-        # Record this probe
-        probed[domain.lower()] = now.isoformat()
-        state["probed_domains"] = probed
         axis = build_probe_axis(
             experience_mode=getattr(top, "experience_mode", ""),
             entry_load=getattr(top, "entry_load", ""),
         )
-        if axis:
-            probed_axes[axis] = now.isoformat()
-        state["probed_axes"] = probed_axes
-        self.memory_manager.save_discovery_runtime_state(state)
         reason = str(getattr(top, "reason", "")).strip()
         specifics = [
             str(getattr(item, "name", "")).strip()
@@ -1497,7 +1524,7 @@ class ContinuousRefreshController:
             if reason
             else f"我感觉你可能对【{domain}】{specific_hint}有潜在兴趣，这个方向你自己认不认？"
         )
-        await self._publish_event(
+        delivered = await self._publish_event(
             {
                 "type": "interest.probe",
                 "phase": "ready",
@@ -1513,6 +1540,17 @@ class ContinuousRefreshController:
                 "question": question,
             }
         )
+        if not delivered:
+            logger.debug("interest probe skipped: no runtime-stream subscriber")
+            return
+
+        # Record this probe only after it has reached at least one runtime stream.
+        probed[domain.lower()] = now.isoformat()
+        state["probed_domains"] = probed
+        if axis:
+            probed_axes[axis] = now.isoformat()
+        state["probed_axes"] = probed_axes
+        self.memory_manager.save_discovery_runtime_state(state)
 
     def _strategy_message(self, strategies: list[str]) -> str:
         if strategies == ["search", "related_chain"]:

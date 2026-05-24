@@ -11,7 +11,11 @@ class OpenRouterProvider(OpenAIProvider):
     # OpenRouter routes most chat models, but its embeddings coverage is
     # spotty per-route — better to fall back to ollama / gemini by default
     # than to surprise users with mid-pipeline 404s. Users who want
-    # OpenRouter embedding can set ``[llm.embedding]`` explicitly.
+    # OpenRouter embedding can set ``[llm.embedding] provider="openrouter"``
+    # with an explicit ``<vendor>/<model>`` (e.g.
+    # ``google/gemini-embedding-2-preview``); that dedicated path lives in
+    # ``registry._build_dedicated_embedding_provider`` and does not
+    # consult this flag.
     supports_embedding = False
 
     def __init__(
@@ -21,12 +25,14 @@ class OpenRouterProvider(OpenAIProvider):
         base_url: str = "https://openrouter.ai/api/v1",
         http_referer: str = "",
         x_title: str = "",
+        timeout: float = 300.0,
     ) -> None:
         super().__init__(
             api_key=api_key,
             model=model,
             base_url=base_url,
             provider_name="openrouter",
+            timeout=timeout,
         )
         self._http_referer = http_referer
         self._x_title = x_title
