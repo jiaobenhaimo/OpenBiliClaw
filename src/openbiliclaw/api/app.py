@@ -3925,6 +3925,7 @@ def create_app(
             llm=LLMConfigOut(
                 default_provider=cfg.llm.default_provider,
                 concurrency=int(getattr(cfg.llm, "concurrency", 3)),
+                timeout=int(getattr(cfg.llm, "timeout", 300)),
                 fallback_enabled=cfg.llm.fallback_enabled,
                 fallback_provider=cfg.llm.fallback_provider,
                 openai=_provider_out(cfg.llm.openai),
@@ -4125,6 +4126,10 @@ def create_app(
                 cfg.llm.default_provider = str(llm_data["default_provider"])
             if "concurrency" in llm_data:
                 cfg.llm.concurrency = _normalize_llm_concurrency(llm_data["concurrency"])
+            if "timeout" in llm_data:
+                from openbiliclaw.config import _normalize_llm_timeout
+
+                cfg.llm.timeout = _normalize_llm_timeout(llm_data["timeout"])
             if "fallback_enabled" in llm_data:
                 cfg.llm.fallback_enabled = _as_bool(llm_data["fallback_enabled"])
             if "fallback_provider" in llm_data:

@@ -4457,6 +4457,7 @@ function bindSettings() {
     providerSelect.value = cfg.llm?.default_provider || "openai";
     showProviderFields(providerSelect.value);
     setVal("cfgLlmConcurrency", cfg.llm?.concurrency ?? 3);
+    setVal("cfgLlmTimeout", cfg.llm?.timeout ?? 300);
     setVal("cfgLlmFallbackProvider", cfg.llm?.fallback_provider);
 
     setVal("cfgOpenaiAuthMode", cfg.llm?.openai?.auth_mode || "api_key");
@@ -4603,6 +4604,7 @@ function bindSettings() {
       llm: {
         default_provider: providerSelect.value,
         concurrency: getInt("cfgLlmConcurrency", 3),
+        timeout: getInt("cfgLlmTimeout", 300),
         fallback_enabled: Boolean(llmFallbackProvider),
         fallback_provider: llmFallbackProvider,
         openai: {

@@ -1554,6 +1554,7 @@
       const provider = llm.default_provider || llm.provider;
       setSelect("llmProvider", provider);
       setInput("llmConcurrency", llm.concurrency ?? 3);
+      setInput("llmTimeout", llm.timeout ?? 300);
       setSelect("llmAuthMode", llm.openai?.auth_mode || "api_key");
       if (provider) {
         setInput("llmModel", llm[provider]?.model);
@@ -1889,6 +1890,7 @@
         ...(state.config?.llm || {}),
         default_provider: provider,
         concurrency: getIntInput("llmConcurrency", 3),
+        timeout: getIntInput("llmTimeout", 300),
         [provider]: { ...(state.config?.llm?.[provider] || {}), ...llmProviderConfig },
         embedding: { ...(state.config?.llm?.embedding || {}), ...embedding },
         soul: { ...(state.config?.llm?.soul || {}), provider: getInput("moduleSoulProvider"), model: getInput("moduleSoulModel") },
