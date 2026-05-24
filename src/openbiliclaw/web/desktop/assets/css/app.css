@@ -479,6 +479,10 @@
     .settings-field label { color: var(--muted); font-size: var(--text-sm); }
     .settings-section-title { grid-column: 1 / -1; margin: var(--space-2) 0 0; padding-top: var(--space-4); border-top: 1px solid var(--border-soft); color: var(--fg); font-weight: 750; }
     .settings-panel .settings-section-title:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+    .settings-switch-field { align-items: start; grid-template-columns: minmax(180px, 1fr) auto; gap: var(--space-2) var(--space-4); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: color-mix(in oklab, var(--surface), var(--bg) 42%); }
+    .settings-switch-field > span:first-child { color: var(--fg); font-weight: 700; }
+    .settings-switch-copy { color: var(--muted); font-size: var(--text-sm); line-height: 1.45; }
+    .settings-toggle-inline { grid-column: 2; grid-row: 1 / span 2; align-self: center; margin: 0; box-shadow: none; }
     .settings-note-inline { grid-column: 1 / -1; margin: -6px 0 0; color: var(--muted); font-size: var(--text-sm); line-height: 1.45; }
     .toast { position: fixed; left: 50%; bottom: var(--space-6); translate: -50% 0; z-index: 90; display: none; max-width: min(560px, calc(100% - 32px)); padding: var(--space-3) var(--space-5); border-radius: var(--radius-pill); background: var(--fg); color: var(--surface); box-shadow: var(--elev-raised); }
     .toast.is-open { display: block; }

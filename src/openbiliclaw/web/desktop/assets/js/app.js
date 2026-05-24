@@ -175,13 +175,16 @@
     function restoreFrontendSettings() {
       const limit = storageGet(DELIGHT_QUEUE_LIMIT_KEY);
       setInput("delightQueueLimit", limit || "20");
+      renderReshuffleToggle();
     }
 
     function persistFrontendSettings() {
       const limit = getDelightQueueLimit();
       setInput("delightQueueLimit", String(limit));
       storageSet(DELIGHT_QUEUE_LIMIT_KEY, String(limit));
-      return { delightQueueLimit: limit };
+      storageSet(DISMISS_ON_RESHUFFLE_KEY, state.dismissOnReshuffle ? "1" : "0");
+      renderReshuffleToggle();
+      return { delightQueueLimit: limit, dismissOnReshuffle: state.dismissOnReshuffle };
     }
 
     function getRuntimeStreamUrl() {
@@ -437,9 +440,20 @@
       });
     }
 
+    function setDismissOnReshuffle(enabled, { persist = true, toast = false } = {}) {
+      state.dismissOnReshuffle = Boolean(enabled);
+      if (persist) storageSet(DISMISS_ON_RESHUFFLE_KEY, state.dismissOnReshuffle ? "1" : "0");
+      renderReshuffleToggle();
+      if (toast) showToast(state.dismissOnReshuffle ? "换一批前会忽略当前显示的推荐" : "换一批不会自动忽略当前推荐");
+    }
+
     function renderReshuffleToggle() {
-      const toggle = $("#dismissOnReshuffleToggle");
-      if (toggle && toggle.checked !== state.dismissOnReshuffle) toggle.checked = state.dismissOnReshuffle;
+      const toggles = [$("#dismissOnReshuffleToggle"), $("#dismissOnReshuffleSetting")];
+      toggles.forEach((toggle) => {
+        if (toggle && toggle.checked !== state.dismissOnReshuffle) toggle.checked = state.dismissOnReshuffle;
+      });
+      const settingText = $("#dismissOnReshuffleSettingText");
+      if (settingText) settingText.textContent = state.dismissOnReshuffle ? "开启" : "关闭";
     }
 
     function renderFilters() {
@@ -2437,10 +2451,10 @@
     safeBind("#openSettingsHero", "click", () => openSettingsPage("models"));
     syncTopbarHeight();
     window.addEventListener("resize", syncTopbarHeight);
-    safeBind("#dismissOnReshuffleToggle", "change", (event) => {
-      state.dismissOnReshuffle = Boolean(event.target.checked);
-      storageSet(DISMISS_ON_RESHUFFLE_KEY, state.dismissOnReshuffle ? "1" : "0");
-      showToast(state.dismissOnReshuffle ? "换一批前会忽略当前显示的推荐" : "换一批不会自动忽略当前推荐");
+    ["#dismissOnReshuffleToggle", "#dismissOnReshuffleSetting"].forEach((selector) => {
+      safeBind(selector, "change", (event) => {
+        setDismissOnReshuffle(Boolean(event.target.checked), { toast: true });
+      });
     });
     safeBind("#reshuffleBtn", "click", reshuffle);
     safeBind("#loadMoreBtn", "click", appendMore);
@@ -2499,7 +2513,7 @@
       }
       const endpoint = persistBackendEndpoint();
       const frontend = persistFrontendSettings();
-      if ($("#configStatus")) $("#configStatus").value = `正在保存到 ${endpoint.host}:${endpoint.port}，惊喜队列加载 ${frontend.delightQueueLimit} 条，后端热重载可能需要几秒。`;
+      if ($("#configStatus")) $("#configStatus").value = `正在保存到 ${endpoint.host}:${endpoint.port}，惊喜队列加载 ${frontend.delightQueueLimit} 条，换一批忽略当前${frontend.dismissOnReshuffle ? "已开启" : "已关闭"}，后端热重载可能需要几秒。`;
       try {
         const payload = buildConfigUpdate();
         const result = await requestJsonStrict(ENDPOINTS.config.replace("?reveal_keys=true", ""), {

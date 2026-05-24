@@ -128,7 +128,7 @@
               <p>阿B 根据你的近期兴趣筛选的内容，有任何意见尽管和我聊~</p>
             </div>
             <div class="drawer-actions recommendation-actions">
-              <label class="reshuffle-toggle" title="开启后，换一批前会把当前显示的推荐标记为忽略">
+              <label class="reshuffle-toggle" title="开启：换一批前先将当前显示的推荐标记为忽略；关闭：只重排当前推荐池，不反馈当前内容。">
                 <input id="dismissOnReshuffleToggle" type="checkbox">
                 <span class="reshuffle-switch" aria-hidden="true"></span>
                 <span>换一批时忽略当前</span>
@@ -318,10 +318,19 @@
         </div>
 
         <div class="settings-panel" data-settings-panel="frontend" hidden>
-          <p class="settings-section-title">前端</p>
+          <p class="settings-section-title">前端相关设置</p>
           <label class="settings-field"><span>后端地址</span><input id="backendHost" value="127.0.0.1"></label>
           <label class="settings-field"><span>后端端口</span><input id="backendPort" value="8420" inputmode="numeric"></label>
           <label class="settings-field"><span>惊喜推荐加载数量</span><input id="delightQueueLimit" value="20" inputmode="numeric" min="1" max="100"></label>
+          <label class="settings-field full settings-switch-field" title="开启：换一批前先将当前显示的推荐标记为忽略；关闭：只重排当前推荐池，不反馈当前内容。">
+            <span>换一批时忽略当前</span>
+            <span class="settings-switch-copy">开启：换一批前先将当前显示的推荐标记为忽略；关闭：只重排当前推荐池，不反馈当前内容。</span>
+            <span class="reshuffle-toggle settings-toggle-inline">
+              <input id="dismissOnReshuffleSetting" type="checkbox">
+              <span class="reshuffle-switch" aria-hidden="true"></span>
+              <span id="dismissOnReshuffleSettingText">开启</span>
+            </span>
+          </label>
           <p class="settings-note-inline">这些设置只保存在当前浏览器，用于控制 Web UI 如何连接后端和加载前端队列。</p>
         </div>
 
