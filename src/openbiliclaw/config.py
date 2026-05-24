@@ -34,6 +34,9 @@ _DEFAULT_FEEDBACK_BATCH_THRESHOLD = 3
 DEFAULT_LLM_CONCURRENCY = 3
 _MIN_LLM_CONCURRENCY = 1
 _MAX_LLM_CONCURRENCY = 16
+_DEFAULT_LLM_TIMEOUT = 300
+_MIN_LLM_TIMEOUT = 10
+_MAX_LLM_TIMEOUT = 600
 _DEFAULT_POOL_SOURCE_SHARES = {
     "bilibili": 8,
     "xiaohongshu": 1,
@@ -131,6 +134,7 @@ class LLMConfig:
 
     default_provider: str = "openai"
     concurrency: int = DEFAULT_LLM_CONCURRENCY
+    timeout: int = _DEFAULT_LLM_TIMEOUT
     fallback_enabled: bool = False
     fallback_provider: str = ""
     openai: LLMProviderConfig = field(default_factory=LLMProviderConfig)
@@ -497,6 +501,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
         concurrency=_normalize_llm_concurrency(llm_raw.get("concurrency")),
+        timeout=_normalize_llm_timeout(llm_raw.get("timeout")),
         fallback_enabled=bool(llm_raw.get("fallback_enabled", False)),
         fallback_provider=llm_raw.get("fallback_provider", ""),
         openai=LLMProviderConfig(**llm_raw.get("openai", {})),
@@ -691,6 +696,25 @@ def _normalize_llm_concurrency(value: object) -> int:
 
     if not (_MIN_LLM_CONCURRENCY <= normalized <= _MAX_LLM_CONCURRENCY):
         return DEFAULT_LLM_CONCURRENCY
+    return normalized
+
+
+def _normalize_llm_timeout(value: object) -> int:
+    """Normalize the LLM request timeout (seconds)."""
+    if isinstance(value, bool):
+        return _DEFAULT_LLM_TIMEOUT
+    if isinstance(value, int | float):
+        normalized = int(value)
+    elif isinstance(value, str):
+        try:
+            normalized = int(value.strip())
+        except ValueError:
+            return _DEFAULT_LLM_TIMEOUT
+    else:
+        return _DEFAULT_LLM_TIMEOUT
+
+    if not (_MIN_LLM_TIMEOUT <= normalized <= _MAX_LLM_TIMEOUT):
+        return _DEFAULT_LLM_TIMEOUT
     return normalized
 
 
@@ -975,6 +999,7 @@ def _render_config_toml(config: Config) -> str:
         "[llm]",
         f"default_provider = {_toml_string(config.llm.default_provider)}",
         f"concurrency = {_normalize_llm_concurrency(config.llm.concurrency)}",
+        f"timeout = {_normalize_llm_timeout(config.llm.timeout)}",
         f"fallback_enabled = {_toml_bool(config.llm.fallback_enabled)}",
         f"fallback_provider = {_toml_string(config.llm.fallback_provider)}",
         "",

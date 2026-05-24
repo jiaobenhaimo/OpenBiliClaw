@@ -398,6 +398,7 @@ def _maybe_openai_provider(config: Config, overrides: dict[str, LLMProvider]) ->
             model=config.llm.openai.model or "gpt-4o",
             base_url=config.llm.openai.base_url,
             token_provider=_codex_token_provider,
+            timeout=float(config.llm.timeout),
         )
     if not config.llm.openai.api_key.strip():
         return None
@@ -405,6 +406,7 @@ def _maybe_openai_provider(config: Config, overrides: dict[str, LLMProvider]) ->
         api_key=config.llm.openai.api_key,
         model=config.llm.openai.model or "gpt-4o",
         base_url=config.llm.openai.base_url,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -416,6 +418,7 @@ def _maybe_claude_provider(config: Config, overrides: dict[str, LLMProvider]) ->
     return ClaudeProvider(
         api_key=config.llm.claude.api_key,
         model=config.llm.claude.model or "claude-sonnet-4-20250514",
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -430,6 +433,7 @@ def _maybe_deepseek_provider(
         api_key=config.llm.deepseek.api_key,
         model=config.llm.deepseek.model or "deepseek-v4-flash",
         reasoning_effort=config.llm.deepseek.reasoning_effort,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -450,6 +454,7 @@ def _maybe_gemini_provider(config: Config, overrides: dict[str, LLMProvider]) ->
     return GeminiProvider(
         api_key=api_key,
         model=config.llm.gemini.model or "gemini-2.5-flash",
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -480,6 +485,7 @@ def _maybe_ollama_provider(config: Config, overrides: dict[str, LLMProvider]) ->
         api_key=config.llm.ollama.api_key or "ollama",
         model=model or "llama3",
         base_url=base_url,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -524,6 +530,7 @@ def _maybe_openrouter_provider(
         base_url=config.llm.openrouter.base_url or "https://openrouter.ai/api/v1",
         http_referer=config.llm.openrouter.http_referer,
         x_title=config.llm.openrouter.x_title,
+        timeout=float(config.llm.timeout),
     )
 
 
@@ -552,4 +559,5 @@ def _maybe_openai_compatible_provider(
         model=cfg.model or "gpt-4o-mini",
         base_url=cfg.base_url,
         provider_name="openai_compatible",
+        timeout=float(config.llm.timeout),
     )

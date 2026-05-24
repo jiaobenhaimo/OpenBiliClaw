@@ -51,12 +51,17 @@ class GeminiProvider(LLMProvider):
     _MAX_RETRIES = 3
     _BASE_RETRY_DELAY = 0.25
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+    def __init__(
+        self, api_key: str, model: str = "gemini-2.5-flash", timeout: float = 300.0
+    ) -> None:
         if not gemini_sdk_available():
             _raise_missing_sdk()
         assert genai is not None
         self._model = model
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options={"timeout": int(timeout)},
+        )
 
     @staticmethod
     def _is_reasoning_first_model(model: str) -> bool:

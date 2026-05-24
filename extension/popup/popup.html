@@ -3822,6 +3822,10 @@
           <input id="cfgLlmConcurrency" type="number" min="1" max="16" step="1" placeholder="3">
         </div>
         <div class="settings-field">
+          <label for="cfgLlmTimeout">LLM 超时 (秒)</label>
+          <input id="cfgLlmTimeout" type="number" min="10" max="600" step="10" placeholder="300">
+        </div>
+        <div class="settings-field">
           <label for="cfgLlmFallbackProvider">备选 Provider</label>
           <select id="cfgLlmFallbackProvider">
             <option value="">(不启用 fallback)</option>
