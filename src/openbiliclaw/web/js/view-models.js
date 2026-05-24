@@ -365,6 +365,14 @@ export function getProbeMessageActions() {
   ];
 }
 
+export function getAvoidanceProbeMessageActions() {
+  return [
+    { label: "确实不喜欢", action: "confirm", primary: true },
+    { label: "不是", action: "reject", primary: false },
+    { label: "多聊聊", action: "chat", primary: false },
+  ];
+}
+
 // ── Pool Status (simple — backward compat) ───────────────────
 
 export function normalizePoolStatus(status) {
@@ -399,6 +407,8 @@ export function normalizeRuntimeStatus(status) {
     last_notification_at: normalizeText(status?.last_notification_at),
     unread_count: Number(status?.unread_count ?? 0),
     pool_available_count: Number(status?.pool_available_count ?? 0),
+    pool_raw_count: Number(status?.pool_raw_count ?? 0),
+    pool_pending_count: Number(status?.pool_pending_count ?? 0),
     pool_target_count: Number(status?.pool_target_count ?? 0),
     last_discovered_count: Number(status?.last_discovered_count ?? 0),
     last_replenished_count: Number(status?.last_replenished_count ?? 0),
@@ -415,6 +425,12 @@ export function mergeRuntimeStatusEvent(status, event) {
   const next = { ...runtime };
   if (typeof event?.pool_available_count === "number") {
     next.pool_available_count = Number(event.pool_available_count);
+  }
+  if (typeof event?.pool_raw_count === "number") {
+    next.pool_raw_count = Number(event.pool_raw_count);
+  }
+  if (typeof event?.pool_pending_count === "number") {
+    next.pool_pending_count = Number(event.pool_pending_count);
   }
   if (typeof event?.last_replenished_count === "number") {
     next.last_replenished_count = Number(event.last_replenished_count);
@@ -445,10 +461,24 @@ export function getPoolStatusSummary(status) {
         topics: "可以先换一批,新的随时进",
       };
     }
+    if (runtime.pool_pending_count > 0) {
+      return {
+        available: `找到 ${runtime.pool_pending_count} 条素材，正在整理成可换内容`,
+        replenished: "正在整理",
+        topics: "整理好就能换，不会把素材数当可换数",
+      };
+    }
     return {
-      available: `还有 ${runtime.pool_available_count} 条可换`,
+      available: "暂无可换库存",
       replenished: "正在补货",
       topics: "后台还在继续给你找新的",
+    };
+  }
+  if (runtime.pool_available_count === 0 && runtime.pool_pending_count > 0) {
+    return {
+      available: `找到 ${runtime.pool_pending_count} 条素材，正在整理成可换内容`,
+      replenished: "正在整理",
+      topics: "整理好就能换，不会把素材数当可换数",
     };
   }
   return {
@@ -494,6 +524,8 @@ export function getMobileRecommendationHeaderState({
 } = {}) {
   const runtime = normalizeRuntimeStatus(runtimeStatus);
   const poolSummary = getPoolStatusSummary(runtimeStatus);
+  const pendingOnly =
+    runtime.pool_available_count === 0 && runtime.pool_pending_count > 0;
   const activity = getActivityCardState({
     feed: activityFeed,
     runtimeEvent,
@@ -515,14 +547,16 @@ export function getMobileRecommendationHeaderState({
       ? [
           { value: `${runtime.pool_available_count} 条`, label: "当前可换", tone: "neutral" },
           {
-            value: runtime.manual_refresh_state === "running"
-              ? (runtime.pool_available_count > 0 ? "继续补" : "正在补")
-              : runtime.last_replenished_count > 0
-                ? `补进 ${runtime.last_replenished_count} 条`
-                : runtime.last_discovered_count > 0
-                  ? "已发现"
-                  : poolSummary.replenished,
-            label: "最近补进",
+            value: pendingOnly
+              ? `${runtime.pool_pending_count} 条`
+              : runtime.manual_refresh_state === "running"
+                ? (runtime.pool_available_count > 0 ? "继续补" : "正在补")
+                : runtime.last_replenished_count > 0
+                  ? `补进 ${runtime.last_replenished_count} 条`
+                  : runtime.last_discovered_count > 0
+                    ? "已发现"
+                    : poolSummary.replenished,
+            label: pendingOnly ? "素材整理" : "最近补进",
             tone: "brand",
           },
           {
@@ -857,6 +891,25 @@ export function normalizeProfileSummary(summary) {
             domain: normalizeText(item.domain),
             reason: normalizeText(item.reason),
             confidence: Number(item.confidence ?? 0),
+            confirmation_count: Number(item.confirmation_count ?? 0),
+            confirmation_threshold: Number(item.confirmation_threshold ?? 3),
+            status: normalizeText(item.status) || "active",
+            specifics: Array.isArray(item.specifics)
+              ? item.specifics
+                  .filter((s) => s?.name)
+                  .map((s) => ({ name: normalizeText(s.name), confirmation_count: Number(s.confirmation_count ?? 0) }))
+              : [],
+          }))
+      : [],
+    speculative_avoidances: Array.isArray(summary?.speculative_avoidances)
+      ? summary.speculative_avoidances
+          .filter((item) => item?.domain)
+          .map((item) => ({
+            domain: normalizeText(item.domain),
+            reason: normalizeText(item.reason),
+            confidence: Number(item.confidence ?? 0),
+            source_mode: normalizeText(item.source_mode),
+            source_signal: normalizeText(item.source_signal),
             confirmation_count: Number(item.confirmation_count ?? 0),
             confirmation_threshold: Number(item.confirmation_threshold ?? 3),
             status: normalizeText(item.status) || "active",

@@ -29,9 +29,11 @@ class ClaudeProvider(LLMProvider):
     _MAX_RETRIES = 3
     _BASE_RETRY_DELAY = 0.25
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
+    def __init__(
+        self, api_key: str, model: str = "claude-sonnet-4-20250514", timeout: float = 300.0
+    ) -> None:
         self._model = model
-        self._client = AsyncAnthropic(api_key=api_key)
+        self._client = AsyncAnthropic(api_key=api_key, timeout=timeout)
 
     @property
     def name(self) -> str:

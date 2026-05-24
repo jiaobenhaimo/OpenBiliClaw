@@ -35,6 +35,9 @@ _DEFAULT_FEEDBACK_BATCH_THRESHOLD = 3
 DEFAULT_LLM_CONCURRENCY = 3
 _MIN_LLM_CONCURRENCY = 1
 _MAX_LLM_CONCURRENCY = 16
+_DEFAULT_LLM_TIMEOUT = 300
+_MIN_LLM_TIMEOUT = 10
+_MAX_LLM_TIMEOUT = 600
 _DEFAULT_POOL_SOURCE_SHARES = {
     "bilibili": 8,
     "xiaohongshu": 1,
@@ -132,6 +135,7 @@ class LLMConfig:
 
     default_provider: str = "openai"
     concurrency: int = DEFAULT_LLM_CONCURRENCY
+    timeout: int = _DEFAULT_LLM_TIMEOUT
     fallback_enabled: bool = False
     fallback_provider: str = ""
     openai: LLMProviderConfig = field(default_factory=LLMProviderConfig)
@@ -196,6 +200,11 @@ class SchedulerConfig:
     speculation_max_active: int = 5
     speculation_max_primary_interests: int = 15
     speculation_max_secondary_interests: int = 60
+    avoidance_speculation_interval_minutes: int = 10
+    avoidance_speculation_ttl_days: int = 3
+    avoidance_speculation_cooldown_days: int = 7
+    avoidance_speculation_confirmation_threshold: int = 3
+    avoidance_speculation_max_active: int = 5
     feedback_batch_threshold: int = _DEFAULT_FEEDBACK_BATCH_THRESHOLD
     # Default off. The auto-updater pulls from GitHub releases and
     # restarts the backend when a newer version is detected, but it has
@@ -570,6 +579,7 @@ def _build_config(raw: dict[str, Any]) -> Config:
     llm = LLMConfig(
         default_provider=llm_raw.get("default_provider", "openai"),
         concurrency=_normalize_llm_concurrency(llm_raw.get("concurrency")),
+        timeout=_normalize_llm_timeout(llm_raw.get("timeout")),
         fallback_enabled=bool(llm_raw.get("fallback_enabled", False)),
         fallback_provider=llm_raw.get("fallback_provider", ""),
         openai=LLMProviderConfig(**llm_raw.get("openai", {})),
@@ -736,6 +746,31 @@ def _build_config(raw: dict[str, Any]) -> Config:
                     default=_DEFAULT_HIBERNATE_SLEEP_SECONDS,
                     min_value=60,
                 ),
+                "avoidance_speculation_interval_minutes": _normalize_scheduler_int(
+                    sched_raw.get("avoidance_speculation_interval_minutes"),
+                    default=10,
+                    min_value=1,
+                ),
+                "avoidance_speculation_ttl_days": _normalize_scheduler_int(
+                    sched_raw.get("avoidance_speculation_ttl_days"),
+                    default=3,
+                    min_value=1,
+                ),
+                "avoidance_speculation_cooldown_days": _normalize_scheduler_int(
+                    sched_raw.get("avoidance_speculation_cooldown_days"),
+                    default=7,
+                    min_value=1,
+                ),
+                "avoidance_speculation_confirmation_threshold": _normalize_scheduler_int(
+                    sched_raw.get("avoidance_speculation_confirmation_threshold"),
+                    default=3,
+                    min_value=1,
+                ),
+                "avoidance_speculation_max_active": _normalize_scheduler_int(
+                    sched_raw.get("avoidance_speculation_max_active"),
+                    default=5,
+                    min_value=1,
+                ),
             }
         ),
         storage=StorageConfig(**store_raw),
@@ -824,6 +859,25 @@ def _normalize_llm_concurrency(value: object) -> int:
 
     if not (_MIN_LLM_CONCURRENCY <= normalized <= _MAX_LLM_CONCURRENCY):
         return DEFAULT_LLM_CONCURRENCY
+    return normalized
+
+
+def _normalize_llm_timeout(value: object) -> int:
+    """Normalize the LLM request timeout (seconds)."""
+    if isinstance(value, bool):
+        return _DEFAULT_LLM_TIMEOUT
+    if isinstance(value, int | float):
+        normalized = int(value)
+    elif isinstance(value, str):
+        try:
+            normalized = int(value.strip())
+        except ValueError:
+            return _DEFAULT_LLM_TIMEOUT
+    else:
+        return _DEFAULT_LLM_TIMEOUT
+
+    if not (_MIN_LLM_TIMEOUT <= normalized <= _MAX_LLM_TIMEOUT):
+        return _DEFAULT_LLM_TIMEOUT
     return normalized
 
 
@@ -1119,6 +1173,7 @@ def _render_config_toml(config: Config) -> str:
         "[llm]",
         f"default_provider = {_toml_string(config.llm.default_provider)}",
         f"concurrency = {_normalize_llm_concurrency(config.llm.concurrency)}",
+        f"timeout = {_normalize_llm_timeout(config.llm.timeout)}",
         f"fallback_enabled = {_toml_bool(config.llm.fallback_enabled)}",
         f"fallback_provider = {_toml_string(config.llm.fallback_provider)}",
         "",
@@ -1232,6 +1287,15 @@ def _render_config_toml(config: Config) -> str:
             f"{config.scheduler.speculation_max_primary_interests}",
             "speculation_max_secondary_interests = "
             f"{config.scheduler.speculation_max_secondary_interests}",
+            "avoidance_speculation_interval_minutes = "
+            f"{config.scheduler.avoidance_speculation_interval_minutes}",
+            f"avoidance_speculation_ttl_days = {config.scheduler.avoidance_speculation_ttl_days}",
+            "avoidance_speculation_cooldown_days = "
+            f"{config.scheduler.avoidance_speculation_cooldown_days}",
+            "avoidance_speculation_confirmation_threshold = "
+            f"{config.scheduler.avoidance_speculation_confirmation_threshold}",
+            "avoidance_speculation_max_active = "
+            f"{config.scheduler.avoidance_speculation_max_active}",
             f"auto_update_enabled = {_toml_bool(config.scheduler.auto_update_enabled)}",
             "auto_update_check_interval_hours = "
             f"{config.scheduler.auto_update_check_interval_hours}",

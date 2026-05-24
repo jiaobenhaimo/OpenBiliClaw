@@ -136,6 +136,50 @@ class TestMobileWebViewModels:
         assert ".card-cover-frame.is-error" in app_css
         assert ".card-cover::after" not in app_css
 
+    def test_runtime_status_normalizes_pool_readiness_counts(self) -> None:
+        _assert_js(
+            dedent("""
+            import assert from "node:assert/strict";
+            import {
+              mergeRuntimeStatusEvent,
+              normalizeRuntimeStatus,
+            } from "./src/openbiliclaw/web/js/view-models.js";
+
+            assert.deepEqual(
+              normalizeRuntimeStatus({ initialized: true }),
+              {
+                initialized: true,
+                recommendation_count: 0,
+                pending_signal_events: 0,
+                last_refresh_at: "",
+                last_notification_at: "",
+                unread_count: 0,
+                pool_available_count: 0,
+                pool_raw_count: 0,
+                pool_pending_count: 0,
+                pool_target_count: 0,
+                last_discovered_count: 0,
+                last_replenished_count: 0,
+                recent_pool_topics: [],
+                manual_refresh_state: "idle",
+                manual_refresh_message: "",
+              },
+            );
+
+            const merged = mergeRuntimeStatusEvent(
+              { initialized: true, pool_available_count: 0 },
+              {
+                pool_available_count: 10,
+                pool_raw_count: 152,
+                pool_pending_count: 142,
+              },
+            );
+            assert.equal(merged.pool_available_count, 10);
+            assert.equal(merged.pool_raw_count, 152);
+            assert.equal(merged.pool_pending_count, 142);
+        """)
+        )
+
     def test_recommendation_cover_preload_helpers(self) -> None:
         _assert_js(
             dedent("""
@@ -440,6 +484,17 @@ class TestMobileWebViewModels:
               manual_refresh_state: "idle",
             });
             assert.equal(internal.topics, "小红书任务 / 小红书探索");
+
+            const pending = getPoolStatusSummary({
+              initialized: true,
+              pool_available_count: 0,
+              pool_pending_count: 142,
+              pool_target_count: 300,
+              manual_refresh_state: "running",
+            });
+            assert.equal(pending.available, "找到 142 条素材，正在整理成可换内容");
+            assert.equal(pending.replenished, "正在整理");
+            assert.equal(pending.topics, "整理好就能换，不会把素材数当可换数");
         """)
         )
 
@@ -502,6 +557,24 @@ class TestMobileWebViewModels:
                 ["现在在忙", "小红书任务 / 探索"],
               ],
             );
+
+            const pending = getMobileRecommendationHeaderState({
+              runtimeStatus: {
+                initialized: true,
+                pool_available_count: 0,
+                pool_pending_count: 142,
+                pool_target_count: 300,
+                manual_refresh_state: "running",
+              },
+            });
+            assert.deepEqual(
+              pending.poolChips.map((chip) => [chip.label, chip.value]),
+              [
+                ["当前可换", "0 条"],
+                ["素材整理", "142 条"],
+                ["现在在忙", "整理好就能换，不会把素材数当可换数"],
+              ],
+            );
         """)
         )
 
@@ -558,6 +631,14 @@ class TestMobileWebViewModels:
               exploration_openness: 0.7,
               favorite_up_users: ["UP1"],
               speculative_interests: [{ domain: "cooking", confidence: 0.6, status: "active" }],
+              speculative_avoidances: [{
+                domain: "浅层热点复读",
+                reason: "信息密度低",
+                source_mode: "negative_signal",
+                confidence: 0.7,
+                status: "active",
+                specifics: [{ name: "标题党热点解读" }],
+              }],
             });
             assert.equal(full.initialized, true);
             assert.equal(full.personality_portrait, "test portrait");
@@ -567,8 +648,38 @@ class TestMobileWebViewModels:
             assert.equal(full.exploration_openness, 0.7);
             assert.deepEqual(full.favorite_up_users, ["UP1"]);
             assert.equal(full.speculative_interests[0].domain, "cooking");
+            assert.equal(full.speculative_avoidances[0].domain, "浅层热点复读");
+            assert.equal(full.speculative_avoidances[0].source_mode, "negative_signal");
+            assert.equal(full.speculative_avoidances[0].specifics[0].name, "标题党热点解读");
         """)
         )
+
+    def test_mobile_avoidance_probe_ui_wiring_is_present(self) -> None:
+        api_js = Path("src/openbiliclaw/web/js/api.js").read_text()
+        chat_js = Path("src/openbiliclaw/web/js/views/chat.js").read_text()
+        profile_js = Path("src/openbiliclaw/web/js/views/profile.js").read_text()
+        view_models_js = Path("src/openbiliclaw/web/js/view-models.js").read_text()
+
+        assert "fetchPendingAvoidanceProbes" in api_js
+        assert 'requestJson("/avoidance-probes/pending")' in api_js
+        assert "respondToAvoidanceProbe" in api_js
+        assert 'requestJson("/avoidance-probes/respond"' in api_js
+
+        assert 'type === "avoidance.probe"' in chat_js
+        assert '"avoidance_probe"' in chat_js
+        assert "getAvoidanceProbeMessageActions" in chat_js
+        assert "确实不喜欢" in view_models_js
+
+        assert "speculative_avoidances" in profile_js
+        assert "renderSpecAvoidances" in profile_js
+        assert "respondToAvoidanceProbe" in profile_js
+
+    def test_desktop_web_knows_avoidance_probe_endpoint(self) -> None:
+        source = Path("src/openbiliclaw/web/desktop/assets/js/app.js").read_text()
+
+        assert "avoidanceProbeRespond" in source
+        assert "avoidance.probe" in source
+        assert "确实不喜欢" in source
 
     def test_profile_display_helpers_preserve_plugin_semantics(self) -> None:
         _assert_js(

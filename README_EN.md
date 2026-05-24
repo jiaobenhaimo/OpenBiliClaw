@@ -17,12 +17,12 @@
 
 ---
 
-## 📌 v0.3.89 / extension v0.3.44 Highlights (2026-05-22)
+## 📌 v0.3.91 / extension v0.3.47 Highlights (2026-05-24)
 
-- **💬 Delight chat stays in context** — Mobile Web and the extension now expand "Chat" inside the delight card instead of switching to the main chat tab.
-- **🧵 Multi-turn history stays scoped** — each delight keeps its own chat bubbles, so candidate navigation, side-panel reloads, and pending replies do not overwrite earlier turns.
-- **🔁 Durable chat alignment** — delight inline chat uses `/api/chat/turns` with `scope=delight`, and pending / completed / failed states update in place.
-- **📱 No iOS focus zoom** — the inline composer keeps a 16px textarea font size to avoid Safari auto-zoom.
+- **🔢 True reshuffle inventory** — the extension, Mobile Web, and Desktop Web now show "available" only for candidates the backend can immediately `serve()`.
+- **🧰 Pending material is separate** — discovered items that still need copy, classification, or a linkable URL are shown as "being prepared" instead of "N available".
+- **🔁 Reshuffle status resync** — an empty manual reshuffle after advertised inventory refreshes runtime status and avoids repeated-click races.
+- **🧭 Avoidance probes** — the system asks about content forms you may want to avoid; confirmed answers write `disliked_topics`, while unconfirmed probes do not filter recommendations.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 
@@ -335,6 +335,7 @@ This repo ships a [workspace skill](skills/openbiliclaw-adapter/SKILL.md). Point
 
 - ✨ **Proactive recommendations** — the system continuously discovers content in the background; when it finds a high-scoring surprise, it pushes to OpenClaw via WebSocket — **you don't have to ask**
 - 🔮 **Proactive interest probing** — the system guesses you might be into a new domain, generates a hypothesis and a question, and has OpenClaw come ask you "does this direction resonate?" — your answer automatically refines the profile
+- 🧭 **Proactive avoidance probing** — the system can also ask whether a low-quality form, style boundary, or topic shape is something you want to avoid; OpenClaw uses `next-avoidance-probe` / `respond-avoidance-probe`, and nothing is filtered until you confirm it
 - 💬 **Socratic dialogue** — not just interest confirmation; OpenClaw can have deep conversations: probing motivations, proposing hypotheses, confirming understanding — the more you talk, the better it knows you
 - 📖 **Read the current soul profile** — MBTI, core traits, deep needs, interest domains
 - 🎯 **Fetch personalized recommendations on demand** — with explanations, confidence scores, and topic labels
@@ -402,6 +403,7 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 
 - 🧠 **Five-Layer Soul Profile** — Event → Preference → Awareness → Insight → Soul, inferring MBTI, cognitive style, and deep needs — like a psychologist understanding you
 - 🔮 **Speculative Interest System** — Uses psychological bridging logic to guess unexplored domains you might love; promotes correct guesses, retires wrong ones, continuously breaking the filter bubble
+- 🧭 **Avoidance Probe System** — Proactively confirms content forms, low-quality expressions, and style boundaries you may want to avoid; confirmed answers write `disliked_topics`, unconfirmed probes stay out of ranking
 - 🌐 **Cross-Platform Sources** — Started on Bilibili, now extended to Xiaohongshu, Douyin, YouTube init signals, Douyin search / hot / feed discovery, and generic Web; the architecture is built to keep adding more platforms. Your interests no longer get siloed
 - 🔍 **Multi-Source Discovery Strategies** — Bilibili four strategies (Search · Related Chain · Trending · Cross-domain Explore) + Xiaohongshu safe discovery + Douyin plugin-signed search / hot / feed, coordinated cross-platform
 - 🎯 **Smart Diversity** — PoolCurator five-dimension scoring + cross-source/round topic quota (any topic ≤10% of pool) + share-aware pool trimming that protects smaller sources; goodbye to "all AI all day"
@@ -419,22 +421,23 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Chrome Extension                   │
-│      (Behavior · Recs · Chat · Runtime Toggles)       │
+│      (Behavior · Recs · True Pool Count · Chat · Probes) │
 │      (Cookies · XHS/DY/YT tasks · init bridge)        │
 └────────────────────────┬────────────────────────────┘
-                         │ REST API / WebSocket (presence + cookies)
+                         │ REST API / WebSocket (presence + cookies + pool counts + probes)
 ┌────────────────────────▼────────────────────────────┐
 │                 Agent Orchestration                   │
 │       (Skills · Dialogue · Runtime Gate · Account Sync) │
 ├─────────┬──────────┬───────────┬────────────────────┤
 │  Soul   │ Memory   │ Discovery │  Recommendation    │
 │  Engine │ System   │  Engine   │     Engine          │
-│(Sat.filter)│(5-Layer)│(Neg.anchor)│  (Expression)   │
+│(Profile+Probe)│(5-Layer)│(Neg.anchor)│ (Expression) │
 ├─────────┴──────────┴───────────┴────────────────────┤
 │ LLM (API Key/Codex OAuth) · Bilibili API · Extension Proxy │
-│ Runtime: Account sync + XHS/DY/YouTube producers           │
+│ Runtime: Account sync + producers + probe arbiter          │
+│ Runtime status: pool_available/raw/pending_count           │
 │ SQLite: events(inferred_satisfaction) · content_cache   │
-│         recommendations · chat_turns                    │
+│         recommendations · chat_turns · avoidance_state  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -450,6 +453,8 @@ Four Bilibili strategies work in coordination, each with independent API quota, 
 | **Explore** | LLM-driven cross-domain exploration | Fair share |
 
 Results go through multi-dimensional diversity selection: platform-family reservation (saved default Bilibili / Xiaohongshu / Douyin / YouTube = 8 / 1 / 1 / 1, configurable via `[scheduler.pool_source_shares]`; the effective default only includes Bilibili until XHS / Douyin / YouTube are explicitly enabled) → topic deduplication → style balancing → ceiling caps, ensuring broad coverage in final recommendations. The four Bilibili strategies count as `bilibili`; XHS extension sources count as `xiaohongshu`; Douyin search / hot / feed count as `douyin`; YouTube `yt_search` / `yt_trending` / `yt_channel` count as `youtube`. Disabled platforms are removed from the effective runtime mix.
+
+Frontend pool counts come from runtime status: `pool_available_count` means candidates with ready copy, classification, linkable URL, and no recent-view conflict; `pool_pending_count` means discovered material still being prepared. The extension, Mobile Web, and Desktop Web do not label pending material as available to reshuffle.
 
 For first-run profiling, `openbiliclaw init` can enqueue XHS, Douyin, and YouTube `bootstrap_profile` tasks. XHS opens Xiaohongshu in the user's logged-in browser session, navigates to the profile, parses saved / liked / explicit history state, and returns `partial` batches; the backend reuses recent XHS bootstrap tasks by default and marks a task `in_progress` before returning it to the extension so the same foreground favorites / likes pull is not opened repeatedly. Douyin visits post / favorite / like / follow scopes in the logged-in Douyin session and combines DOM extraction with a MAIN-world API harvester. YouTube visits watch history / subscriptions / liked videos pages and reads rendered DOM items. The backend converts all three sources into normal `view / favorite / like / follow` events, keeps full raw task results for diagnostics, and filters already-seen bootstrap keys through `source_bootstrap_state.json` before old items can re-enter memory or the profile pipeline. It still does not crawl or log in to those sites directly.
 
@@ -515,7 +520,7 @@ OpenBiliClaw/
 
 ## 📜 Release History
 
-Latest: **v0.3.89 / extension v0.3.44: inline multi-turn delight chat (2026-05-22)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
+Latest: **v0.3.91 / extension v0.3.47: true reshuffle inventory counts + avoidance probes (2026-05-24)**. The top highlight callout keeps the current release visible; full history lives in [docs/changelog.md](docs/changelog.md). Extension packages live on [GitHub Releases](https://github.com/whiteguo233/OpenBiliClaw/releases); backend source updates use `backend-v*` tags and do not publish backend desktop packages.
 
 ## 🗺️ Roadmap
 

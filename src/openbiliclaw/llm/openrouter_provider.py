@@ -25,12 +25,14 @@ class OpenRouterProvider(OpenAIProvider):
         base_url: str = "https://openrouter.ai/api/v1",
         http_referer: str = "",
         x_title: str = "",
+        timeout: float = 300.0,
     ) -> None:
         super().__init__(
             api_key=api_key,
             model=model,
             base_url=base_url,
             provider_name="openrouter",
+            timeout=timeout,
         )
         self._http_referer = http_referer
         self._x_title = x_title

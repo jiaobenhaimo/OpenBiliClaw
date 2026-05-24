@@ -38,13 +38,16 @@ class OllamaProvider(OpenAIProvider):
         api_key: str = "ollama",
         model: str = "llama3",
         base_url: str = "http://localhost:11434/v1",
+        timeout: float = 300.0,
     ) -> None:
         super().__init__(
             api_key=api_key,
             model=model,
             base_url=base_url,
             provider_name="ollama",
+            timeout=timeout,
         )
+        self._embed_timeout = timeout
 
     async def complete(
         self,
@@ -133,7 +136,10 @@ class OllamaProvider(OpenAIProvider):
                 # concurrency=2 but the daemon enqueued >2 cache-miss texts
                 # within seconds. 60s was too tight under the post-proxy-fix
                 # cache-rebuild burst.
-                async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+                async with httpx.AsyncClient(
+                    timeout=self._embed_timeout,
+                    trust_env=False,
+                ) as client:
                     response = await client.post(
                         url,
                         json={"model": model, "prompt": text},

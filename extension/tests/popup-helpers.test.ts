@@ -16,6 +16,7 @@ import {
   getConnectionBadgeState,
   getDisplayedPoolStatusSummary,
   getHintBannerState,
+  getManualRefreshResultHint,
   getReadyRecommendationHint,
   getNextExpandedCognitionIndex,
   getRuntimeRefreshSubmissionState,
@@ -63,6 +64,25 @@ test("normalizeRecommendation keeps title and up-name fallbacks but leaves copy 
   assert.equal(item.expression, "");
   assert.equal(item.topic_label, "");
   assert.equal(item.presented, false);
+});
+
+test("normalizeProfileSummary keeps speculative avoidances", () => {
+  const summary = normalizeProfileSummary({
+    initialized: true,
+    speculative_avoidances: [
+      {
+        domain: "浅层热点复读",
+        reason: "信息密度低",
+        source_mode: "negative_signal",
+        status: "active",
+        specifics: [{ name: "标题党热点解读" }],
+      },
+    ],
+  });
+
+  assert.equal(summary.speculative_avoidances[0].domain, "浅层热点复读");
+  assert.equal(summary.speculative_avoidances[0].source_mode, "negative_signal");
+  assert.equal(summary.speculative_avoidances[0].specifics[0].name, "标题党热点解读");
 });
 
 test("shouldAutoLoadRecommendations requires user scroll intent", () => {
@@ -367,6 +387,8 @@ test("normalizeRuntimeStatus fills stable fallback fields", () => {
     last_notification_at: "",
     unread_count: 2,
     pool_available_count: 0,
+    pool_raw_count: 0,
+    pool_pending_count: 0,
     pool_target_count: 0,
     last_discovered_count: 0,
     last_replenished_count: 0,
@@ -430,6 +452,7 @@ test("getPoolStatusSummary prefers running copy over stale zero-replenishment co
     getPoolStatusSummary({
       initialized: true,
       pool_available_count: 0,
+      pool_pending_count: 142,
       pool_target_count: 300,
       last_discovered_count: 0,
       last_replenished_count: 0,
@@ -437,11 +460,25 @@ test("getPoolStatusSummary prefers running copy over stale zero-replenishment co
       manual_refresh_state: "running",
     }),
     {
-      available: "还有 0 条可换",
-      replenished: "正在补货",
-      topics: "后台还在继续给你找新的",
+      available: "找到 142 条素材，正在整理成可换内容",
+      replenished: "正在整理",
+      topics: "整理好就能换，不会把素材数当可换数",
     },
   );
+});
+
+test("getPoolStatusSummary never labels pending material as swappable", () => {
+  const summary = getPoolStatusSummary({
+    initialized: true,
+    pool_available_count: 0,
+    pool_pending_count: 142,
+    pool_target_count: 300,
+    manual_refresh_state: "idle",
+  });
+
+  assert(summary);
+  assert.equal(summary.available.includes("142 条可换"), false);
+  assert.equal(summary.available, "找到 142 条素材，正在整理成可换内容");
 });
 
 test("getPoolStatusSummary explains discovered-but-not-added refresh result", () => {
@@ -495,6 +532,16 @@ test("getReadyRecommendationHint explains empty pool while refresh is still runn
   );
 });
 
+test("getManualRefreshResultHint explains stale positive pool count after empty reshuffle", () => {
+  assert.deepEqual(
+    getManualRefreshResultHint({ itemCount: 0, hadAdvertisedInventory: true }),
+    {
+      message: "池子状态刚刚同步，正在整理内容。",
+      tone: "info",
+    },
+  );
+});
+
 test("mergeRuntimeStatusEvent updates pool fields from runtime stream payload", () => {
   const merged = mergeRuntimeStatusEvent(
     {
@@ -507,12 +554,16 @@ test("mergeRuntimeStatusEvent updates pool fields from runtime stream payload", 
       type: "refresh.pool_updated",
       message: "刚补进 6 条新的",
       pool_available_count: 34,
+      pool_raw_count: 176,
+      pool_pending_count: 142,
       last_replenished_count: 6,
       recent_pool_topics: ["国际时事", "宏观经济"],
     },
   );
 
   assert.equal(merged.pool_available_count, 34);
+  assert.equal(merged.pool_raw_count, 176);
+  assert.equal(merged.pool_pending_count, 142);
   assert.equal(merged.last_replenished_count, 6);
   assert.deepEqual(merged.recent_pool_topics, ["国际时事", "宏观经济"]);
 });
@@ -832,6 +883,7 @@ test("normalizeProfileSummary fills stable fallback fields", () => {
       speculative_interests: [
         { domain: "建筑美学", reason: "你最近的审美倾向", confidence: 0.4, confirmation_count: 1, confirmation_threshold: 3, status: "active", specifics: [{ name: "现代主义建筑", confirmation_count: 1 }] },
       ],
+      speculative_avoidances: [],
       recent_cognition_updates: [
         {
           summary: "阿B 记住了你会吃深拆这一路。",
@@ -971,6 +1023,7 @@ test("normalizeProfileSummary keeps the newer low-roleplay fallback copy", () =>
       context: null,
       exploration_openness: 0.5,
       speculative_interests: [],
+      speculative_avoidances: [],
       recent_cognition_updates: [],
       has_more_cognition_updates: false,
       next_cognition_cursor: "",
