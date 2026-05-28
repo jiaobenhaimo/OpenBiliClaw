@@ -260,6 +260,14 @@ class TestMobileWebViewModels:
             );
             assert.deepEqual(
               getRecommendationImageLoadingAttrs(12),
+              { loading: "eager", fetchPriority: "auto" },
+            );
+            assert.deepEqual(
+              getRecommendationImageLoadingAttrs(999),
+              { loading: "eager", fetchPriority: "auto" },
+            );
+            assert.deepEqual(
+              getRecommendationImageLoadingAttrs(12, { eagerCount: 12 }),
               { loading: "lazy", fetchPriority: "auto" },
             );
         """)

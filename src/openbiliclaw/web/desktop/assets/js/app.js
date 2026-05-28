@@ -731,7 +731,37 @@
     function coverImg(item) {
       const url = imageProxyUrl(item.cover_url);
       if (!url) return "";
-      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="lazy" referrerpolicy="no-referrer">`;
+      // loading="eager" (not lazy): cover starts fetching the moment the card is
+      // in the DOM, so a card scrolled into view never shows the gradient
+      // placeholder while a native lazy <img> defers its fetch ("白一下再出来").
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="eager" fetchpriority="auto" decoding="async" referrerpolicy="no-referrer">`;
+    }
+
+    // Warm the browser cache for a batch of cover images before their cards are
+    // (re)rendered. Used by appendMore so newly loaded covers paint instantly
+    // instead of flashing the placeholder while they download. Resolves on a
+    // timeout so one slow cover can't stall the batch.
+    const warmedCoverUrls = new Set();
+    function warmCoverImages(items, { waitForDecode = false, timeoutMs = 4000 } = {}) {
+      if (typeof Image === "undefined") return Promise.resolve();
+      const pending = [];
+      for (const item of items || []) {
+        const src = imageProxyUrl(item?.cover_url);
+        if (!src || warmedCoverUrls.has(src)) continue;
+        warmedCoverUrls.add(src);
+        const img = new Image();
+        img.decoding = "async";
+        const loaded = new Promise((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+        img.src = src;
+        let ready = loaded;
+        if (typeof img.decode === "function") ready = img.decode().catch(() => {});
+        if (waitForDecode) pending.push(ready);
+      }
+      if (!waitForDecode || pending.length === 0) return Promise.resolve();
+      return Promise.race([Promise.all(pending), new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
     }
 
     function contentUrl(item) {
@@ -2105,6 +2135,9 @@
       const payload = await requestJson(ENDPOINTS.append, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ excluded_bvids: state.videos.map((v) => v.bvid) }) });
       if (payload?.items?.length) {
         const freshItems = normalizeRecommendationList(payload.items);
+        // Preload + decode the new covers before re-rendering so they appear
+        // without the placeholder flash.
+        await warmCoverImages(freshItems, { waitForDecode: true });
         state.videos = state.videos.concat(freshItems);
         renderAll();
         showToast(freshItems.length ? "已加载更多推荐" : "后端返回的内容都已反馈过");

@@ -210,6 +210,32 @@ async function setProxyImageSrc(image, coverUrl) {
   return true;
 }
 
+// Warm the browser cache for a batch of cover images BEFORE their cards are
+// inserted into the DOM. Without this, appended (load-more) cards paint their
+// near-white gradient placeholder while the cover is still downloading — the
+// "白一下再出来" flash. Pre-decoding here means the <img> in each card hits a
+// warm cache and paints on the first frame. Resolves on a timeout so one slow
+// cover can't stall the whole batch (the rest keep warming in the background).
+async function preloadCoverImages(items, { timeoutMs = 4000 } = {}) {
+  const origin = await getBackendOrigin();
+  const loaders = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const path = item?.cover_url ? buildImageProxyPath(item.cover_url) : null;
+      if (!path) return null;
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+        img.src = `${origin}${path}`;
+      });
+    })
+    .filter(Boolean);
+  if (loaders.length === 0) return;
+  const timeout = new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  await Promise.race([Promise.allSettled(loaders), timeout]);
+}
+
 let recommendationLoadCheckTimer = null;
 let recommendationAutoLoadUserArmed = false;
 let recommendationAutoLoadTouchY = null;
@@ -3942,6 +3968,8 @@ async function loadMoreRecommendations() {
 
     if (appended.length > 0) {
       state.recommendations = [...state.recommendations, ...appended];
+      // Preload covers before inserting cards so they paint without the white flash.
+      await preloadCoverImages(appended);
       renderRecommendations(appended, { append: true });
       setHint(`又给你续了 ${appended.length} 条，继续往下翻。`, "success");
     } else if (incoming.length === 0) {
@@ -3973,8 +4001,11 @@ function maybeLoadMoreRecommendations() {
     return;
   }
 
+  // Trigger well before the bottom (not 96px) so preloadCoverImages has time to
+  // warm the next batch's covers before the user actually scrolls onto them —
+  // keeps newly revealed content flash-free.
   const remaining = elements.content.scrollHeight - elements.content.scrollTop - elements.content.clientHeight;
-  if (remaining <= 96) {
+  if (remaining <= 600) {
     recommendationAutoLoadUserArmed = false;
     void loadMoreRecommendations();
   }
