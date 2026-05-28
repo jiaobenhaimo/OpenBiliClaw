@@ -456,6 +456,39 @@ class FeedbackResponse(BaseModel):
     feedback_type: str
 
 
+class WatchLaterAddIn(BaseModel):
+    """Payload to bookmark a video."""
+
+    bvid: str
+    note: str = ""
+
+
+class WatchLaterStateResponse(BaseModel):
+    """Whether a single video is bookmarked, plus the total count."""
+
+    saved: bool
+    total: int
+
+
+class WatchLaterItem(BaseModel):
+    """One item in the watch-later list."""
+
+    bvid: str
+    title: str = ""
+    up_name: str = ""
+    cover_url: str = ""
+    content_url: str = ""
+    source_platform: str = ""
+    added_at: str = ""
+
+
+class WatchLaterListResponse(BaseModel):
+    """Paginated watch-later list."""
+
+    items: list[WatchLaterItem]
+    total: int
+
+
 class RecommendationClickIn(BaseModel):
     """Payload for a recommendation click-through from the extension popup."""
 

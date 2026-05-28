@@ -278,6 +278,7 @@ class Database:
         self._ensure_xhs_observed_urls_table()
         self._ensure_llm_usage_cache_columns()
         self._ensure_chat_turns_table()
+        self._ensure_watch_later_table()
 
         # Set schema version
         self._conn.execute(
@@ -3017,6 +3018,79 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_chat_turns_scope_subject
                 ON chat_turns(scope, subject_id, created_at);
         """)
+
+    def _ensure_watch_later_table(self) -> None:
+        """Create the watch_later bookmarks table for existing databases."""
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS watch_later (
+                bvid     TEXT PRIMARY KEY,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                note     TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_watch_later_added
+                ON watch_later(added_at DESC);
+        """)
+
+    # ── Watch-later CRUD ─────────────────────────────────────────
+
+    def add_to_watch_later(self, bvid: str, note: str = "") -> bool:
+        """Bookmark a video. Returns True if newly inserted, False if updated."""
+        self._execute_write(
+            """
+            INSERT INTO watch_later (bvid, note)
+            VALUES (?, ?)
+            ON CONFLICT(bvid) DO UPDATE SET
+                added_at = CURRENT_TIMESTAMP,
+                note = excluded.note
+            """,
+            (bvid.strip(), note),
+        )
+        return self.conn.total_changes > 0
+
+    def remove_from_watch_later(self, bvid: str) -> bool:
+        """Remove a bookmark. Returns True if a row was deleted."""
+        self._execute_write(
+            "DELETE FROM watch_later WHERE bvid = ?",
+            (bvid.strip(),),
+        )
+        return self.conn.total_changes > 0
+
+    def is_in_watch_later(self, bvid: str) -> bool:
+        """Check whether a video is bookmarked."""
+        row = self.conn.execute(
+            "SELECT 1 FROM watch_later WHERE bvid = ?",
+            (bvid.strip(),),
+        ).fetchone()
+        return row is not None
+
+    def count_watch_later(self) -> int:
+        """Return total number of bookmarked videos."""
+        row = self.conn.execute("SELECT COUNT(*) FROM watch_later").fetchone()
+        return int(row[0]) if row else 0
+
+    def list_watch_later(
+        self, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Return bookmarked videos with content_cache metadata, newest first."""
+        cursor = self.conn.execute(
+            """
+            SELECT
+                w.bvid,
+                w.added_at,
+                w.note,
+                COALESCE(c.title, '') AS title,
+                COALESCE(c.up_name, '') AS up_name,
+                COALESCE(c.cover_url, '') AS cover_url,
+                COALESCE(c.content_url, '') AS content_url,
+                COALESCE(c.source_platform, '') AS source_platform
+            FROM watch_later AS w
+            LEFT JOIN content_cache AS c ON c.bvid = w.bvid
+            ORDER BY w.added_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     # ── XHS observed URL ingest ───────────────────────────────────
 

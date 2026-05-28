@@ -78,6 +78,10 @@ from openbiliclaw.api.models import (
     SourceShareSuggestionIn,
     SourceShareSuggestionResponse,
     StorageConfigOut,
+    WatchLaterAddIn,
+    WatchLaterItem,
+    WatchLaterListResponse,
+    WatchLaterStateResponse,
     XiaohongshuSourceConfigOut,
     YoutubeSourceConfigOut,
 )
@@ -1810,6 +1814,54 @@ def create_app(
                 )
                 for row in rows
             ]
+        )
+
+    # ── Watch-later (稍后再看) ────────────────────────────────────
+
+    def _watch_later_state(bvid: str) -> WatchLaterStateResponse:
+        return WatchLaterStateResponse(
+            saved=ctx.database.is_in_watch_later(bvid),
+            total=ctx.database.count_watch_later(),
+        )
+
+    @app.post("/api/watch-later", response_model=WatchLaterStateResponse)
+    async def watch_later_add(payload: WatchLaterAddIn) -> WatchLaterStateResponse:
+        bvid = payload.bvid.strip()
+        if not bvid:
+            raise HTTPException(status_code=422, detail="bvid is required")
+        ctx.database.add_to_watch_later(bvid, note=payload.note.strip())
+        return _watch_later_state(bvid)
+
+    @app.delete("/api/watch-later/{bvid}", response_model=WatchLaterStateResponse)
+    async def watch_later_remove(bvid: str) -> WatchLaterStateResponse:
+        normalized = bvid.strip()
+        ctx.database.remove_from_watch_later(normalized)
+        return _watch_later_state(normalized)
+
+    @app.get("/api/watch-later/{bvid}", response_model=WatchLaterStateResponse)
+    async def watch_later_status(bvid: str) -> WatchLaterStateResponse:
+        return _watch_later_state(bvid.strip())
+
+    @app.get("/api/watch-later", response_model=WatchLaterListResponse)
+    async def watch_later_list(
+        limit: int = 50,
+        offset: int = 0,
+    ) -> WatchLaterListResponse:
+        rows = ctx.database.list_watch_later(limit=limit, offset=offset)
+        return WatchLaterListResponse(
+            items=[
+                WatchLaterItem(
+                    bvid=str(row.get("bvid", "")),
+                    title=str(row.get("title", "")),
+                    up_name=str(row.get("up_name", "")),
+                    cover_url=str(row.get("cover_url", "")),
+                    content_url=str(row.get("content_url", "")),
+                    source_platform=str(row.get("source_platform", "") or "bilibili"),
+                    added_at=str(row.get("added_at", "")),
+                )
+                for row in rows
+            ],
+            total=ctx.database.count_watch_later(),
         )
 
     @app.get("/api/activity-feed", response_model=ActivityFeedResponse)

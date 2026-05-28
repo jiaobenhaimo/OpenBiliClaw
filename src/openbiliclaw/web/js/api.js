@@ -226,3 +226,17 @@ export async function respondToAvoidanceProbe(domain, responseType, message = ""
     timeoutMs: 35_000,
   });
 }
+
+// ── Watch-later ──────────────────────────────────────────────────
+
+export async function addToWatchLater(bvid) {
+  return requestJson("/watch-later", { ...json({ bvid }), method: "POST" });
+}
+
+export async function removeFromWatchLater(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+}
+
+export async function watchLaterStatus(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`);
+}

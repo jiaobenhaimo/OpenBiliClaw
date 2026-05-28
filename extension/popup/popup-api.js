@@ -409,3 +409,23 @@ export async function updateRuntimeToggle(name, value) {
   }
   throw new Error(`Unknown runtime toggle: ${name}`);
 }
+
+// ── Watch-later ──────────────────────────────────────────────────
+
+export async function addToWatchLater(bvid) {
+  return requestJson("/watch-later", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bvid }),
+  });
+}
+
+export async function removeFromWatchLater(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function watchLaterStatus(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`);
+}

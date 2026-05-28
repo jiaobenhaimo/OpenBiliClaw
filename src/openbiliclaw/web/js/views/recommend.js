@@ -17,6 +17,9 @@ import {
   startChatTurn,
   fetchChatTurn,
   fetchChatTurns,
+  addToWatchLater,
+  removeFromWatchLater,
+  watchLaterStatus,
 } from "../api.js";
 import { state, patchState } from "../state.js";
 import {
@@ -49,6 +52,8 @@ let loaded = false;
 let loading = false;
 let feedbackSheet = null; // { itemId, note, submitState }
 const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
+const watchLaterSaved = new Set(); // bvid strings currently bookmarked
+let watchLaterBusy = false; // mutex for toggle requests
 const COVER_PRELOAD_BATCH_SIZE = 12;
 const COVER_PRELOAD_WAIT_TIMEOUT_MS = 3000;
 const AUTO_APPEND_ROOT_MARGIN = "700px 0px 1400px 0px";
@@ -408,6 +413,7 @@ function renderDelightTray() {
     const btns = [
       { label: "\u770B\u770B", action: "view" },
       { label: "\u559C\u6B22", action: "like" },
+      { label: "\u2606", action: "watch-later" },
       { label: "\u4E0D\u611F\u5174\u8DA3", action: "reject" },
       { label: "\u804A\u4E00\u804A", action: "chat" },
     ];
@@ -415,9 +421,42 @@ function renderDelightTray() {
       const btn = document.createElement("button");
       btn.className = `btn ${b.action === "view" ? "btn-brand" : "btn-outline"}`;
       btn.textContent = b.label;
-      btn.addEventListener("click", () => handleDelightAction(d, b.action));
-      if (isChatState && (b.action === "like" || b.action === "reject")) {
-        btn.disabled = true;
+      if (b.action === "watch-later") {
+        let busy = false;
+        btn.title = "\u7A0D\u540E\u518D\u770B";
+        btn.addEventListener("click", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = watchLaterSaved.has(d.bvid);
+          btn.textContent = wasSaved ? "\u2606" : "\u2605";
+          try {
+            if (wasSaved) {
+              await removeFromWatchLater(d.bvid);
+              watchLaterSaved.delete(d.bvid);
+            } else {
+              await addToWatchLater(d.bvid);
+              watchLaterSaved.add(d.bvid);
+            }
+          } catch {
+            btn.textContent = wasSaved ? "\u2605" : "\u2606";
+          } finally {
+            busy = false;
+          }
+        });
+        if (watchLaterSaved.has(d.bvid)) {
+          btn.textContent = "\u2605";
+        }
+        watchLaterStatus(d.bvid).then((res) => {
+          if (res && res.saved) {
+            watchLaterSaved.add(d.bvid);
+            btn.textContent = "\u2605";
+          }
+        }).catch(() => {});
+      } else {
+        btn.addEventListener("click", () => handleDelightAction(d, b.action));
+        if (isChatState && (b.action === "like" || b.action === "reject")) {
+          btn.disabled = true;
+        }
       }
       actions.appendChild(btn);
     }
@@ -828,8 +867,41 @@ function renderCard(rawItem, index = 0) {
     renderFeedbackSheet();
   });
 
+  const savedNow = watchLaterSaved.has(item.bvid);
+  const starBtn = createCardAction(savedNow ? "\u2605" : "\u2606", async () => {
+    if (watchLaterBusy) return;
+    watchLaterBusy = true;
+    const wasSaved = watchLaterSaved.has(item.bvid);
+    // optimistic toggle
+    starBtn.textContent = wasSaved ? "\u2606" : "\u2605";
+    try {
+      if (wasSaved) {
+        await removeFromWatchLater(item.bvid);
+        watchLaterSaved.delete(item.bvid);
+      } else {
+        await addToWatchLater(item.bvid);
+        watchLaterSaved.add(item.bvid);
+      }
+    } catch {
+      // revert on failure
+      starBtn.textContent = wasSaved ? "\u2605" : "\u2606";
+    } finally {
+      watchLaterBusy = false;
+    }
+  });
+  starBtn.title = savedNow ? "取消收藏" : "稍后再看";
+  // lazy-load real state from backend
+  watchLaterStatus(item.bvid).then((res) => {
+    if (res && res.saved) {
+      watchLaterSaved.add(item.bvid);
+      starBtn.textContent = "\u2605";
+      starBtn.title = "取消收藏";
+    }
+  }).catch(() => {});
+
   actionsRow.appendChild(openBtn);
   actionsRow.appendChild(likeBtn);
+  actionsRow.appendChild(starBtn);
   actionsRow.appendChild(dislikeBtn);
   actionsRow.appendChild(commentBtn);
   card.appendChild(actionsRow);

@@ -67,6 +67,9 @@ import {
   startChatTurn,
   submitFeedback,
   updateConfig,
+  addToWatchLater,
+  removeFromWatchLater,
+  watchLaterStatus,
 } from "./popup-api.js";
 
 const state = {
@@ -3264,12 +3267,45 @@ function renderDelightSlot() {
       },
     );
 
+    const starButton = (() => {
+      let busy = false;
+      let saved = false;
+      const btn = createActionButton("\u2606", "action-button action-secondary delight-banner-action", async () => {
+        if (busy) return;
+        busy = true;
+        const wasSaved = saved;
+        saved = !wasSaved;
+        btn.textContent = saved ? "\u2605" : "\u2606";
+        try {
+          if (wasSaved) {
+            await removeFromWatchLater(delight.bvid);
+          } else {
+            await addToWatchLater(delight.bvid);
+          }
+        } catch {
+          saved = wasSaved;
+          btn.textContent = saved ? "\u2605" : "\u2606";
+        } finally {
+          busy = false;
+        }
+      });
+      btn.title = "\u7A0D\u540E\u518D\u770B";
+      watchLaterStatus(delight.bvid).then((res) => {
+        if (res && res.saved) {
+          saved = true;
+          btn.textContent = "\u2605";
+          btn.title = "\u53D6\u6D88\u6536\u85CF";
+        }
+      }).catch(() => {});
+      return btn;
+    })();
+
     if (isHandled || isChatting) {
       rejectButton.disabled = true;
       likeButton.disabled = true;
     }
 
-    actions.append(openButton, likeButton, rejectButton, chatButton);
+    actions.append(openButton, likeButton, starButton, rejectButton, chatButton);
     body.append(actions);
 
     if (delight.composer_open) {
@@ -3657,6 +3693,40 @@ function renderRecommendations(items, { append = false } = {}) {
           setHint("这条反馈没记上，先看看本地后端是不是开着。", "error");
         }
       }),
+      (() => {
+        let busy = false;
+        let saved = false;
+        const btn = createActionButton("\u2606", "action-button action-secondary", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = saved;
+          saved = !wasSaved;
+          btn.textContent = saved ? "\u2605" : "\u2606";
+          btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+          try {
+            if (wasSaved) {
+              await removeFromWatchLater(item.bvid);
+            } else {
+              await addToWatchLater(item.bvid);
+            }
+          } catch {
+            saved = wasSaved;
+            btn.textContent = saved ? "\u2605" : "\u2606";
+            btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+          } finally {
+            busy = false;
+          }
+        });
+        btn.title = "\u7A0D\u540E\u518D\u770B";
+        watchLaterStatus(item.bvid).then((res) => {
+          if (res && res.saved) {
+            saved = true;
+            btn.textContent = "\u2605";
+            btn.title = "\u53D6\u6D88\u6536\u85CF";
+          }
+        }).catch(() => {});
+        return btn;
+      })(),
       createActionButton("少来点", "action-button action-secondary", async () => {
         try {
           setFeedbackStatusWithTone(

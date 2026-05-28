@@ -19,7 +19,8 @@
       interestProbeRespond: "/interest-probes/respond",
       avoidanceProbeRespond: "/avoidance-probes/respond",
       sourceShareSuggestion: "/config/source-share-suggestion",
-      config: "/config?reveal_keys=true"
+      config: "/config?reveal_keys=true",
+      watchLater: "/watch-later"
     };
 
     const state = {
@@ -649,6 +650,8 @@
               <button class="feedback-icon-btn" data-action="dismiss" type="button" aria-label="忽略" title="忽略">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18M9.84 9.91A3 3 0 0 0 12 15c.82 0 1.57-.33 2.11-.87M6.5 6.65A10.45 10.45 0 0 0 2.46 12C3.73 16.06 7.52 19 12 19c1.99 0 3.84-.58 5.4-1.58M11 5.05c.33-.03.66-.05 1-.05 4.48 0 8.27 2.94 9.54 7a10.5 10.5 0 0 1-1.19 2.5"/></svg>
               </button>
+              <span class="feedback-separator" aria-hidden="true">/</span>
+              <button class="feedback-icon-btn watch-later-btn" data-action="watch-later" type="button" aria-label="稍后再看" title="稍后再看" aria-pressed="false">☆</button>
             </div>
             <div class="comment-field"><input placeholder="想围绕这条聊什么？" aria-label="想围绕这条聊什么？"></div>
             <button class="small-btn composer-cancel" data-action="cancel-comment" type="button" aria-label="返回" title="返回">‹</button>
@@ -673,6 +676,18 @@
           if (event.key === "Enter") handleCardAction("send-comment", item, card);
           if (event.key === "Escape") closeCardComposer(card);
         });
+        // Lazy-load watch-later state
+        const wlBtn = card.querySelector('[data-action="watch-later"]');
+        if (wlBtn) {
+          const bvid = item.bvid || item.id;
+          requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`).then((res) => {
+            if (res && res.saved) {
+              wlBtn.textContent = "\u2605";
+              wlBtn.setAttribute("aria-pressed", "true");
+              wlBtn.title = "\u53D6\u6D88\u6536\u85CF";
+            }
+          }).catch(() => {});
+        }
         return card;
       }));
     }
@@ -780,6 +795,30 @@
       if (action === "open") return openRecommendation(item, card);
       if (action === "comment") { openCardComposer(card); return; }
       if (action === "cancel-comment") { closeCardComposer(card); return; }
+      if (action === "watch-later") {
+        const btn = card.querySelector('[data-action="watch-later"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.textContent = wasSaved ? "\u2606" : "\u2605";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        btn.title = wasSaved ? "\u7A0D\u540E\u518D\u770B" : "\u53D6\u6D88\u6536\u85CF";
+        try {
+          const bvid = item.bvid || item.id;
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid }) });
+          }
+        } catch {
+          btn.textContent = wasSaved ? "\u2605" : "\u2606";
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          btn.title = wasSaved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
       card.dataset.feedbackPending = "true";
       card.querySelectorAll(".card-actions button, .card-actions input").forEach((control) => { control.disabled = true; });
       try {
@@ -1645,6 +1684,27 @@
       if (!delight) return;
       if (response === "chat") { openDelightComposer(); return; }
       if (response === "cancel-comment") { closeDelightComposer(); return; }
+      if (response === "watch-later") {
+        const btn = document.querySelector('[data-delight="watch-later"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.textContent = wasSaved ? "\u2606" : "\u2605";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        try {
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(delight.bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid: delight.bvid }) });
+          }
+        } catch {
+          btn.textContent = wasSaved ? "\u2605" : "\u2606";
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
       if (response === "send-comment") {
         const input = $("#delightCommentInput");
         const note = input?.value?.trim() || "";
