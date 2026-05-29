@@ -2347,6 +2347,7 @@ class RecommendationEngine:
                 topic_key=str(row.get("topic_key", "")),
                 topic_group=str(row.get("topic_group", "")),
                 style_key=str(row.get("style_key", "")),
+                marketing_score=float(row.get("marketing_score", 0.0) or 0.0),
                 source_strategy=str(row.get("source", "")),
                 relevance_score=float(row.get("relevance_score", 0.0) or 0.0),
                 relevance_reason=str(row.get("relevance_reason", "")),

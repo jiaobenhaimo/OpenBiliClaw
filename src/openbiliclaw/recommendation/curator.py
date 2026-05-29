@@ -257,13 +257,6 @@ class PoolCurator:
         The returned dict can be passed as ``score_override`` to the
         engine's diversified batch selector.
         """
-        # Local import to avoid loading the pattern bank at module
-        # import time for processes that never call into the
-        # curator (e.g. CLI subcommands that just print config).
-        from openbiliclaw.recommendation.marketing_filter import (
-            score_marketing_signal,
-        )
-
         w = self._weights
         marketing_weight = self._marketing_demote_weight
         scores: dict[str, float] = {}
@@ -293,17 +286,16 @@ class PoolCurator:
             if candidate_amplification_keys(item) & context.over_budget_amplification_keys:
                 score -= 0.35
 
-            # 营销号 (clickbait) demote — only when caller opted in
-            # with a non-zero demote weight at construction time.
-            # Cheap (string-only heuristic) but skip the call
-            # entirely in the disabled case to keep this path tight.
+            # 营销号 demote — quality signal computed once at evaluation
+            # time (issue #54: marketing detection is a content-quality
+            # assessment, computed in evaluate_content() and persisted
+            # to content_cache.marketing_score). Curator just reads the
+            # cached scalar and applies the demote weight. No per-sort
+            # recomputation.
             if marketing_weight > 0:
-                marketing = score_marketing_signal(
-                    str(getattr(item, "title", "") or ""),
-                    description=str(getattr(item, "description", "") or ""),
-                )
-                if marketing.score > 0:
-                    score -= marketing_weight * marketing.score
+                marketing_score = float(getattr(item, "marketing_score", 0.0) or 0.0)
+                if marketing_score > 0:
+                    score -= marketing_weight * marketing_score
 
             scores[item.bvid] = max(0.0, score)
         return scores
@@ -538,6 +530,17 @@ class PoolCurator:
                 score += adj
             else:
                 score += self._feedback_adjustment(item, context.feedback)
+
+            # 营销号 demote — same logic as the sync score_candidates
+            # path. Reads the cached marketing_score from the candidate
+            # (populated in evaluate_content per issue #54); no LLM, no
+            # string scan. Pre-refactor the async path silently skipped
+            # marketing demote because the import lived inside the sync
+            # path only — re-instating parity now that the read is free.
+            if self._marketing_demote_weight > 0:
+                marketing_score = float(getattr(item, "marketing_score", 0.0) or 0.0)
+                if marketing_score > 0:
+                    score -= self._marketing_demote_weight * marketing_score
 
             scores[item.bvid] = max(0.0, score)
         return scores

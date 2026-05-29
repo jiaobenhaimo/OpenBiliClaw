@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS content_cache (
     topic_key   TEXT DEFAULT '',
     style_key   TEXT DEFAULT '',
     franchise_key TEXT DEFAULT '',  -- LLM IP/series; see _ensure_content_cache_topic_columns
+    marketing_score REAL DEFAULT 0.0,  -- 营销号 likelihood [0,1]; see _ensure_content_cache_marketing_column
     description TEXT,
     cover_url   TEXT,
     view_count  INTEGER DEFAULT 0,
@@ -267,6 +268,7 @@ class Database:
         self._ensure_content_cache_runtime_columns()
         self._ensure_content_cache_relevance_columns()
         self._ensure_content_cache_topic_columns()
+        self._ensure_content_cache_marketing_column()
         self._ensure_content_cache_pool_copy_columns()
         self._ensure_content_cache_delight_columns()
         self._ensure_content_cache_multisource_columns()
@@ -866,6 +868,7 @@ class Database:
                 topic_group,
                 style_key,
                 franchise_key,
+                marketing_score,
                 description,
                 cover_url,
                 view_count,
@@ -883,7 +886,7 @@ class Database:
                 author_name
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 CURRENT_TIMESTAMP, ?, ?, ?, ?, ?
             )
             ON CONFLICT(bvid) DO UPDATE SET
@@ -917,6 +920,17 @@ class Database:
                     content_cache.franchise_key,
                     ''
                 ),
+                -- marketing_score: keep the higher of the two so a
+                -- raw re-ingest (which arrives with marketing_score=0
+                -- because raw sources don't evaluate) doesn't erase a
+                -- score that the evaluator already wrote. After
+                -- evaluate_content() runs and persists a non-zero
+                -- score, it stays put.
+                marketing_score = CASE
+                    WHEN excluded.marketing_score > content_cache.marketing_score
+                        THEN excluded.marketing_score
+                    ELSE COALESCE(content_cache.marketing_score, 0.0)
+                END,
                 description = excluded.description,
                 cover_url = excluded.cover_url,
                 view_count = excluded.view_count,
@@ -975,6 +989,7 @@ class Database:
                 kwargs.get("topic_group", ""),
                 kwargs.get("style_key", ""),
                 kwargs.get("franchise_key", ""),
+                float(kwargs.get("marketing_score", 0.0) or 0.0),
                 kwargs.get("description", ""),
                 kwargs.get("cover_url", ""),
                 kwargs.get("view_count", 0),
@@ -3003,6 +3018,30 @@ class Database:
             # appear in a single response window — without relying on
             # any title-string heuristic or hardcoded alias list.
             self.conn.execute("ALTER TABLE content_cache ADD COLUMN franchise_key TEXT DEFAULT ''")
+
+    def _ensure_content_cache_marketing_column(self) -> None:
+        """Backfill the 营销号 quality-score column for existing databases.
+
+        Per issue #54, the 营销号 signal is a quality assessment of the
+        content itself (function of title + description + tags), not a
+        relevance or freshness signal that varies with the viewer or
+        time. It belongs at the evaluation layer where it's computed
+        once when content enters the pool and read by the curator at
+        ranking time — rather than recomputed by the curator on every
+        sort. This column stores the cached score so the curator can
+        read it directly.
+
+        Score is in [0, 1]; default 0.0 means "not yet evaluated"
+        (legacy rows treated as non-marketing).
+        """
+        existing_columns = {
+            str(row["name"])
+            for row in self.conn.execute("PRAGMA table_info(content_cache)").fetchall()
+        }
+        if "marketing_score" not in existing_columns:
+            self.conn.execute(
+                "ALTER TABLE content_cache ADD COLUMN marketing_score REAL DEFAULT 0.0"
+            )
 
     def _ensure_content_cache_pool_copy_columns(self) -> None:
         """Backfill precomputed pool-copy fields for existing databases."""

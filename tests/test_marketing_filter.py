@@ -204,3 +204,104 @@ def test_reasons_are_human_readable() -> None:
         assert reason.strip()
         assert "\\" not in reason  # no escape sequences leaked
         assert "re.compile" not in reason
+
+
+# ── Integration: persistence layer (issue #54) ─────────────────────
+#
+# These tests cover the architectural contract from issue #54:
+# marketing_score is computed at content evaluation time, persisted
+# in content_cache, and read by the curator at ranking time. The
+# curator should never recompute the score from title/description on
+# its own.
+
+
+def test_content_cache_persists_marketing_score() -> None:
+    """The marketing_score kwarg passed to cache_content() round-trips
+    through the content_cache table.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        db.cache_content(
+            "BVMKT001",
+            title="深度解析：量子计算的数学基础",
+            description="第三讲",
+            marketing_score=0.0,
+        )
+        db.cache_content(
+            "BVMKT002",
+            title="震惊！9成人都不知道的真相",
+            description="点击就看",
+            marketing_score=0.85,
+        )
+
+        row1 = db.conn.execute(
+            "SELECT marketing_score FROM content_cache WHERE bvid=?",
+            ("BVMKT001",),
+        ).fetchone()
+        row2 = db.conn.execute(
+            "SELECT marketing_score FROM content_cache WHERE bvid=?",
+            ("BVMKT002",),
+        ).fetchone()
+        assert row1["marketing_score"] == 0.0
+        assert abs(row2["marketing_score"] - 0.85) < 1e-9
+        db.close()
+
+
+def test_content_cache_upsert_preserves_higher_marketing_score() -> None:
+    """A raw re-ingest (incoming marketing_score=0.0, i.e. unevaluated)
+    must not overwrite a previously-computed non-zero score. Otherwise
+    every time the xhs content script re-broadcasts a note, the cached
+    quality signal evaporates.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        # First write: evaluator wrote 0.85
+        db.cache_content("BVKEEP", title="t", description="d", marketing_score=0.85)
+        # Second write: raw re-ingest, score not computed (0.0)
+        db.cache_content("BVKEEP", title="t", description="d2", marketing_score=0.0)
+
+        row = db.conn.execute(
+            "SELECT marketing_score, description FROM content_cache WHERE bvid='BVKEEP'"
+        ).fetchone()
+        # description updates (it's just text); marketing_score stays
+        assert row["description"] == "d2"
+        assert abs(row["marketing_score"] - 0.85) < 1e-9
+        db.close()
+
+
+def test_content_cache_upsert_allows_raising_marketing_score() -> None:
+    """When re-evaluation yields a higher score (e.g. the heuristic was
+    tuned), the cached value updates. Symmetric with the keep-higher
+    rule above.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        db.cache_content("BVRAISE", title="t", description="d", marketing_score=0.4)
+        db.cache_content("BVRAISE", title="t", description="d", marketing_score=0.9)
+
+        row = db.conn.execute(
+            "SELECT marketing_score FROM content_cache WHERE bvid='BVRAISE'"
+        ).fetchone()
+        assert abs(row["marketing_score"] - 0.9) < 1e-9
+        db.close()

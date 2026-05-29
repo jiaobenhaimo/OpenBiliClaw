@@ -247,6 +247,13 @@ class DiscoveredContent:
     # infer the IP correctly even when the title is bilingual or coded
     # ("提瓦特摄影" → 原神, "宝可梦" → 精灵宝可梦, etc.).
     franchise_key: str = ""
+    # 营销号 (clickbait) likelihood in [0, 1], computed once at
+    # evaluation time. Issue #54: this is a quality signal about
+    # the content itself, not a relevance/freshness signal that
+    # varies with the viewer. Cached in content_cache.marketing_score
+    # and read by the curator at ranking time instead of being
+    # recomputed each sort pass.
+    marketing_score: float = 0.0
     description: str = ""
     source_strategy: str = ""  # Which strategy found this
     relevance_score: float = 0.0  # 0.0 - 1.0 (based on user soul)
@@ -290,6 +297,7 @@ class DiscoveredContent:
             "topic_group": self.topic_group,
             "style_key": self.style_key,
             "franchise_key": self.franchise_key,
+            "marketing_score": self.marketing_score,
             "description": self.description,
             "cover_url": self.cover_url,
             "view_count": self.view_count,
@@ -757,7 +765,17 @@ class ContentDiscoveryEngine:
         cache_key = f"{self._content_identity(content)}:{id(profile)}"
         cached = self._eval_cache.get(cache_key)
         if cached is not None:
-            score, reason, topic_group, style_key, franchise_key = cached
+            # Tuple shape: (score, reason, topic_group, style_key,
+            # franchise_key, marketing_score). The trailing field was
+            # added with issue #54; len-tolerant unpack stays
+            # backward-compatible with any pre-existing serialized
+            # cache entries that happen to be in memory.
+            score = cached[0]
+            reason = cached[1]
+            topic_group = cached[2]
+            style_key = cached[3]
+            franchise_key = cached[4]
+            marketing_score = cached[5] if len(cached) > 5 else 0.0
             content.relevance_score = score
             content.relevance_reason = reason
             if topic_group:
@@ -766,6 +784,7 @@ class ContentDiscoveryEngine:
                 content.style_key = style_key
             if franchise_key:
                 content.franchise_key = franchise_key
+            content.marketing_score = float(marketing_score)
             return score
 
         # Embedding pre-filter: skip LLM call for content with very low
@@ -847,12 +866,38 @@ class ContentDiscoveryEngine:
             content.style_key = style_key
         if franchise_key:
             content.franchise_key = franchise_key
+
+        # 营销号 quality signal (issue #54): pure function of the
+        # content text (title + description + tags). Doesn't depend
+        # on the user, doesn't change with time, doesn't need a
+        # second LLM round trip. Compute once at evaluation time so
+        # the curator can read this scalar from content_cache at
+        # ranking time instead of recomputing on every sort.
+        try:
+            from openbiliclaw.recommendation.marketing_filter import (
+                score_marketing_signal,
+            )
+
+            marketing = score_marketing_signal(
+                content.title,
+                description=content.description,
+                tags=content.tags,
+            )
+            content.marketing_score = float(marketing.score)
+        except Exception:
+            logger.exception(
+                "Failed to score marketing signal for %s; defaulting to 0",
+                content.bvid,
+            )
+            content.marketing_score = 0.0
+
         self._eval_cache[cache_key] = (
             score,
             reason,
             topic_group,
             style_key,
             franchise_key,
+            content.marketing_score,
         )
         return score
 

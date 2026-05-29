@@ -424,19 +424,6 @@ class RecommendationConfig:
     move here.
     """
 
-    # When a candidate's marketing-filter score crosses this
-    # threshold it's treated as "clickbait" for hard-filter contexts
-    # like the delight push notification. The curator's soft demote
-    # path still applies below the threshold, scaled by
-    # ``marketing_filter_demote_weight``.
-    #
-    # Set to 1.01 (i.e. unreachable) to effectively disable the
-    # filter without removing the configuration. Set lower (e.g. 0.4)
-    # to be more aggressive — be aware that false positives compound:
-    # over-filtering looks to the user like the recommendation
-    # engine ignored their interests.
-    marketing_filter_threshold: float = 0.6
-
     # Per-unit demote weight. The curator subtracts
     # ``marketing_filter_demote_weight * score`` from a candidate's
     # composite rec_score. With score in [0, 1] and base scores
@@ -444,14 +431,10 @@ class RecommendationConfig:
     # heavily-clickbait video (score ≈ 1.0) drop ~8 points — usually
     # enough to push it well below organic relevance-driven peers
     # without being a hard exclusion.
+    #
+    # Set to 0.0 to fully disable the marketing demote without
+    # removing the configuration.
     marketing_filter_demote_weight: float = 8.0
-
-    # When True, the proactive-delight push path also applies the
-    # threshold as a hard filter. Pushing a notification for a
-    # clickbait video is much worse UX than burying it, so this
-    # is on by default. Disable only if the heuristics keep
-    # mis-filtering legitimate delights.
-    marketing_filter_block_delight: bool = True
 
 
 @dataclass
@@ -804,12 +787,6 @@ def _build_recommendation_config(raw: object) -> RecommendationConfig:
     return RecommendationConfig(
         # Threshold can run from 0 (filter everything) to 1.01
         # (filter nothing — > any possible score).
-        marketing_filter_threshold=_clamped_float(
-            "marketing_filter_threshold",
-            defaults.marketing_filter_threshold,
-            0.0,
-            1.01,
-        ),
         # Weight is a multiplier on the candidate score; values
         # above 50 are absurd (would dominate every other signal).
         marketing_filter_demote_weight=_clamped_float(
@@ -817,12 +794,6 @@ def _build_recommendation_config(raw: object) -> RecommendationConfig:
             defaults.marketing_filter_demote_weight,
             0.0,
             50.0,
-        ),
-        marketing_filter_block_delight=bool(
-            raw.get(
-                "marketing_filter_block_delight",
-                defaults.marketing_filter_block_delight,
-            )
         ),
     )
 
