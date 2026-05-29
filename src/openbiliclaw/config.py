@@ -425,12 +425,25 @@ class RecommendationConfig:
     """
 
     # Per-unit demote weight. The curator subtracts
-    # ``marketing_filter_demote_weight * score`` from a candidate's
-    # composite rec_score. With score in [0, 1] and base scores
-    # typically in the 0–20 range, a default weight of 8 lets a
-    # heavily-clickbait video (score ≈ 1.0) drop ~8 points — usually
-    # enough to push it well below organic relevance-driven peers
-    # without being a hard exclusion.
+    # ``marketing_filter_demote_weight * marketing_score`` from a
+    # candidate's composite rec_score, after which the final score
+    # is clamped to >= 0.
+    #
+    # Composite scores from ``PoolCurator.score_candidates`` are
+    # typically in [0, 0.7] (relevance + freshness + serendipity
+    # under default weights of 0.30 / 0.20 / 0.20). A demote weight
+    # of 8.0 means any candidate with marketing_score > ~0.1 will
+    # land below 0 before the clamp and get floored at 0 — i.e. it
+    # ends up at the bottom of the ranking, but isn't excluded
+    # (still wins over other 0-scored items by deterministic
+    # tie-breakers).
+    #
+    # In practice this floors all detected 营销号 candidates at the
+    # bottom of the rec list rather than producing a graduated
+    # demote. If you want graduated demote (so a faintly-marketing
+    # video is still rankable above a sober but uninteresting one),
+    # try weight=1.0 — that gives a max -1.0 subtraction, which is
+    # comparable to one of the other curator signals.
     #
     # Set to 0.0 to fully disable the marketing demote without
     # removing the configuration.

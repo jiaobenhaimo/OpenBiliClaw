@@ -1004,6 +1004,110 @@ class RecommendationEngine:
         )
         return classified
 
+    def backfill_marketing_scores(
+        self,
+        *,
+        max_rows: int = 5000,
+        batch_size: int = 500,
+    ) -> dict[str, int]:
+        """Compute ``marketing_score`` for any cached content still at 0.0.
+
+        Issue #54 added the column with a default of 0.0. Rows that
+        were already in the pool when the migration ran will sit at
+        0.0 indefinitely under normal flow, because the active pool
+        is already LLM-classified and won't re-enter
+        ``evaluate_content``. This driver closes that gap: it pulls
+        rows in batches, scores them with the pure ``score_marketing
+        _signal`` heuristic (no LLM, no network, ~microseconds per
+        row), and persists via a direct UPDATE.
+
+        Safe to call repeatedly — only zero-scored rows are picked
+        up, so a second call after a successful run is a no-op.
+        Safe to interrupt — each batch commits as the UPDATEs land.
+
+        Returns a small dict summarising the run for log emission.
+        """
+        from openbiliclaw.recommendation.marketing_filter import (
+            score_marketing_signal,
+        )
+
+        scanned = 0
+        updated = 0
+        non_zero = 0  # rows where the score came out > 0 (interesting tail)
+
+        while scanned < max_rows:
+            remaining = max_rows - scanned
+            batch_limit = min(batch_size, remaining)
+            rows = self._database.get_content_needing_marketing_score(
+                limit=batch_limit,
+            )
+            if not rows:
+                break
+
+            # If the query returns fewer rows than we asked for, the
+            # backlog is exhausted — note this so we stop after
+            # processing this batch instead of looping forever on the
+            # same rows when no progress is possible.
+            batch_was_partial = len(rows) < batch_limit
+
+            for row in rows:
+                bvid = str(row.get("bvid") or "")
+                if not bvid:
+                    continue
+                title = str(row.get("title") or "")
+                description = str(row.get("description") or "")
+                tags_raw = row.get("tags")
+                # tags column is JSON-encoded list; parse defensively
+                tags: list[str] | str | None
+                if isinstance(tags_raw, str) and tags_raw:
+                    try:
+                        import json
+
+                        parsed = json.loads(tags_raw)
+                        tags = parsed if isinstance(parsed, list) else tags_raw
+                    except (ValueError, TypeError):
+                        tags = tags_raw
+                else:
+                    tags = None
+
+                try:
+                    result = score_marketing_signal(
+                        title,
+                        description=description,
+                        tags=tags,
+                    )
+                except Exception:
+                    logger.exception(
+                        "backfill_marketing_scores: scorer failed for %s; skipping",
+                        bvid,
+                    )
+                    continue
+
+                score = float(result.score)
+                if score <= 0.0:
+                    # No signal — nothing to persist (and the row
+                    # already shows 0.0, so an UPDATE would be a no-op
+                    # WHERE clause match against itself).
+                    scanned += 1
+                    continue
+
+                ok = self._database.update_marketing_score(bvid, score)
+                scanned += 1
+                if ok:
+                    updated += 1
+                    non_zero += 1
+
+            if batch_was_partial:
+                break
+
+        logger.info(
+            "backfill_marketing_scores: scanned=%d updated=%d non_zero=%d",
+            scanned,
+            updated,
+            non_zero,
+        )
+        return {"scanned": scanned, "updated": updated, "non_zero": non_zero}
+
     async def _classify_batch(
         self,
         batch: list[DiscoveredContent],

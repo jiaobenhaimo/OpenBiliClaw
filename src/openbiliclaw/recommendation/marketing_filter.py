@@ -184,6 +184,13 @@ def score_marketing_signal(
     look fine after the final clamp but would compress the useful
     distinguishing range).
 
+    Tags are joined into a single string and run through the same
+    pattern bank as the title; ``seen_labels`` deduplicates so a tag
+    that triggers the same pattern as the title doesn't double-count.
+    This catches the common case where a video has a relatively
+    sober title but stuffs 营销号 vocabulary into its tags for
+    discovery, and the inverse (legit tags hiding a clickbait title).
+
     ``threshold`` is recorded but not used here — it's part of the
     return value's interpretation (``is_likely_marketing``). Callers
     can pass their own threshold so the same code path can serve
@@ -195,19 +202,37 @@ def score_marketing_signal(
     raw = title.strip()
     lowered = raw.lower()
 
+    # Normalize tags into a joined string for pattern matching. Both
+    # str ("a, b, c") and list[str] (["a", "b", "c"]) inputs are
+    # accepted because content_cache.tags can be either depending on
+    # the discovery source. We also keep the original list (or split
+    # string) for the tag-count signal below.
+    tag_list: list[str] = []
+    if tags:
+        if isinstance(tags, str):
+            tag_list = [t.strip() for t in tags.replace("，", ",").split(",") if t.strip()]
+        else:
+            tag_list = [str(t).strip() for t in tags if str(t).strip()]
+    joined_tags = " ".join(tag_list)
+    lowered_tags = joined_tags.lower()
+
     total = 0.0
     reasons: list[str] = []
     seen_labels: set[str] = set()  # de-dup so two near-identical patterns don't double-count
 
-    # Lowered-title patterns
+    # Lowered-title patterns (run against title AND tags — same label
+    # only fires once thanks to seen_labels)
+    search_corpora_lowered = (lowered, lowered_tags) if lowered_tags else (lowered,)
     for pattern, weight, label in _TITLE_PATTERNS:
         if label in seen_labels:
             continue
-        if pattern.search(lowered):
-            contribution = min(weight, _MAX_SINGLE_CONTRIBUTION)
-            total += contribution
-            reasons.append(label)
-            seen_labels.add(label)
+        for corpus in search_corpora_lowered:
+            if corpus and pattern.search(corpus):
+                contribution = min(weight, _MAX_SINGLE_CONTRIBUTION)
+                total += contribution
+                reasons.append(label)
+                seen_labels.add(label)
+                break
 
     # Raw-title (punctuation/spacing) patterns
     for pattern, weight, label in _RAW_TITLE_PATTERNS:
@@ -247,6 +272,15 @@ def score_marketing_signal(
     if desc and 0 < len(desc) <= 120 and raw in desc and len(desc) - len(raw) < 20:
         total += 0.10
         reasons.append("描述复读标题")
+
+    # Over-tagging: B站 uploaders typically pick 3-6 focused tags.
+    # 11+ tags is unusual and correlates with batch-upload content
+    # farms that stuff every potentially-related discovery keyword
+    # to catch any traffic. Low weight (it's a soft signal, not a
+    # smoking gun) but stacks usefully with other signatures.
+    if len(tag_list) >= 11:
+        total += 0.10
+        reasons.append(f"标签堆砌({len(tag_list)}个)")
 
     # Stacking bonus. When three or more independent signals agree,
     # we're well past coincidence: a single legitimate use of "震惊"

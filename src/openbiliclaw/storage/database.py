@@ -2303,6 +2303,63 @@ class Database:
         )
         return rows[:limit]
 
+    def get_content_needing_marketing_score(
+        self, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return content_cache rows whose ``marketing_score`` is still 0.0.
+
+        After the issue #54 migration added the ``marketing_score``
+        column, all legacy rows default to 0.0 and stay there until
+        they re-enter ``evaluate_content``. For the existing pool
+        (which has already been LLM-classified and won't re-enter
+        evaluation under normal flow) this means the marketing
+        filter has zero effect on legacy content.
+
+        This query is the backfill source: pick rows with
+        marketing_score == 0.0 AND a non-empty title (no point
+        scoring an empty title — the heuristic returns 0 anyway),
+        prioritizing pool-visible rows (``pool_status='fresh'``,
+        no user feedback yet) so the backfill helps the active pool
+        first. Marketing scoring is a pure heuristic, so the driver
+        can iterate in batches without rate concerns.
+        """
+        cursor = self.conn.execute(
+            """
+            SELECT bvid, title, description, tags
+            FROM content_cache
+            WHERE COALESCE(marketing_score, 0.0) = 0.0
+              AND COALESCE(title, '') != ''
+            ORDER BY
+                CASE COALESCE(pool_status, 'fresh')
+                    WHEN 'fresh' THEN 0
+                    ELSE 1
+                END ASC,
+                last_scored_at DESC,
+                bvid ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_marketing_score(self, bvid: str, marketing_score: float) -> bool:
+        """Persist the 营销号 score for a single content_cache row.
+
+        Used by the backfill helper (and by future re-scoring jobs).
+        Direct UPDATE rather than going through ``cache_content`` so
+        no other column is touched — preserves last_scored_at and
+        avoids the no-op overhead of UPSERT-ing every other field
+        with itself.
+
+        Returns True if exactly one row updated, False otherwise
+        (row missing — surfaces as a debug signal but not an error).
+        """
+        cursor = self._execute_write(
+            "UPDATE content_cache SET marketing_score = ? WHERE bvid = ?",
+            (float(marketing_score), bvid),
+        )
+        return cursor.rowcount == 1
+
     def get_pool_candidates_needing_copy(self, limit: int = 20) -> list[dict[str, Any]]:
         """Return fresh pool candidates missing precomputed popup copy.
 

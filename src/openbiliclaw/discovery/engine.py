@@ -758,6 +758,13 @@ class ContentDiscoveryEngine:
         Returns:
             Relevance score (0.0 - 1.0).
         """
+        # Marketing signal is a pure heuristic — title + description +
+        # tags only, no network, no LLM. Compute it up front so even
+        # the LLM-unavailable degraded path persists this quality
+        # signal. Costs ~microseconds (regex scan), so cheap enough
+        # to run unconditionally at the top of every evaluation.
+        self._score_marketing_for_content(content)
+
         if self._llm_service is None:
             return 0.0
 
@@ -867,29 +874,9 @@ class ContentDiscoveryEngine:
         if franchise_key:
             content.franchise_key = franchise_key
 
-        # 营销号 quality signal (issue #54): pure function of the
-        # content text (title + description + tags). Doesn't depend
-        # on the user, doesn't change with time, doesn't need a
-        # second LLM round trip. Compute once at evaluation time so
-        # the curator can read this scalar from content_cache at
-        # ranking time instead of recomputing on every sort.
-        try:
-            from openbiliclaw.recommendation.marketing_filter import (
-                score_marketing_signal,
-            )
-
-            marketing = score_marketing_signal(
-                content.title,
-                description=content.description,
-                tags=content.tags,
-            )
-            content.marketing_score = float(marketing.score)
-        except Exception:
-            logger.exception(
-                "Failed to score marketing signal for %s; defaulting to 0",
-                content.bvid,
-            )
-            content.marketing_score = 0.0
+        # Marketing score already computed at the top of this method
+        # (heuristic, no LLM dependency). It's idempotent — running it
+        # again here would produce the same value — so we don't repeat.
 
         self._eval_cache[cache_key] = (
             score,
@@ -1459,6 +1446,37 @@ class ContentDiscoveryEngine:
         else:
             value = 0.0
         return max(0.0, min(1.0, round(value, 4)))
+
+    @staticmethod
+    def _score_marketing_for_content(content: DiscoveredContent) -> None:
+        """Compute and persist the 营销号 quality score on the content.
+
+        Pure heuristic — no LLM, no network. Called unconditionally
+        at the top of evaluate_content() so the score persists even
+        when the LLM service is unavailable (issue #54: marketing
+        scoring is a content-quality concern, separable from the
+        user-relevance concern that needs the LLM).
+
+        Idempotent. Safe to call multiple times — same input always
+        produces the same output.
+        """
+        try:
+            from openbiliclaw.recommendation.marketing_filter import (
+                score_marketing_signal,
+            )
+
+            marketing = score_marketing_signal(
+                content.title,
+                description=content.description,
+                tags=content.tags,
+            )
+            content.marketing_score = float(marketing.score)
+        except Exception:
+            logger.exception(
+                "Failed to score marketing signal for %s; defaulting to 0",
+                content.bvid or content.content_id or "<unknown>",
+            )
+            content.marketing_score = 0.0
 
     @staticmethod
     def _merge_duplicates(results: list[DiscoveredContent]) -> list[DiscoveredContent]:

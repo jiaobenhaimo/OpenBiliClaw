@@ -305,3 +305,121 @@ def test_content_cache_upsert_allows_raising_marketing_score() -> None:
         ).fetchone()
         assert abs(row["marketing_score"] - 0.9) < 1e-9
         db.close()
+
+
+# ── Tags signal (bug fix: parameter was previously dead) ──────────
+
+
+def test_tags_can_carry_marketing_signal() -> None:
+    """Tags now actually contribute to the score (the parameter was
+    declared in the signature and documented but never used in the
+    function body until issue #54 follow-up)."""
+    sober_title = "Linux kernel scheduler internals"
+    result = score_marketing_signal(sober_title, tags=["震惊", "教程"])
+    # The 震惊 tag should fire the 震惊式标题 pattern
+    assert result.score > 0
+    assert any("震惊" in r for r in result.reasons)
+
+
+def test_tags_and_title_same_label_deduplicates() -> None:
+    """When both title and tags fire the same pattern, the label
+    should only count once (no double-charge)."""
+    result = score_marketing_signal("震惊! 大事件", tags=["震惊", "突发"])
+    # 震惊式标题 should appear exactly once, not twice
+    assert result.reasons.count("震惊式标题") == 1
+
+
+def test_tags_accept_string_or_list() -> None:
+    """tags can be a list or a comma-separated string (the
+    content_cache.tags column is JSON-decoded into a list in some
+    code paths and left as a comma-string in others)."""
+    r_list = score_marketing_signal("ok", tags=["震惊", "真相"])
+    r_str = score_marketing_signal("ok", tags="震惊, 真相")
+    # Both should fire 震惊式标题 + 揭秘式词汇
+    assert r_list.score == r_str.score
+
+
+def test_tag_stuffing_signal_fires_at_eleven() -> None:
+    """11+ tags is unusual on B站 and signals content-farm batch
+    uploads. Low weight on its own, but stacks with other signals."""
+    r = score_marketing_signal(
+        "ordinary title",
+        tags=["a"] * 12,
+    )
+    assert any("标签堆砌" in x for x in r.reasons)
+
+
+def test_tag_stuffing_does_not_fire_below_eleven() -> None:
+    """3-6 tags is normal, 10 is still on the edge. Don't fire."""
+    r = score_marketing_signal("ordinary title", tags=["a"] * 10)
+    assert not any("标签堆砌" in x for x in r.reasons)
+
+
+# ── Backfill helper (issue #54 follow-up) ──────────────────────────
+
+
+def test_backfill_query_returns_only_unscored_rows() -> None:
+    """get_content_needing_marketing_score picks rows whose score is
+    still 0.0 (i.e. not yet evaluated). Rows with a non-zero score
+    are excluded — backfill is idempotent."""
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        db.cache_content("BVA", title="sober", description="", marketing_score=0.0)
+        db.cache_content("BVB", title="震惊", description="", marketing_score=0.85)
+        db.cache_content("BVC", title="another sober", description="", marketing_score=0.0)
+
+        needing = db.get_content_needing_marketing_score(limit=10)
+        bvids = {r["bvid"] for r in needing}
+        assert bvids == {"BVA", "BVC"}, f"expected BVA + BVC, got {bvids}"
+        db.close()
+
+
+def test_backfill_query_excludes_empty_titles() -> None:
+    """Empty-title rows would just score 0 anyway — exclude them so
+    the backfill iterator doesn't waste cycles on them."""
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        db.cache_content("BV1", title="", description="x")
+        db.cache_content("BV2", title="real title", description="")
+
+        needing = db.get_content_needing_marketing_score(limit=10)
+        bvids = {r["bvid"] for r in needing}
+        assert bvids == {"BV2"}, f"empty-title row should be excluded; got {bvids}"
+        db.close()
+
+
+def test_update_marketing_score_returns_true_on_match() -> None:
+    """The direct UPDATE helper returns True when it actually updated
+    a row, False when the bvid doesn't exist."""
+    import tempfile
+    from pathlib import Path
+
+    from openbiliclaw.storage.database import Database
+
+    with tempfile.TemporaryDirectory() as td:
+        db = Database(Path(td) / "test.db")
+        db.initialize()
+
+        db.cache_content("BVTGT", title="t", description="")
+        assert db.update_marketing_score("BVTGT", 0.5) is True
+        assert db.update_marketing_score("BVMISSING", 0.5) is False
+
+        row = db.conn.execute(
+            "SELECT marketing_score FROM content_cache WHERE bvid='BVTGT'"
+        ).fetchone()
+        assert abs(row["marketing_score"] - 0.5) < 1e-9
+        db.close()
