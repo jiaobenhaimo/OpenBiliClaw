@@ -11,6 +11,7 @@
 - **`openbiliclaw init` 自动兜底**：`_interactive_embedding_setup(auto_if_ready=True)` 检测到本机 Ollama 已运行且装有 bge-m3 时直接启用本地 embedding、跳过菜单；显式 `setup-embedding` 仍保留完整菜单以便切换 provider。
 - **修复一句话安装的死代码兜底**：`agent_bootstrap.py` 的 `auto_embedding_to_ollama` 此前声明后从未置 True（兜底等于失效），导致「主模型选 Claude/DeepSeek/OpenRouter（不能做 embedding）却没单独配 embedding」时 embedding 悬空。新增 `should_auto_wire_embedding()`：embedding 未配置、用户未显式 `--embedding-provider ""` 关闭、且非 Docker 时，自动写入 `provider=ollama, model=bge-m3` 并拉取模型。
 - 测试：新增 `embedding_ready` health 两例 + `should_auto_wire_embedding` 四例，后端 test_api_app / test_agent_bootstrap 全绿，扩展 typecheck 通过。
+- 文档：同步 `skills/search/SKILL.md`（从陈旧分支捞回 + 校准到当前实现）——纠正「并发搜索」实为顺序 + 0.5–1.0s 抖动延迟，补齐 v0.3.61+ storm-mode / cooldown 与 `v_voucher` 3× 内部重试说明，去掉文档里不存在的 `limit≤50` 钳制 / 长关键词截断 / `Retry-After` 解析等描述。
 
 ## v0.3.94 / extension v0.3.53: 推荐封面图加载白闪修复（三端）（2026-05-29）
 
