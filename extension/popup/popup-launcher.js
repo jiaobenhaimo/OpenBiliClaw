@@ -307,20 +307,20 @@ function renderRecommendations(items) {
     const duration = item.duration || "";
     const author = item.author || item.uploader || "";
 
-    return `<div class="rec-card" data-index="${i}" data-url="${url}">
+    return `<div class="rec-card" data-index="${i}" data-url="${escapeAttr(url)}">
       <div class="rec-cover">
-        ${coverUrl ? `<img src="${coverUrl}" alt="" loading="lazy" onerror="this.style.display='none'">` : "📹"}
+        ${coverUrl ? `<img src="${escapeAttr(coverUrl)}" alt="" loading="lazy" onerror="this.style.display='none'">` : "📹"}
       </div>
       <div class="rec-body">
         <div class="rec-title">${escapeHtml(title)}</div>
         <div class="rec-meta">
-          <span class="rec-source" data-source="${src}">${src}</span>
+          <span class="rec-source" data-source="${escapeAttr(src)}">${escapeHtml(src)}</span>
           ${author ? `<span>${escapeHtml(author)}</span>` : ""}
-          ${duration ? `<span>${duration}</span>` : ""}
+          ${duration ? `<span>${escapeHtml(duration)}</span>` : ""}
         </div>
         ${desc ? `<div class="rec-desc">${escapeHtml(desc)}</div>` : ""}
         <div class="rec-actions">
-          <button class="rec-action-btn open-video" data-url="${url}">打开</button>
+          <button class="rec-action-btn open-video" data-url="${escapeAttr(url)}">打开</button>
           <button class="rec-action-btn like-btn" data-index="${i}">👍 感兴趣</button>
         </div>
       </div>
@@ -395,6 +395,28 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/**
+ * Escape a value for safe inclusion inside an HTML attribute.
+ *
+ * escapeHtml() above is safe for text content (turns `<` `>` `&`
+ * into entities) but is NOT safe inside an attribute value: a
+ * payload like `" onclick="alert(1)` would close the attribute
+ * and inject an event handler. div.textContent intentionally does
+ * not escape `"` since quotes are valid inside text content.
+ *
+ * This helper covers the attribute case by additionally encoding
+ * `"`, `'`, and the slash for good measure.
+ */
+function escapeAttr(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /* ── Profile ───────────────────────────────────────────────────── */
 let profileLoaded = false;
 
@@ -439,11 +461,11 @@ function renderProfile(profile) {
     ${memory ? `<div class="memory-card"><div class="memory-label">近期记忆</div>${escapeHtml(memory)}</div>` : ""}
     <div class="profile-stat-row">
       <div class="profile-stat">
-        <div class="num">${stats.interactions || stats.items_discovered || "—"}</div>
+        <div class="num">${escapeHtml(String(stats.interactions || stats.items_discovered || "—"))}</div>
         <div class="label">互动</div>
       </div>
       <div class="profile-stat">
-        <div class="num">${stats.interests || stats.interests_mapped || "—"}</div>
+        <div class="num">${escapeHtml(String(stats.interests || stats.interests_mapped || "—"))}</div>
         <div class="label">兴趣</div>
       </div>
     </div>

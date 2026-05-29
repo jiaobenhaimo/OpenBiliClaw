@@ -9,6 +9,7 @@
 import { startCollector } from "./kernel.js";
 import { bilibiliAdapter, extractBvid } from "../shared/platforms/bilibili.js";
 import { installSpaWatcher } from "../shared/spa-watcher.js";
+import { apiUrl } from "../shared/backend-endpoint.ts";
 
 startCollector(bilibiliAdapter);
 
@@ -92,9 +93,10 @@ interface RepostLookup {
 
 async function lookupRepost(bvid: string): Promise<RepostLookup | null> {
   try {
-    const resp = await fetch(`/api/yt-replacer/lookup?bvid=${encodeURIComponent(bvid)}`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const resp = await fetch(
+      await apiUrl(`/yt-replacer/lookup?bvid=${encodeURIComponent(bvid)}`),
+      { signal: AbortSignal.timeout(5000) },
+    );
     if (!resp.ok) return null;
     return await resp.json();
   } catch {
@@ -116,7 +118,9 @@ async function getAutoRedirectEnabled(): Promise<boolean> {
   }
   let value = false;
   try {
-    const resp = await fetch("/api/config", { signal: AbortSignal.timeout(3000) });
+    const resp = await fetch(await apiUrl("/config"), {
+      signal: AbortSignal.timeout(3000),
+    });
     if (resp.ok) {
       const cfg = await resp.json();
       value = cfg.sources?.youtube?.auto_redirect_youtube === true;

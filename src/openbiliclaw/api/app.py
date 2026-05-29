@@ -3714,8 +3714,22 @@ def create_app(
         if recommendation is None:
             raise HTTPException(status_code=404, detail="Recommendation not found.")
 
+        # Resolve the canonical recommendation_id: when the caller
+        # submitted by bvid, payload.recommendation_id is None and the
+        # UPDATE below would silently match no rows. The row dict from
+        # the lookup above always carries the row's own id.
+        resolved_recommendation_id = payload.recommendation_id
+        if resolved_recommendation_id is None:
+            try:
+                resolved_recommendation_id = int(recommendation["id"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Recommendation row missing id.",
+                )
+
         ctx.database.update_recommendation_feedback(
-            payload.recommendation_id,
+            resolved_recommendation_id,
             feedback_type=feedback_type,
             feedback_note=note,
         )
