@@ -1,5 +1,5 @@
 // popup-launcher.js (ES module)
-// Self-contained popup panel for Safari — matches the side panel UI (推荐/个人/聊一聊)
+// Self-contained popup panel — matches the side panel UI (推荐/个人/聊一聊)
 // without requiring "open in new tab".
 // Imports API functions from popup-api.js for data fetching.
 

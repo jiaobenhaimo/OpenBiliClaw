@@ -99,19 +99,6 @@ const BOOTSTRAP_PER_ROUND_TIMEOUT_MS = 3_000;
 const BOOTSTRAP_MAX_TASK_TIMEOUT_MS = 360_000;
 const POLL_ALARM_NAME = "openbiliclaw-dy-task-poll";
 
-/**
- * Detect Safari by checking for the sidePanel API, which Safari does not
- * support. Without this check, every task dispatches a new foreground tab
- * on Safari (no sidePanel to hide in), flooding the user's browser with
- * tabs that never close cleanly.
- */
-function _isSafari(): boolean {
-  return (
-    typeof chrome.sidePanel === "undefined" ||
-    typeof (chrome.sidePanel as { open?: unknown }).open !== "function"
-  );
-}
-
 const KNOWN_SCOPES: readonly DouyinScope[] = [
   "dy_post",
   "dy_collect",
@@ -712,7 +699,7 @@ export async function executeTask(task: DyTask): Promise<void> {
     try {
       tab = await chrome.tabs.create({
         url: "https://www.douyin.com/",
-        active: _isSafari() ? false : shouldOpenDyTaskActive(task),
+        active: shouldOpenDyTaskActive(task),
       });
       debugLog("executeSearchTask:tab_created", { tabId: tab.id, keywords: keywords.length });
     } catch (err) {
@@ -761,7 +748,7 @@ export async function executeTask(task: DyTask): Promise<void> {
     try {
       tab = await chrome.tabs.create({
         url: "https://www.douyin.com/",
-        active: _isSafari() ? false : shouldOpenDyTaskActive(task),
+        active: shouldOpenDyTaskActive(task),
       });
       debugLog("executeHotTask:tab_created", { tabId: tab.id, hot_count: hotItems.length });
     } catch (err) {
@@ -802,7 +789,7 @@ export async function executeTask(task: DyTask): Promise<void> {
     try {
       tab = await chrome.tabs.create({
         url: "https://www.douyin.com/",
-        active: _isSafari() ? false : shouldOpenDyTaskActive(task),
+        active: shouldOpenDyTaskActive(task),
       });
       debugLog("executeFeedTask:tab_created", { tabId: tab.id });
     } catch (err) {
@@ -858,7 +845,7 @@ export async function executeTask(task: DyTask): Promise<void> {
   try {
     tab = await chrome.tabs.create({
       url: "https://www.douyin.com/",
-      active: _isSafari() ? false : shouldOpenDyTaskActive(task),
+      active: shouldOpenDyTaskActive(task),
     });
     debugLog("executeTask:tab_created", { tabId: tab.id });
   } catch (err) {
@@ -1159,7 +1146,6 @@ async function pollNextTask(): Promise<void> {
  * the result would be a torrent of redundant pollNextTask invocations.
  */
 export function startDyTaskPolling(): void {
-  if (_isSafari()) return;
   if (typeof chrome === "undefined" || !chrome.alarms) return;
   chrome.alarms.create(POLL_ALARM_NAME, {
     periodInMinutes: DEFAULT_POLL_INTERVAL_MS / 60_000,

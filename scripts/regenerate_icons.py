@@ -9,9 +9,7 @@ stay crisp.
 
 Targets:
     extension/icons/icon{16,48,128}.png         — WebExtension icons
-    safari/Extension/Resources/icons/icon{16,48,128}.png
         — same files, after they've been copied into the Xcode project
-    safari/App/Assets.xcassets/AppIcon.appiconset/icon_*.png
         — host app icon set (10 sizes from 16 through 1024)
 
 Run from the repo root:
@@ -133,8 +131,6 @@ APPICON_SLOTS = [
 
 def main(repo_root: Path) -> int:
     extension_icons = repo_root / "extension" / "icons"
-    safari_ext_icons = repo_root / "safari" / "Extension" / "Resources" / "icons"
-    appiconset = repo_root / "safari" / "App" / "Assets.xcassets" / "AppIcon.appiconset"
 
     # Cache renders so the same size isn't computed twice.
     cache: dict[int, Image.Image] = {}
@@ -144,11 +140,11 @@ def main(repo_root: Path) -> int:
             cache[size] = render(size)
         return cache[size]
 
-    # WebExtension icons (shared by the source folder and the Safari
+    # WebExtension icons (shared across extension/ source and build)
     # extension's bundled copy).
     for size in WEBEXTENSION_SIZES:
         name = f"icon{size}.png"
-        for out_dir in (extension_icons, safari_ext_icons):
+        for out_dir in (extension_icons,):
             if not out_dir.exists():
                 continue
             out_path = out_dir / name

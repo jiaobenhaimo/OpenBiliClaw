@@ -12,28 +12,16 @@ await import("./sync-launcher-protocol.mjs");
 
 const targetEnv = process.env.TARGET ?? "chrome";
 const isFirefox = targetEnv === "firefox";
-const isSafari = targetEnv === "safari";
 
-// esbuild --target flags. Safari uses MV3 only on 17.4+, so we target Safari 17.
-const buildTarget = isFirefox
-  ? "firefox140"
-  : isSafari
-    ? "safari17"
-    : "chrome120";
+// esbuild --target flags.
+const buildTarget = isFirefox ? "firefox140" : "chrome120";
 
-// Output directory per target. Safari mirrors the Firefox layout
-// (no `dist/` prefix in manifest paths) so the bundle drops directly into
-// the extension's resource root.
-const outDir = isFirefox
-  ? "dist-firefox"
-  : isSafari
-    ? "dist-safari"
-    : "dist";
+// Output directory per target.
+const outDir = isFirefox ? "dist-firefox" : "dist";
 
 const labelMap = {
   chrome: "Chrome/Edge",
   firefox: "Firefox",
-  safari: "Safari",
 };
 console.log(`\n🔨 Building for ${labelMap[targetEnv] ?? targetEnv} (target: ${buildTarget})\n`);
 
@@ -86,17 +74,16 @@ for (const target of entrypoints) {
   });
 }
 
-// For non-Chrome builds (Firefox / Safari) we lay out a self-contained
+// For non-Chrome builds (Firefox) we lay out a self-contained
 // resource directory: write the appropriate manifest with the version
 // injected from manifest.json (single source of truth), and stage popup/
 // and icons/ alongside the bundled scripts.
-if (isFirefox || isSafari) {
+if (isFirefox) {
   const chromeManifest = JSON.parse(
     await readFile(resolve(root, "manifest.json"), "utf-8"),
   );
-  const sourceManifestName = isFirefox ? "manifest.firefox.json" : "manifest.safari.json";
   const sourceManifest = JSON.parse(
-    await readFile(resolve(root, sourceManifestName), "utf-8"),
+    await readFile(resolve(root, "manifest.firefox.json"), "utf-8"),
   );
   // Preserve source manifest field order: insert version right after `name`.
   // Skip any pre-existing version field in the source manifest — the

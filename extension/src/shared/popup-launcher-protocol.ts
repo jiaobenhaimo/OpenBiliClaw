@@ -10,7 +10,7 @@
  * `npm run build`, which invokes it transparently).
  *
  * Why a separate file: popup-launcher.js is NOT a bundled esbuild
- * entrypoint — it's a plain-JS file copied verbatim into the safari
+ * entrypoint — it's a plain-JS file used directly by the browser
  * bundle. We don't want to make it a TS entrypoint (would force every
  * call site through the bundler and re-jig the asset copy logic), but
  * we also don't want the string typed twice and slowly drifting.
