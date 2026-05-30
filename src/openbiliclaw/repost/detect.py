@@ -188,8 +188,8 @@ def detect_youtube_from_bilibili(
     title_cjk = text.cjk_ratio(title)
     chinese_dominant = title_cjk > 0.30
 
-    combined = f"{title} {desc}"
-    origin_hits = [kw for kw in vocab.B_BILI_ORIGIN_KEYWORDS if kw.lower() in combined.lower()]
+    combined_low = f"{title} {desc}".lower()
+    origin_hits = [kw for kw in vocab.B_BILI_ORIGIN_KEYWORDS if kw.lower() in combined_low]
 
     # 2/3. CJK-dominant + bilibili-culture keyword(s).
     if chinese_dominant and origin_hits:

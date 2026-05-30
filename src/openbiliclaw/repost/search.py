@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import socket
 import time
 import urllib.parse
@@ -235,12 +236,10 @@ def find_bilibili_original(
         return None
 
     # B站 titles arrive with <em> highlight tags — strip before scoring.
-    import re as _re
-
     cleaned = []
     for entry in results:
         e = dict(entry)
-        e["_clean_title"] = _re.sub(r"<[^>]+>", "", str(e.get("title", "") or ""))
+        e["_clean_title"] = re.sub(r"<[^>]+>", "", str(e.get("title", "") or ""))
         cleaned.append(e)
 
     best_sim, best = _best_match(
@@ -296,5 +295,6 @@ def _best_match(
             author_sim = text.title_similarity(query_author, cand_author)
             sim = max(sim, sim * 0.8 + author_sim * 0.2)
         scored.append((sim, entry))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0]
+    # Only the single best is needed; max() states that directly and skips
+    # the full O(n log n) sort (n is small, but the intent is clearer).
+    return max(scored, key=lambda x: x[0])
