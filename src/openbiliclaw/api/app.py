@@ -2001,7 +2001,7 @@ def create_app(
             try:
                 import os as _os
 
-                from openbiliclaw.yt_replacer import replace_recommendation_row
+                from openbiliclaw.repost import replace_recommendation_row
 
                 data_dir = (
                     _os.path.dirname(str(ctx.config.storage.db_path))
@@ -2032,7 +2032,7 @@ def create_app(
                         # — comments add no value, and we'd be wasting an
                         # API call. ``is_likely_repost`` on title alone
                         # mimics the sync-path's first pass.
-                        from openbiliclaw.yt_replacer import is_likely_repost
+                        from openbiliclaw.repost import is_likely_repost
 
                         if is_likely_repost(title, description=description):
                             continue
@@ -5887,7 +5887,7 @@ def create_app(
     async def clear_yt_replacer_cache() -> dict[str, object]:
         """Clear the YouTube repost replacement cache (both in-memory and file)."""
         try:
-            from openbiliclaw.yt_replacer import clear_cache as _clear_yt_cache
+            from openbiliclaw.repost import clear_cache as _clear_yt_cache
 
             data_dir = str(ctx.config.data_path) if ctx.config.data_path else ""
             _clear_yt_cache(data_dir=data_dir)
@@ -5922,7 +5922,7 @@ def create_app(
         if not bvid:
             return {"repost": False, "yt_url": "", "pending": False}
         try:
-            from openbiliclaw.yt_replacer import replace_if_foreign
+            from openbiliclaw.repost import replace_if_foreign
 
             cursor = ctx.database.conn.execute(
                 "SELECT c.title, c.up_name, c.description FROM content_cache c WHERE c.bvid = ?",
@@ -5967,6 +5967,67 @@ def create_app(
         except Exception:
             logger.exception("YT replacer lookup failed for bvid=%s", bvid)
             return {"repost": False, "yt_url": "", "pending": False}
+
+    @app.get("/api/yt-replacer/reverse-lookup")
+    async def yt_replacer_reverse_lookup(
+        yt_id: str = Query(""),
+        title: str = Query(""),
+        description: str = Query(""),
+    ) -> dict[str, Any]:
+        """Direction B: check if a YouTube video is a re-upload of a
+        Bilibili original, and return the Bilibili link.
+
+        Parallel to ``/api/yt-replacer/lookup`` but the other way round.
+        Called by the extension when a user is on a YouTube watch page —
+        the extension passes the page's ``yt_id`` (used as the cache
+        key), ``title`` and ``description`` (the searchable content),
+        since YouTube videos aren't in the local content_cache.
+
+        Returns:
+          {
+            "repost": bool,        # Direction-B heuristic says it IS from B站
+            "bili_url": str,       # bilibili.com URL, or "" if unknown
+            "bvid": str,
+            "bili_title": str,
+            "bili_up_name": str,
+            "pending": bool,       # detected but bilibili unreachable; retry later
+          }
+        """
+        if not yt_id or not title:
+            return {"repost": False, "bili_url": "", "pending": False}
+        try:
+            from openbiliclaw.repost import RepostService
+
+            data_dir = str(ctx.config.data_path) if ctx.config.data_path else ""
+            svc = RepostService(
+                data_dir,
+                cache_ttl_hours=ctx.config.sources.youtube.yt_replacer_cache_ttl,
+            )
+            result = svc.link_youtube_to_bilibili(
+                yt_id, title, description=description
+            )
+            if result is None:
+                return {"repost": False, "bili_url": "", "pending": False}
+            if result.get("bili_url"):
+                return {
+                    "repost": True,
+                    "bili_url": result["bili_url"],
+                    "bvid": result.get("bvid", ""),
+                    "bili_title": result.get("bili_title", ""),
+                    "bili_up_name": result.get("bili_up_name", ""),
+                    "pending": False,
+                }
+            return {
+                "repost": bool(result.get("repost_detected")),
+                "bili_url": "",
+                "bvid": "",
+                "bili_title": "",
+                "bili_up_name": "",
+                "pending": bool(result.get("repost_detected")),
+            }
+        except Exception:
+            logger.exception("YT replacer reverse-lookup failed for yt_id=%s", yt_id)
+            return {"repost": False, "bili_url": "", "pending": False}
 
     @app.post("/api/yt-replacer/mark-as-repost")
     async def yt_replacer_mark_as_repost(
@@ -6027,7 +6088,7 @@ def create_app(
             data_dir = str(ctx.config.data_path) if ctx.config.data_path else ""
 
             if is_youtube:
-                from openbiliclaw.yt_replacer import replace_if_from_bilibili
+                from openbiliclaw.repost import replace_if_from_bilibili
 
                 result = replace_if_from_bilibili(
                     bvid,
@@ -6109,7 +6170,7 @@ def create_app(
                     "direction": "youtube_to_bilibili",
                 }
             else:
-                from openbiliclaw.yt_replacer import replace_if_foreign
+                from openbiliclaw.repost import replace_if_foreign
 
                 result = replace_if_foreign(
                     bvid,
