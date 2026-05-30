@@ -940,6 +940,206 @@ def run_capture(cmd: list[str], *, check: bool = True, cwd: Path | None = None) 
     return result
 
 
+SERVICE_CHECK_PROBE = r"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+
+async def main() -> None:
+    result = {
+        "services": {
+            "llm": {
+                "available": False,
+                "provider": "",
+                "error": "",
+            },
+            "embedding": {
+                "available": False,
+                "provider": "",
+                "model": "",
+                "skipped": False,
+                "error": "",
+            },
+        }
+    }
+
+    cfg = None
+    registry = None
+    try:
+        from openbiliclaw.config import load_config
+        from openbiliclaw.llm.registry import build_llm_registry
+
+        cfg = load_config()
+        registry = build_llm_registry(cfg)
+        provider = str(cfg.llm.default_provider or registry.default_provider).strip().lower()
+        result["services"]["llm"]["provider"] = provider
+        response = await registry.complete_provider(
+            provider,
+            [{"role": "user", "content": "Reply with OK only."}],
+            temperature=0,
+            max_tokens=8,
+        )
+        if str(getattr(response, "content", "") or "").strip():
+            result["services"]["llm"]["available"] = True
+        else:
+            result["services"]["llm"]["error"] = "empty completion response"
+    except Exception as exc:
+        result["services"]["llm"]["error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        from openbiliclaw.config import load_config
+        from openbiliclaw.llm.registry import build_embedding_service, build_llm_registry
+
+        if cfg is None:
+            cfg = load_config()
+        if registry is None:
+            registry = build_llm_registry(cfg)
+
+        embedding_cfg = cfg.llm.embedding
+        provider = str(embedding_cfg.provider or "").strip().lower()
+        model = str(embedding_cfg.model or "").strip()
+        result["services"]["embedding"]["provider"] = provider
+        result["services"]["embedding"]["model"] = model
+        if not provider:
+            result["services"]["embedding"]["available"] = True
+            result["services"]["embedding"]["skipped"] = True
+        else:
+            embedding_service = build_embedding_service(cfg, registry)
+            if embedding_service is None:
+                result["services"]["embedding"]["error"] = (
+                    "embedding service could not be built"
+                )
+            else:
+                vector = await embedding_service.embed("openbiliclaw bootstrap embedding check")
+                if vector:
+                    result["services"]["embedding"]["available"] = True
+                else:
+                    result["services"]["embedding"]["error"] = "empty embedding vector"
+    except Exception as exc:
+        result["services"]["embedding"]["error"] = f"{type(exc).__name__}: {exc}"
+
+    print(json.dumps(result, ensure_ascii=False))
+
+
+asyncio.run(main())
+"""
+
+
+def build_service_check_command(mode: str, project_dir: Path) -> list[str]:
+    """Build the command that probes LLM + embedding readiness."""
+
+    if mode == "docker":
+        return [
+            "docker",
+            "exec",
+            "-i",
+            DOCKER_CONTAINER_NAME,
+            "python",
+            "-c",
+            SERVICE_CHECK_PROBE,
+        ]
+
+    if detect_uv():
+        return ["uv", "run", "python", "-c", SERVICE_CHECK_PROBE]
+
+    if os.name == "nt":
+        venv_python = project_dir / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = project_dir / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return [str(venv_python), "-c", SERVICE_CHECK_PROBE]
+    return [sys.executable, "-c", SERVICE_CHECK_PROBE]
+
+
+def _parse_service_check_output(stdout: str) -> dict[str, Any]:
+    """Parse the JSON payload from the service-check probe."""
+
+    for line in reversed(stdout.splitlines()):
+        text = line.strip()
+        if not (text.startswith("{") and text.endswith("}")):
+            continue
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    raise ValueError("service check probe did not return JSON")
+
+
+def _normalize_service_entry(raw: Any) -> dict[str, Any]:
+    entry = dict(raw) if isinstance(raw, dict) else {}
+    entry["available"] = bool(entry.get("available", False))
+    entry["provider"] = str(entry.get("provider", "") or "")
+    entry["model"] = str(entry.get("model", "") or "")
+    entry["error"] = str(entry.get("error", "") or "")
+    if "skipped" in entry:
+        entry["skipped"] = bool(entry.get("skipped"))
+    return entry
+
+
+def _service_check_command_failed_result(command: list[str], result: CommandResult) -> dict[str, Any]:
+    error = (result.stderr or result.stdout or "service check command failed").strip()
+    services = {
+        "llm": {
+            "available": False,
+            "provider": "",
+            "model": "",
+            "error": error,
+        },
+        "embedding": {
+            "available": False,
+            "provider": "",
+            "model": "",
+            "skipped": False,
+            "error": error,
+        },
+    }
+    return {
+        "available": False,
+        "failed": ["llm", "embedding"],
+        "services": services,
+        "command": shlex.join(command),
+        "returncode": result.returncode,
+    }
+
+
+def run_pre_init_service_checks(
+    project_dir: Path,
+    mode: str,
+    *,
+    runner: Callable[[list[str]], CommandResult] = run_capture,
+) -> dict[str, Any]:
+    """Probe required AI services before auto-running init."""
+
+    command = build_service_check_command(mode, project_dir)
+    result = runner(command, check=False, cwd=project_dir)
+    if result.returncode != 0:
+        return _service_check_command_failed_result(command, result)
+
+    try:
+        payload = _parse_service_check_output(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        failed = CommandResult(returncode=1, stdout=result.stdout, stderr=str(exc))
+        return _service_check_command_failed_result(command, failed)
+
+    raw_services = payload.get("services", {})
+    services = {
+        "llm": _normalize_service_entry(
+            raw_services.get("llm", {}) if isinstance(raw_services, dict) else {}
+        ),
+        "embedding": _normalize_service_entry(
+            raw_services.get("embedding", {}) if isinstance(raw_services, dict) else {}
+        ),
+    }
+    failed_services = [name for name, service in services.items() if not service["available"]]
+    return {
+        "available": not failed_services,
+        "failed": failed_services,
+        "services": services,
+        "command": shlex.join(command),
+        "returncode": result.returncode,
+    }
+
+
 def run_streaming(
     cmd: list[str],
     *,
@@ -1274,6 +1474,31 @@ def apply_llm_base_url(project_dir: Path, provider: str, base_url: str) -> None:
 
 def apply_llm_model(project_dir: Path, provider: str, model: str) -> None:
     update_config_secret(project_dir / "config.toml", f"llm.{provider}", "model", model)
+
+
+def should_auto_wire_embedding(
+    *, embedding_provider_arg: str | None, effective_provider: str, mode: str
+) -> bool:
+    """Whether bootstrap should default ``[llm.embedding]`` to local Ollama.
+
+    v0.3.95+: embedding is fully decoupled from the chat provider, so a
+    flag-driven install that never passed ``--embedding-*`` — or one whose
+    chat provider can't embed (Claude / DeepSeek / OpenRouter) — would
+    leave embedding unconfigured and silently disable semantic dedup.
+
+    Returns ``True`` only when embedding is unconfigured AND the user did
+    not explicitly disable it (``--embedding-provider ""``) AND we're not
+    under Docker (the container can't reach the host's Ollama at
+    ``localhost``).
+    """
+    if mode == "docker":
+        return False
+    explicitly_disabled = embedding_provider_arg is not None and not (
+        embedding_provider_arg or ""
+    ).strip()
+    if explicitly_disabled:
+        return False
+    return not effective_provider.strip()
 
 
 def apply_embedding_config(
@@ -2113,6 +2338,50 @@ def run(args: argparse.Namespace) -> int:
         mode = "docker" if detect_docker() else "local"
     emit(BootstrapResult("ok", "mode_selected", {"mode": mode}))
 
+    # v0.3.95+: revive the embedding→Ollama safety net. Embedding is fully
+    # decoupled from the chat provider (v0.3.32+), so an install that sets
+    # a chat-only provider (Claude / DeepSeek / OpenRouter can't embed) —
+    # or any flag-driven run that never passed --embedding-* — would leave
+    # [llm.embedding].provider empty, silently disabling semantic dedup and
+    # letting near-duplicate content slip through. The old flag was declared
+    # but never set, so the net was dead. Wire it for real. Skipped under
+    # Docker (the container would point at its own localhost, not the host's
+    # Ollama) and when the user explicitly disabled embedding by passing
+    # --embedding-provider "".
+    effective_embedding_provider = str(
+        read_simple_toml(project_dir / "config.toml")
+        .get("llm", {})
+        .get("embedding", {})
+        .get("provider", "")
+    ).strip()
+    if should_auto_wire_embedding(
+        embedding_provider_arg=args.embedding_provider,
+        effective_provider=effective_embedding_provider,
+        mode=mode,
+    ):
+        apply_embedding_config(
+            project_dir,
+            provider="ollama",
+            model="bge-m3",
+            base_url=None,
+            api_key=None,
+        )
+        auto_embedding_to_ollama = True
+        emit(
+            BootstrapResult(
+                "ok",
+                "embedding_auto_ollama",
+                {
+                    "provider": "ollama",
+                    "model": "bge-m3",
+                    "reason": (
+                        "embedding was unconfigured; defaulted to local Ollama bge-m3 "
+                        "so semantic dedup isn't silently disabled"
+                    ),
+                },
+            )
+        )
+
     # When the user picks ollama for either LLM or embedding, the install
     # isn't really "done" until ollama is installed, the daemon is running,
     # and the requested models are pulled. Without this step the user
@@ -2276,6 +2545,31 @@ def run(args: argparse.Namespace) -> int:
                     + ", ".join(init_decisions["missing"])
                 )
                 return 0
+
+            info("Checking LLM provider and embedding service before init...")
+            service_checks = run_pre_init_service_checks(project_dir, mode)
+            if not service_checks["available"]:
+                emit(
+                    BootstrapResult(
+                        "service_check_failed",
+                        "pre_init_service_check_failed",
+                        {**health_details, "service_checks": service_checks},
+                    )
+                )
+                failed = ", ".join(service_checks.get("failed", [])) or "unknown"
+                info(
+                    "Pre-init AI service check failed for: "
+                    f"{failed}. Fix the provider/API key/Ollama/model, then re-run "
+                    "the printed bootstrap command. Init has not been run."
+                )
+                return 0
+            emit(
+                BootstrapResult(
+                    "ok",
+                    "pre_init_service_check_passed",
+                    {**health_details, "service_checks": service_checks},
+                )
+            )
 
             info(
                 "All credentials present — running 'openbiliclaw init' to reach usable state... "

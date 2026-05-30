@@ -401,12 +401,11 @@ class RuntimeContext:
         from openbiliclaw.recommendation.curator import PoolCurator
 
         # The 营销号 demote weight is read from
-        # [recommendation] marketing_filter_demote_weight; default 8.0
-        # is calibrated so a fully-clickbait video (score 1.0) loses
-        # 8 points off its rec_score, usually enough to bury it
-        # without removing it entirely. Set the weight to 0 in
-        # config to disable the soft demote (the delight-push
-        # block still applies separately).
+        # [recommendation] marketing_filter_demote_weight; default 8.0.
+        # See config.RecommendationConfig for the tuning note (with the
+        # max(0, score) clamp this effectively floors detected 营销号
+        # candidates at the bottom of the ranking). Set the weight to 0
+        # in config to disable the demote.
         new_curator = PoolCurator(
             self.database,
             marketing_demote_weight=float(
@@ -417,12 +416,19 @@ class RuntimeContext:
                 )
             ),
         )
+
+        def _xhs_self_info_provider() -> dict[str, object] | None:
+            state = self.memory_manager.load_discovery_runtime_state()
+            info = state.get("xhs_self_info")
+            return info if isinstance(info, dict) else None
+
         new_recommendation_engine = RecommendationEngine(
             llm=new_llm_service,
             database=self.database,
             curator=new_curator,
             embedding_service=new_embedding_service,
             task_registry=self.task_registry,
+            xhs_self_info_provider=_xhs_self_info_provider,
         )
 
         # 7. Discovery engine + strategies

@@ -83,10 +83,14 @@ export function getRecommendationCoverPreloadUrls(items, { start = 0, limit = 12
 
 export function getRecommendationImageLoadingAttrs(
   index,
-  { eagerCount = 12, highPriorityCount = 2 } = {},
+  { eagerCount = Infinity, highPriorityCount = 2 } = {},
 ) {
+  // Default eagerCount is Infinity: every cover loads eagerly so a card slid into
+  // view on scroll never shows the white placeholder while a native lazy <img>
+  // defers its fetch. Pass a finite eagerCount to opt back into a lazy tail.
   const safeIndex = Math.max(0, Math.trunc(coerceNumber(index) ?? 0));
-  const safeEagerCount = Math.max(0, Math.trunc(coerceNumber(eagerCount) ?? 0));
+  const eagerRaw = coerceNumber(eagerCount);
+  const safeEagerCount = eagerRaw === null ? Infinity : Math.max(0, Math.trunc(eagerRaw));
   const safeHighPriorityCount = Math.max(0, Math.trunc(coerceNumber(highPriorityCount) ?? 0));
   if (safeIndex < safeEagerCount) {
     return {

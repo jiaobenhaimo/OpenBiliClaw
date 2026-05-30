@@ -4,6 +4,70 @@
 
 ---
 
+## 可编辑用户画像 · Phase 2/3：插件 + Web 编辑 UI（2026-05-29）
+
+- **三端可编辑画像 UI**：插件 side panel、移动 Web（`/m`）、桌面 Web（`/web`）画像页都新增「编辑画像」开关，进入后是由未截断的 `GET /api/profile/edit-state` 驱动的编辑面板——chip 增删（核心特质 / 深层需求 / 价值观 / 内在驱动 / 认知风格 / 常看 UP）、兴趣树领域增删（喜欢 / 不喜欢）、长文改写（人格素描 / 人生阶段 / 当前阶段）。
+- **确定性 + 可撤销**：每个控件 POST 一次 `/api/profile/edit`，从返回的 `edit_state` 即时重渲染；文本固定项显示「AI 想更新此项」漂移建议，任一改过的字段可「恢复 AI 建议」（reset）。编辑抗画像重建（后端覆盖层）。
+- **覆盖三套前端**：实现时发现桌面 Web（`/web`，`web/desktop/`）与移动 SPA（`/m`，`web/`）是**两套独立前端**（Phase 1 设计文档曾误以为同一套），本期分别接入；插件为第三套。
+- 测试：插件新增 `tests/popup-profile-edit.test.ts`（typecheck + 347 例全绿）；三端 JS `node --check` 通过；后端编辑 API over-the-wire E2E 13/13。对应 issue #19。
+
+## 可编辑用户画像 · Phase 1：后端覆盖层（2026-05-29）
+
+- **新增 `soul/overrides.py` 覆盖层**：用户对画像的手动编辑写入独立 `data/memory/profile_overrides.json`，AI 画像照常存 `soul.json`。**有效画像 = AI 画像 ⊕ 用户覆盖**，在读收口 `SoulEngine.get_profile()` 与镜像收口 `MemoryManager.sync_profile_files()` 叠加——三条画像重建落点不变，用户编辑天然不被重建覆盖。
+- **确定性字段级编辑**：`apply_edit` 归约器支持文本固定、标量固定、列表增删、兴趣树增删/权重固定，含校验与 add/remove 互斥；`apply_overrides` 纯函数确定性合并，列表 remove 持续抑制 AI 再次推断出的同项。
+- **删/拉黑真实影响推荐**：用户加入 `interest.dislikes` 的项经 `get_effective_disliked_topics()`（base-then-overlay，remove 最后生效，不被 raw preference 反向打穿）驱动 proactive delight 硬过滤；新增拉黑还会复用 `purge_pool_for_new_dislikes` 清掉已入池命中内容（按编辑前后差集触发，重复添加不重复清池）。
+- **新增 API**：`POST /api/profile/edit`（一次确定性编辑，非法输入 422，返回最新 edit-state）、`GET /api/profile/edit-state`（**未截断**全量可编辑字段 + 覆盖标注 + 文本/标量固定项的 AI 漂移建议，编辑 UI 数据源）；`GET /api/profile-summary` 新增 `overrides` 标注（展示态，保持截断、向后兼容）。
+- **两套 speculator 同步**：手动 like add/remove 同步正向 `InterestSpeculator`，dislike add/remove 同步 `AvoidanceSpeculator`，避免画像与猜测系统打架；每次编辑记一条 `source=manual` cognition。
+- 测试：新增 `tests/test_overrides.py` 等共约 30 例（合并 / 抗重建 / 校验 / 有效 dislikes / 清池差集 / speculator 同步 / API 全量与截断）；后端 1843 passed 全绿，改动文件 ruff + mypy 干净。
+- 说明：本期仅后端；插件端与 PC/移动 Web 编辑 UI 为 Phase 2/3。设计与实现计划见 `docs/plans/2026-05-29-editable-profile-design.md` 与 `docs/plans/2026-05-29-editable-profile.md`。对应 issue #19。
+
+## v0.3.95 / extension v0.3.54: embedding 默认值兜底 + 语义去重未启用提示（2026-05-29）
+
+- 修复「embedding 服务静默禁用 → 刷到换皮重复视频」的根因。bvid 级去重一直 100% 生效（同一 bvid 不会重复推荐），但同一内容的不同 ID（跨平台镜像 / 转载 / 同名系列）只能靠 embedding 语义去重 catch，而 embedding 一旦悬空就只剩日志一行警告、用户无感知。
+- **新增 `/api/health` 的 `embedding_ready` 字段**：插件 popup 在 embedding 未启用时显示一条可关闭的提示横幅，「一键启用本地 Ollama」按钮直接 PUT `/api/config` 热加载并复检 health，成功才收起横幅（`fetchHealth` + `maybeShowEmbeddingBanner`）。
+- **`openbiliclaw init` 自动兜底**：`_interactive_embedding_setup(auto_if_ready=True)` 检测到本机 Ollama 已运行且装有 bge-m3 时直接启用本地 embedding、跳过菜单；显式 `setup-embedding` 仍保留完整菜单以便切换 provider。
+- **修复一句话安装的死代码兜底**：`agent_bootstrap.py` 的 `auto_embedding_to_ollama` 此前声明后从未置 True（兜底等于失效），导致「主模型选 Claude/DeepSeek/OpenRouter（不能做 embedding）却没单独配 embedding」时 embedding 悬空。新增 `should_auto_wire_embedding()`：embedding 未配置、用户未显式 `--embedding-provider ""` 关闭、且非 Docker 时，自动写入 `provider=ollama, model=bge-m3` 并拉取模型。
+- 测试：新增 `embedding_ready` health 两例 + `should_auto_wire_embedding` 四例，后端 test_api_app / test_agent_bootstrap 全绿，扩展 typecheck 通过。
+- 文档：同步 `skills/search/SKILL.md`（从陈旧分支捞回 + 校准到当前实现）——纠正「并发搜索」实为顺序 + 0.5–1.0s 抖动延迟，补齐 v0.3.61+ storm-mode / cooldown 与 `v_voucher` 3× 内部重试说明，去掉文档里不存在的 `limit≤50` 钳制 / 长关键词截断 / `Retry-After` 解析等描述。
+
+## v0.3.94 / extension v0.3.53: 推荐封面图加载白闪修复（三端）（2026-05-29）
+
+- 修复推荐封面图在向下滚动 / 加载更多时「先白一下再出来」的问题（三端）：移动 Web 封面改为全部 eager 加载、滚动预热窗口扩到 16 张 / 2400px；桌面 Web 封面 `lazy→eager` 并在「加载更多」前预解码新封面（`warmCoverImages`）；插件 popup 续页前预解码封面（`preloadCoverImages`）、自动加载阈值 96px→600px。封面在卡片进入视口前完成下载+解码，渲染即出图，不再露白底。
+- 测试：扩展 344 passed、移动/桌面 Web JS 的 python 套件 31 passed 全绿。
+
+## v0.3.93 / extension v0.3.52: 独立收藏夹与稍后再看浏览页（2026-05-29）
+
+- 新增独立「收藏夹」功能：`favorites` SQLite 表（`_ensure_favorites_table` 自动 migration）+ 5 个 DB 方法 + 4 个 API 端点（POST / DELETE / GET 单条 + GET 列表，列表带 `limit/offset` 422 校验）。收藏与稍后再看是两个互相独立的本地集合，一个视频可同时/分别/都不在其中。Pydantic 模型 `Favorite{AddIn,StateResponse,Item,ListResponse}`。
+- 三端均补齐收藏入口 + 浏览页：移动 Web 底部导航新增「收藏」tab（`initFavoritesView`）、桌面 Web 侧边栏「我的收藏」页（`favoritesBtn/favoritesPage/favoritesCountBadge`）、插件 popup 新增「收藏」tab（`viewFavorites/favoritesList`/`loadFavorites`）。推荐卡与 delight 卡均加 ♡/♥ toggle（乐观 UI、失败回退、懒加载状态）。
+- 补完稍后再看「浏览页」（此前只有 ☆ toggle）：移动 Web「稍后」tab、桌面 Web「稍后再看」页 + 数量徽章、`fetchWatchLater` 列表 helper。移动端 `views/saved.js` 与桌面 `renderSavedList` 让稍后再看 / 收藏复用同一套已存内容列表组件。
+- 修复 `GET /api/watch-later` 缺少分页参数校验：`limit/offset` 改用 `Query(ge=...)`，非法值返回 422。
+- 测试：新增 `tests/test_favorites_api.py`（CRUD / 分页 / 校验 / 与稍后再看互相独立）+ 6 项扩展前端测试（`web-favorites.test.ts` + popup-api favorites helper）。修复 `test_api_app.py` 中 `FakeDatabase.get_recommendations` mock 缺 `exclude_processed` 参数导致的 2 项历史失败。后端 1793 passed、扩展 344 passed 全绿。
+- 文档：新增 `docs/specs/favorites.md`，更新 `docs/specs/watch-later.md`（浏览页已实现）。
+- UI 打磨（端到端真实数据验收）：
+  - 图标语义统一为 **收藏 = ⭐星星 / 稍后再看 = 🕐时钟**（一眼可辨），全部改用与「点赞/点踩」同款的 SVG 图标族（line-icon），不再用 ☆/♥ Unicode 字形与 SVG 混排。桌面端推荐卡 + 惊喜横幅的收藏/稍后**回到底部反馈行内**和喜欢/不喜欢正常并排展示（先前移到封面右上角的方案因不够美观已撤掉）；状态由 `aria-pressed` + CSS 驱动（星星选中填充金色 `#e8a33d`、时钟选中 accent 色），不再做字形替换。
+  - 移动端推荐卡的收藏/稍后保留封面右上角玻璃态 chip（小屏更省空间），图标同步为时钟/星星 SVG；惊喜 tray 的两个保存键为紧凑 SVG 图标。底部 tab 图标：稍后=🕐、收藏=⭐。
+  - 侧边栏「我的收藏 / 稍后再看」导航、移动端「收藏 / 稍后」列表页的头部与空态图标全部同步为星星 / 时钟；各处空态文案不再提 ☆/♥。
+  - 收藏/稍后浏览页的「移除」由橙色实心按钮改为安静的 ghost 描边按钮。
+
+## v0.3.92 / extension v0.3.51: OR-join 去重修复与稍后再看功能（2026-05-28）
+
+- 文档：全面重绘 `soul`、`recommendation` 与 Web HTML 三个模块的 HTML 架构图 / 流程图，并在文档导航和架构说明中补齐可视化入口。
+- 修复 `recommendations ↔ content_cache` 的 6 处 OR-join（`ON c.bvid = r.bvid OR c.content_id = r.bvid`）在多平台内容下产生重复行的问题，改用 COALESCE 子查询保证每条推荐最多匹配一条 content_cache 行。同时修复 curator 的 topic / UP / franchise fatigue 计算因重复行被放大的问题。
+- `get_recommendations()` 新增 `exclude_processed` 参数，API 层传 `True` 排除已反馈推荐，activity_feed 等调用者保持原行为。
+- 新增「稍后再看」本地书签功能：`watch_later` SQLite 表 + 4 个 API 端点（POST / DELETE / GET 单条 + GET 列表）。移动 Web、桌面 Web、插件 popup 的推荐卡和 delight 卡均增加 ☆/★ toggle 按钮，支持乐观 UI、失败回退和懒加载状态同步。
+- 感谢 [@jiaobenhaimo](https://github.com/jiaobenhaimo)（[#53](https://github.com/whiteguo233/OpenBiliClaw/pull/53)）发现 OR-join 重复行问题并提出稍后再看功能设计。
+
+## v0.3.91 / extension v0.3.50: XHS 自发布内容推荐池过滤（2026-05-27）
+
+- 一句话安装的 `agent_bootstrap.py` 在自动运行 `openbiliclaw init` 前新增 LLM provider + embedding 服务真实轻量校验；任一失败会返回 `service_check_failed` 并阻止 init，提示用户修 API key / base_url / model / Ollama 后重跑，避免生成空画像或半残推荐池。
+- 修复移动 Web 消息区避雷探针按钮竞态：点击「确实不喜欢」后会立即锁住同一卡片的其它动作，避免继续点「不是」形成 confirm + reject 双请求；后端只在 active 探针真实命中时写入 `probe_feedback_history` / `avoidance_probe_feedback_history`，stale 点击不再污染反馈历史。
+- 修复移动 Web 消息收件箱空态关闭失效：空消息提示不再用 `panel.innerHTML +=` 重建整个面板，避免清掉 X 按钮的 click handler。
+- 修复小红书登录用户自己发布的笔记被推荐回给自己的问题：`get_pool_candidates` / `count_pool_candidates` / `count_pool_readiness` 及后台整理查询（evaluation / copy / delight）在 SQL 层增加 self-author guard，排除 `up_name` 或 `author_name` 匹配自身昵称的小红书行；Bilibili 等其他平台不受影响，空昵称为安全 no-op。
+- `_purge_self_authored_pool_items` 现在同时匹配 `up_name` 和 `author_name` 两列（此前只查 `up_name`），改昵称后旧行也能被清理。
+- `_persist_xhs_self_info` 在 self_info 首次到达或内容变更时立即触发一次 purge，缩短"self_info 未到达"窗口期内自发布内容停留在池中的时间。
+- `RecommendationEngine` 新增 `xhs_self_info_provider` 回调参数；`RuntimeContext`、`ContinuousRefreshController` 和 CLI 推荐引擎构造处均已接入，`Database` 保持纯存储层不直接读 runtime state。
+- 新增 4 项 DB 层单元测试 + 2 项 API 层测试 + 4 项端到端生命周期测试（含大小写不敏感、幂等、昵称变更场景）。
+
 ## v0.3.91 / extension v0.3.49: 挑战式兴趣探针与跨源推荐点击修复（2026-05-25）
 
 - 安全清理：移除误提交的 `config.toml.bak`，并将 `config.toml.*` 加入 ignore，避免本地配置备份文件再次进入版本库。
@@ -20,6 +84,7 @@
 - 插件 side panel、移动 Web 和桌面 Web 的消息区把普通 `near` 兴趣探针、`lateral/bridge/wildcard` 挑战探针和避雷探针分成不同视觉语义与提示文案：普通兴趣用于“继续探索”，挑战探针提示“把口味往侧边推一点”，避雷用于“少看这类 / 猜错点不是”。
 - 移动 Web 推荐页首屏请求增加超时兜底：推荐 / 惊喜推荐最多等待 12 秒，runtime status / activity 最多等待 5 秒；推荐接口慢或暂时失败时会结束 loading 并显示当前可用状态，避免手机端一直停在加载中。
 - 移动 Web 推荐页加载优化：`recommendations.created_at/id` 与 `content_cache.content_id` 增加读取索引，修复 `/api/recommendations` 的双表扫描；推荐页首屏先渲染 `/api/recommendations` 结果，再异步补 runtime status / activity / delight，消息 badge 首次加载不再额外拉取未使用的 delight batch。
+- 插件 side panel 与移动 Web 不再把后台 `refresh.pool_updated` 当成推荐列表全量重拉信号；该事件现在只同步池子状态 / header，用户向下滚动 append 出来的历史卡片不会被 `/api/recommendations` 最新前 20 条覆盖，只有主动“换一批”、初始化或重连类全量 hydration 才替换列表。
 
 ## v0.3.91 / extension v0.3.47: 真实可换库存口径修正 + 不喜欢领域探针（2026-05-24）
 

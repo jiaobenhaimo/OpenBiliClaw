@@ -17,6 +17,12 @@ import {
   startChatTurn,
   fetchChatTurn,
   fetchChatTurns,
+  addToWatchLater,
+  removeFromWatchLater,
+  watchLaterStatus,
+  addToFavorite,
+  removeFromFavorite,
+  favoriteStatus,
 } from "../api.js";
 import { state, patchState } from "../state.js";
 import {
@@ -57,12 +63,15 @@ const feedbackDone = new Map(); // recId -> "like" | "dislike" | "comment"
 // star should stay filled. Populated lazily: each card fires off a
 // GET /api/watch-later/{bvid} on first render and toggles the local
 // entry optimistically on click.
-const watchLaterSaved = new Set();
+const watchLaterSaved = new Set(); // bvid strings currently bookmarked
+let watchLaterBusy = false; // mutex for toggle requests
+const favoriteSaved = new Set(); // bvid strings currently favorited
+let favoriteBusy = false; // mutex for favorite toggle requests
 const COVER_PRELOAD_BATCH_SIZE = 12;
 const COVER_PRELOAD_WAIT_TIMEOUT_MS = 3000;
 const AUTO_APPEND_ROOT_MARGIN = "700px 0px 1400px 0px";
-const SCROLL_PREHEAT_LOOKAHEAD = 8;
-const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 1200px 0px";
+const SCROLL_PREHEAT_LOOKAHEAD = 16;
+const SCROLL_PREHEAT_ROOT_MARGIN = "0px 0px 2400px 0px";
 const warmedCoverUrls = new Set();
 const decodedCoverUrls = new Set();
 const warmingImages = new Map();
@@ -72,10 +81,6 @@ let autoAppendExhausted = false;
 let autoAppendUserArmed = false;
 let autoAppendTouchY = null;
 let autoAppendIntentInitialized = false;
-const RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS = 1000;
-let recommendationItemsRefreshTimer = null;
-let recommendationItemsRefreshInFlight = false;
-let recommendationItemsRefreshPending = false;
 
 // ── Escape helper ────────────────────────────────────────────
 function esc(s) {
@@ -421,6 +426,8 @@ function renderDelightTray() {
     const btns = [
       { label: "\u770B\u770B", action: "view" },
       { label: "\u559C\u6B22", action: "like" },
+      { label: "\u2606", action: "watch-later" },
+      { label: "\u2661", action: "favorite" },
       { label: "\u4E0D\u611F\u5174\u8DA3", action: "reject" },
       // 稍后再看: star toggle that uses the same /api/watch-later
       // endpoint as the recommendation row, so a delight card and a
@@ -436,12 +443,80 @@ function renderDelightTray() {
     for (const b of btns) {
       const btn = document.createElement("button");
       btn.className = `btn ${b.action === "view" ? "btn-brand" : "btn-outline"}`;
-      btn.textContent = b.label;
-      btn.addEventListener("click", () => handleDelightAction(d, b.action));
-      if (isChatState && (b.action === "like" || b.action === "reject")) {
-        btn.disabled = true;
+      // 稍后再看 = 时钟 / 收藏 = 星星，紧凑 SVG 图标按钮，状态走 aria-pressed。
+      if (b.action === "watch-later" || b.action === "favorite") {
+        btn.classList.add("delight-save-toggle");
+        btn.classList.add(b.action === "favorite" ? "favorite-btn" : "watch-later-btn");
+        btn.innerHTML = b.action === "favorite" ? STAR_SVG_ICON : CLOCK_SVG_ICON;
+        btn.setAttribute("aria-pressed", "false");
+      } else {
+        btn.textContent = b.label;
       }
-      actions.appendChild(btn);
+      if (b.action === "watch-later") {
+        let busy = false;
+        btn.title = "稍后再看";
+        btn.addEventListener("click", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = watchLaterSaved.has(d.bvid);
+          btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+          try {
+            if (wasSaved) {
+              await removeFromWatchLater(d.bvid);
+              watchLaterSaved.delete(d.bvid);
+            } else {
+              await addToWatchLater(d.bvid);
+              watchLaterSaved.add(d.bvid);
+            }
+          } catch {
+            btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          } finally {
+            busy = false;
+          }
+        });
+        if (watchLaterSaved.has(d.bvid)) btn.setAttribute("aria-pressed", "true");
+        watchLaterStatus(d.bvid).then((res) => {
+          if (res && res.saved) {
+            watchLaterSaved.add(d.bvid);
+            btn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      } else if (b.action === "favorite") {
+        let busy = false;
+        btn.title = "收藏";
+        btn.addEventListener("click", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = favoriteSaved.has(d.bvid);
+          btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+          try {
+            if (wasSaved) {
+              await removeFromFavorite(d.bvid);
+              favoriteSaved.delete(d.bvid);
+            } else {
+              await addToFavorite(d.bvid);
+              favoriteSaved.add(d.bvid);
+            }
+          } catch {
+            btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          } finally {
+            busy = false;
+          }
+        });
+        if (favoriteSaved.has(d.bvid)) btn.setAttribute("aria-pressed", "true");
+        favoriteStatus(d.bvid).then((res) => {
+          if (res && res.saved) {
+            favoriteSaved.add(d.bvid);
+            btn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      } else {
+        btn.addEventListener("click", () => handleDelightAction(d, b.action));
+        if (isChatState && (b.action === "like" || b.action === "reject")) {
+          btn.disabled = true;
+        }
+      }
+            actions.appendChild(btn);
     }
     tray.appendChild(actions);
   }
@@ -892,67 +967,78 @@ function renderCard(rawItem, index = 0) {
     renderFeedbackSheet();
   });
 
-  // 稍后再看 (watch-later) star toggle. Filled "★" when saved,
-  // outlined "☆" otherwise. We optimistically flip the UI on click
-  // so the user gets immediate feedback, then await the API; on
-  // failure we revert.
-  const renderStar = (saved) => (saved ? "\u2605" : "\u2606");
-  const wlBtn = createCardAction(
-    renderStar(watchLaterSaved.has(item.bvid)),
-    async () => {
-      const wasSaved = watchLaterSaved.has(item.bvid);
-      const nextSaved = !wasSaved;
-      // Optimistic flip.
-      if (nextSaved) watchLaterSaved.add(item.bvid);
-      else watchLaterSaved.delete(item.bvid);
-      wlBtn.textContent = renderStar(nextSaved);
-      wlBtn.disabled = true;
-      try {
-        const url = nextSaved
-          ? "/api/watch-later"
-          : `/api/watch-later/${encodeURIComponent(item.bvid)}`;
-        const init = nextSaved
-          ? {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ bvid: item.bvid, note: "" }),
-            }
-          : { method: "DELETE" };
-        const resp = await fetch(url, init);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        // Reconcile with server truth — covers concurrent edits and
-        // the optimistic-flip-was-wrong case.
-        const data = await resp.json();
-        if (data && typeof data.saved === "boolean") {
-          if (data.saved) watchLaterSaved.add(item.bvid);
-          else watchLaterSaved.delete(item.bvid);
-          wlBtn.textContent = renderStar(data.saved);
-        }
-      } catch {
-        // Revert optimistic flip.
-        if (wasSaved) watchLaterSaved.add(item.bvid);
-        else watchLaterSaved.delete(item.bvid);
-        wlBtn.textContent = renderStar(wasSaved);
-      } finally {
-        wlBtn.disabled = false;
+  const savedNow = watchLaterSaved.has(item.bvid);
+  const starBtn = createCoverChip(CLOCK_SVG_ICON, "watch-later-btn", async () => {
+    if (watchLaterBusy) return;
+    watchLaterBusy = true;
+    const wasSaved = watchLaterSaved.has(item.bvid);
+    // optimistic toggle
+    setChipState(starBtn, !wasSaved, wasSaved ? "☆" : "★");
+    try {
+      if (wasSaved) {
+        await removeFromWatchLater(item.bvid);
+        watchLaterSaved.delete(item.bvid);
+      } else {
+        await addToWatchLater(item.bvid);
+        watchLaterSaved.add(item.bvid);
       }
-    },
-  );
-  // Lazy-check the saved state on first render. We don't block render
-  // on this — the star may flip from ☆ to ★ a moment after the card
-  // appears, which is acceptable for a non-critical decoration.
-  if (item.bvid && !watchLaterSaved.has(item.bvid)) {
-    fetch(`/api/watch-later/${encodeURIComponent(item.bvid)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d && d.saved) {
-          watchLaterSaved.add(item.bvid);
-          wlBtn.textContent = renderStar(true);
-        }
-      })
-      .catch(() => {
-        // Best-effort. Keep ☆ on error.
-      });
+    } catch {
+      // revert on failure
+      setChipState(starBtn, wasSaved, wasSaved ? "★" : "☆");
+    } finally {
+      watchLaterBusy = false;
+    }
+  });
+  setChipState(starBtn, savedNow, savedNow ? "★" : "☆");
+  starBtn.title = savedNow ? "取消稍后再看" : "稍后再看";
+  // lazy-load real state from backend
+  watchLaterStatus(item.bvid).then((res) => {
+    if (res && res.saved) {
+      watchLaterSaved.add(item.bvid);
+      setChipState(starBtn, true, "★");
+      starBtn.title = "取消稍后再看";
+    }
+  }).catch(() => {});
+
+  const favNow = favoriteSaved.has(item.bvid);
+  const favBtn = createCoverChip(STAR_SVG_ICON, "favorite-btn", async () => {
+    if (favoriteBusy) return;
+    favoriteBusy = true;
+    const wasSaved = favoriteSaved.has(item.bvid);
+    setChipState(favBtn, !wasSaved, wasSaved ? "♡" : "♥");
+    try {
+      if (wasSaved) {
+        await removeFromFavorite(item.bvid);
+        favoriteSaved.delete(item.bvid);
+      } else {
+        await addToFavorite(item.bvid);
+        favoriteSaved.add(item.bvid);
+      }
+    } catch {
+      setChipState(favBtn, wasSaved, wasSaved ? "♥" : "♡");
+    } finally {
+      favoriteBusy = false;
+    }
+  });
+  setChipState(favBtn, favNow, favNow ? "♥" : "♡");
+  favBtn.title = favNow ? "取消收藏" : "收藏";
+  favoriteStatus(item.bvid).then((res) => {
+    if (res && res.saved) {
+      favoriteSaved.add(item.bvid);
+      setChipState(favBtn, true, "♥");
+      favBtn.title = "取消收藏";
+    }
+  }).catch(() => {});
+
+  // Save chips overlay the cover top-right — keeps the bottom action bar light
+  // (看看 / 喜欢 / 不感兴趣 / 聊一聊) instead of cramming 6 buttons in one row.
+  const coverFrame = card.querySelector(".card-cover-frame");
+  if (coverFrame) {
+    const coverActions = document.createElement("div");
+    coverActions.className = "cover-actions";
+    coverActions.appendChild(starBtn);
+    coverActions.appendChild(favBtn);
+    coverFrame.appendChild(coverActions);
   }
 
   actionsRow.appendChild(openBtn);
@@ -1028,6 +1114,30 @@ function createCardAction(label, handler) {
   btn.textContent = label;
   btn.addEventListener("click", handler);
   return btn;
+}
+
+// 稍后再看 = 时钟（一眼看懂"待会看"）；收藏 = 星星。SVG 图标族统一，
+// 选中态由 aria-pressed + CSS 驱动（时钟变色、星星填充），不做字形替换。
+const CLOCK_SVG_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
+const STAR_SVG_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>';
+
+function createCoverChip(iconHtml, cls, handler) {
+  const btn = document.createElement("button");
+  btn.className = "cover-chip " + cls;
+  btn.type = "button";
+  btn.innerHTML = iconHtml;
+  btn.setAttribute("aria-pressed", "false");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    handler();
+  });
+  return btn;
+}
+
+function setChipState(btn, pressed) {
+  btn.setAttribute("aria-pressed", pressed ? "true" : "false");
 }
 
 // ── Feedback Bottom Sheet ────────────────────────────────────
@@ -1305,41 +1415,6 @@ function hydrateRecommendSideChannels() {
     .catch(() => {});
 }
 
-function scheduleRecommendationItemsRefresh() {
-  if (recommendationItemsRefreshTimer !== null) {
-    clearTimeout(recommendationItemsRefreshTimer);
-  }
-  recommendationItemsRefreshTimer = setTimeout(
-    runScheduledRecommendationItemsRefresh,
-    RECOMMENDATION_ITEMS_REFRESH_DEBOUNCE_MS,
-  );
-}
-
-async function runScheduledRecommendationItemsRefresh() {
-  recommendationItemsRefreshTimer = null;
-  if (recommendationItemsRefreshInFlight) {
-    recommendationItemsRefreshPending = true;
-    return;
-  }
-  recommendationItemsRefreshInFlight = true;
-  try {
-    const recs = await fetchRecommendations();
-    const normalizedRecs = recs.map(normalizeRecommendation);
-    rememberRecommendationFeedback(normalizedRecs);
-    autoAppendExhausted = false;
-    resetAutoAppendIntent();
-    patchState({ recommendations: normalizedRecs });
-    render();
-  } catch { /* best-effort live refresh */ }
-  finally {
-    recommendationItemsRefreshInFlight = false;
-    if (recommendationItemsRefreshPending) {
-      recommendationItemsRefreshPending = false;
-      scheduleRecommendationItemsRefresh();
-    }
-  }
-}
-
 // ── Public API ───────────────────────────────────────────────
 export function initRecommendView(root) {
   $root = root;
@@ -1356,12 +1431,13 @@ export function initRecommendView(root) {
 export function onStreamEvent(payload) {
   const type = payload?.type || payload?.event;
   if (type === "refresh.pool_updated") {
-    // Merge runtime status and coalesce the recommendation list fetch.
+    // Merge pool status only. Do not replace recommendation cards here:
+    // users may have appended older cards that /api/recommendations would not
+    // return in its latest top window.
     patchState({
       runtimeStatus: mergeRuntimeStatusEvent(state.runtimeStatus, payload.data || payload),
     });
     rerenderHeaderOnly();
-    scheduleRecommendationItemsRefresh();
   } else if (type === "refresh.started" || type === "refresh.strategy") {
     patchState({ runtimeEvent: payload.data || payload });
     rerenderHeaderOnly();

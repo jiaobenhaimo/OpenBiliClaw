@@ -17,12 +17,12 @@
 
 ---
 
-## 📌 v0.3.91 / extension v0.3.49 Highlights (2026-05-25)
+## 📌 Editable Profile · Edit Mode Across All 3 Surfaces (2026-05-29)
 
-- **🔮 Challenge probes** — interest probes now use near / lateral / bridge / wildcard distance bands; the regular near pool stays at 5 active probes, while challenge probes get their own 3 active slots.
-- **🎬 YouTube recommendation clicks** — recommendation cards and mobile Web now preserve `content_id / content_url / source_platform`, so profile events no longer turn YouTube IDs into Bilibili URLs.
-- **🧪 Weak-positive buffer** — tentative "maybe interesting" feedback enters a short-term buffer before becoming a formal interest.
-- **🛡️ Amplification guardrails** — newly confirmed directions can influence exploration without taking over an entire refresh.
+- **✏️ Edit your own profile** — extension / mobile / desktop profile pages get an "Edit profile" mode: add/remove core traits, values, interest domains, favorite UPs, and rewrite prose like your persona sketch.
+- **🛡️ Edits survive rebuilds** — changes live in a separate overrides layer the AI's re-derivation can't wipe; hit "Restore AI suggestion" to revert any field.
+- **🎯 Delete/block hits recs instantly** — "disliked" domains enter the hard filter and purge already-pooled matches, no waiting for the next learning cycle.
+- **🤝 Collaborate with the AI** — pin a text field and, if the AI has a newer take, it surfaces "AI wants to update this" for you to accept or ignore.
 
 Full changelog: [docs/changelog.md](docs/changelog.md).
 
@@ -167,7 +167,7 @@ Paste this whole prompt into Claude Code, Codex CLI, Cursor, Windsurf, or anothe
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/agent-install.md to deploy the OpenBiliClaw backend for me (use Bash `curl` to fetch the document, NOT WebFetch — WebFetch summarises markdown and drops critical commands).
 ```
 
-The agent will clone the repo, install dependencies, start the backend with the LAN-accessible default bind (`0.0.0.0:8420`), run a health check, and ask a few questions with defaults. If unsure, pick the default. Xiaohongshu, Douyin, and YouTube signals are used in the initial profile only when you explicitly opt in.
+The agent will clone the repo, install dependencies, start the backend with the LAN-accessible default bind (`0.0.0.0:8420`), run a health check, and ask a few questions with defaults. Before auto-init, it verifies that both the configured LLM provider and embedding service answer real lightweight calls; if either fails, init is blocked until you fix the service. If unsure, pick the default. Xiaohongshu, Douyin, and YouTube signals are used in the initial profile only when you explicitly opt in.
 
 If the backend runs on another machine in your LAN, set the extension's "Backend host" field to that machine's LAN IP, for example `192.168.1.100`.
 
@@ -205,7 +205,7 @@ Native Windows (PowerShell, no Docker or WSL2 required):
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
-The script needs `git` and Python 3.11+. It clones the repo, installs dependencies, starts the backend, runs a health check, then asks for LLM, embedding, Bilibili cookie, Xiaohongshu opt-in, Douyin opt-in, and YouTube opt-in choices. Once the confirmations are complete it automatically runs init to build the first profile and discovery pool. If unsure, press Enter or choose the default.
+The script needs `git` and Python 3.11+. It clones the repo, installs dependencies, starts the backend, runs a health check, then asks for LLM, embedding, Bilibili cookie, Xiaohongshu opt-in, Douyin opt-in, and YouTube opt-in choices. Once the confirmations are complete, it first checks that the LLM provider and embedding service can really respond, then automatically runs init to build the first profile and discovery pool. If unsure, press Enter or choose the default.
 
 </details>
 
@@ -218,7 +218,7 @@ Good if you already have Docker Desktop installed. v0.3.11+ includes an Ollama e
 Please follow https://raw.githubusercontent.com/whiteguo233/OpenBiliClaw/main/docs/docker-deployment.md to deploy the OpenBiliClaw backend via Docker Compose (use Bash `curl` to fetch the document, NOT WebFetch).
 ```
 
-See the [Docker Deployment Guide](docs/docker-deployment.md). The primary Docker path also goes through `agent_bootstrap.py --mode docker`; after LLM, embedding, Bilibili cookie, and source opt-in confirmations it automatically runs init. `docker exec ... openbiliclaw init` remains an advanced manual fallback.
+See the [Docker Deployment Guide](docs/docker-deployment.md). The primary Docker path also goes through `agent_bootstrap.py --mode docker`; after LLM, embedding, Bilibili cookie, and source opt-in confirmations it verifies the AI services and then automatically runs init. `docker exec ... openbiliclaw init` remains an advanced manual fallback.
 
 </details>
 
@@ -438,6 +438,8 @@ The whole loop stays local — OpenClaw just calls the CLI bridge; your profile 
 │ Runtime status: pool_available/raw/pending_count           │
 │ SQLite: events(inferred_satisfaction) · content_cache   │
 │         recommendations · chat_turns · avoidance_state  │
+│ Profile overrides: edits -> profile_overrides.json overlay │
+│         (merged at read · rebuild-proof · 3 frontends)   │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -538,6 +540,7 @@ Contributions welcome! See the [Contributing Guide](docs/contributing.md) to get
 ## 🙏 Acknowledgements
 
 - Thanks to [@addtion99](https://github.com/addtion99) for proposing configurable browser-extension backend host / port settings and sharing the popup-side implementation idea in [#8](https://github.com/whiteguo233/OpenBiliClaw/pull/8).
+- Thanks to [@jiaobenhaimo](https://github.com/jiaobenhaimo) for contributing Safari extension, watch-later bookmarks, YouTube repost detection, and marketing filter designs in [#53](https://github.com/whiteguo233/OpenBiliClaw/pull/53). The OR-join dedup fix and watch-later feature have been merged into main.
 
 ## ⭐ Star History
 

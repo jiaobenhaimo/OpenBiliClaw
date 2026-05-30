@@ -516,6 +516,7 @@ class TestBackendAPI:
                 curator: object = None,
                 embedding_service: object = None,
                 task_registry: object = None,
+                xhs_self_info_provider: object = None,
             ) -> None:
                 self.llm = llm
                 self.database = database
@@ -719,6 +720,37 @@ class TestBackendAPI:
         assert body["status"] == "ok"
         assert body["service"] == "openbiliclaw-api"
         assert body["profile_ready"] is True
+
+    def test_health_endpoint_reports_embedding_not_ready_without_service(self) -> None:
+        from fastapi.testclient import TestClient
+
+        # A bare object() soul engine has no _embedding_service attribute,
+        # so embedding is reported as not ready — the popup turns this into
+        # the "enable local Ollama" banner.
+        app = create_app(memory_manager=object(), database=object(), soul_engine=object())
+        client = TestClient(app)
+
+        response = client.get("/api/health")
+
+        assert response.status_code == 200
+        assert response.json()["embedding_ready"] is False
+
+    def test_health_endpoint_reports_embedding_ready_when_service_present(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class EmbeddingSoulEngine:
+            def __init__(self) -> None:
+                self._embedding_service = object()
+
+        app = create_app(
+            memory_manager=object(), database=object(), soul_engine=EmbeddingSoulEngine()
+        )
+        client = TestClient(app)
+
+        response = client.get("/api/health")
+
+        assert response.status_code == 200
+        assert response.json()["embedding_ready"] is True
 
     def test_detect_lan_ip_prefers_rfc1918_interface_over_benchmark_tun(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1209,7 +1241,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 # v0.3.18: the endpoint pulls 2x the visible window so
                 # the per-franchise cap still has 20 survivors after
                 # dropping over-represented IPs.
@@ -1247,7 +1281,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 # Five 原神 rows + one 番茄炒蛋. Without the franchise
                 # cap, the response would carry all 5 原神; with cap=2,
                 # only 2 survive.
@@ -1466,7 +1502,9 @@ class TestBackendAPI:
         from fastapi.testclient import TestClient
 
         class FakeDatabase:
-            def get_recommendations(self, limit: int = 20) -> list[dict[str, object]]:
+            def get_recommendations(
+                self, limit: int = 20, *, exclude_processed: bool = False
+            ) -> list[dict[str, object]]:
                 assert limit in {10, 20}
                 return [
                     {
@@ -3335,6 +3373,62 @@ class TestBackendAPI:
         )
         history = memory.load_discovery_runtime_state()["avoidance_probe_feedback_history"]
         assert history[0]["response"] == "reject"
+
+    def test_stale_avoidance_probe_reject_does_not_record_feedback_history(self) -> None:
+        from fastapi.testclient import TestClient
+
+        class FakeMemoryManager:
+            def __init__(self) -> None:
+                self.runtime_state: dict[str, object] = {
+                    "avoidance_probe_feedback_history": [],
+                }
+                self.cognition_updates: list[dict[str, object]] = []
+
+            def load_discovery_runtime_state(self) -> dict[str, object]:
+                return dict(self.runtime_state)
+
+            def save_discovery_runtime_state(self, state: dict[str, object]) -> None:
+                self.runtime_state = dict(state)
+
+            def load_cognition_updates(self) -> list[dict[str, object]]:
+                return list(self.cognition_updates)
+
+            def save_cognition_updates(self, updates: list[dict[str, object]]) -> None:
+                self.cognition_updates = list(updates)
+
+        class FakeAvoidanceSpeculator:
+            def __init__(self) -> None:
+                self.rejected: list[tuple[str, int]] = []
+
+            def get_active_avoidances(self) -> list[object]:
+                return []
+
+            def user_reject_avoidance(self, domain: str, cooldown_days: int = 30) -> bool:
+                self.rejected.append((domain, cooldown_days))
+                return False
+
+        class FakeSoulEngine:
+            def __init__(self) -> None:
+                self._avoidance_speculator = FakeAvoidanceSpeculator()
+
+        memory = FakeMemoryManager()
+        soul_engine = FakeSoulEngine()
+        app = create_app(
+            memory_manager=memory,
+            database=object(),
+            soul_engine=soul_engine,
+        )
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/avoidance-probes/respond",
+            json={"domain": "比赛话题里的情绪型切片复读", "response": "reject"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        assert memory.runtime_state["avoidance_probe_feedback_history"] == []
+        assert soul_engine._avoidance_speculator.rejected == [("比赛话题里的情绪型切片复读", 30)]
 
     def test_avoidance_probe_confirm_schedules_dislike_writeback(
         self,
@@ -5569,3 +5663,108 @@ def test_probe_chat_sentiment_uses_plain_text_llm_call() -> None:
     assert kwargs["caller"] == "api.sentiment"
     assert kwargs["max_tokens"] == 8
     assert kwargs["json_mode"] is False
+
+
+class TestProfileEditEndpoints:
+    """End-to-end tests for the editable-profile API (real SoulEngine)."""
+
+    def _client(self, tmp_path: Path) -> object:
+        from fastapi.testclient import TestClient
+
+        from openbiliclaw.llm.base import LLMResponse
+        from openbiliclaw.memory.manager import MemoryManager
+        from openbiliclaw.soul.engine import SoulEngine
+        from openbiliclaw.soul.profile import (
+            CoreLayer,
+            InterestDomain,
+            InterestLayer,
+            OnionProfile,
+        )
+
+        class _Reg:
+            async def complete(
+                self,
+                messages: list[dict[str, str]],
+                *,
+                temperature: float = 0.7,
+                max_tokens: int = 4096,
+                json_mode: bool = False,
+                reasoning_effort: str | None = None,
+                model: str | None = None,
+            ) -> LLMResponse:
+                return LLMResponse(content="{}", provider="openai")
+
+        memory = MemoryManager(tmp_path / "data")
+        memory.initialize()
+        engine = SoulEngine(llm=_Reg(), memory=memory)
+        profile = OnionProfile(
+            core=CoreLayer(core_traits=["完美主义"]),
+            interest=InterestLayer(
+                likes=[InterestDomain(domain=f"领域{i}", weight=0.5) for i in range(14)],
+                favorite_up_users=[f"UP{i}" for i in range(10)],
+            ),
+        )
+        layer = memory.get_layer("soul")
+        layer.data.clear()
+        layer.data.update(profile.to_dict())
+        layer.save()
+        app = create_app(memory_manager=memory, database=memory._database, soul_engine=engine)
+        return TestClient(app)
+
+    def test_edit_state_returns_untruncated_fields(self, tmp_path: Path) -> None:
+        client = self._client(tmp_path)
+        resp = client.get("/api/profile/edit-state")  # type: ignore[attr-defined]
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["initialized"] is True
+        # un-truncated: summary caps likes at 12 / favorite_up at 8; edit-state must not
+        assert len(body["fields"]["likes"]["domains"]) == 14
+        assert len(body["fields"]["interest.favorite_up_users"]["items"]) == 10
+
+    def test_edit_adds_dislike_and_reflects_in_returned_state(self, tmp_path: Path) -> None:
+        client = self._client(tmp_path)
+        resp = client.post(  # type: ignore[attr-defined]
+            "/api/profile/edit",
+            json={"target": "dislikes", "op": "add", "value": "营销号"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        domains = body["edit_state"]["fields"]["dislikes"]["domains"]
+        assert any(d["domain"] == "营销号" and d["user_added"] for d in domains)
+
+    def test_edit_invalid_target_returns_422(self, tmp_path: Path) -> None:
+        client = self._client(tmp_path)
+        resp = client.post(  # type: ignore[attr-defined]
+            "/api/profile/edit",
+            json={"target": "core.bogus", "op": "add", "value": "x"},
+        )
+        assert resp.status_code == 422
+
+    def test_edit_set_then_reset_text_field(self, tmp_path: Path) -> None:
+        client = self._client(tmp_path)
+        client.post(  # type: ignore[attr-defined]
+            "/api/profile/edit",
+            json={"target": "personality_portrait", "op": "set", "value": "我的画像"},
+        )
+        state = client.get("/api/profile/edit-state").json()  # type: ignore[attr-defined]
+        assert state["fields"]["personality_portrait"]["value"] == "我的画像"
+        assert state["fields"]["personality_portrait"]["pinned"] is True
+
+        client.post(  # type: ignore[attr-defined]
+            "/api/profile/edit",
+            json={"target": "personality_portrait", "op": "reset"},
+        )
+        state2 = client.get("/api/profile/edit-state").json()  # type: ignore[attr-defined]
+        assert state2["fields"]["personality_portrait"]["pinned"] is False
+
+    def test_profile_summary_carries_overrides_annotation(self, tmp_path: Path) -> None:
+        client = self._client(tmp_path)
+        client.post(  # type: ignore[attr-defined]
+            "/api/profile/edit",
+            json={"target": "core.core_traits", "op": "add", "value": "务实"},
+        )
+        resp = client.get("/api/profile-summary")  # type: ignore[attr-defined]
+        assert resp.status_code == 200
+        overrides = resp.json()["overrides"]
+        assert overrides["list_edits"]["core.core_traits"]["add"] == ["务实"]

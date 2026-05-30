@@ -48,6 +48,10 @@ from openbiliclaw.api.models import (
     DouyinSourceConfigOut,
     EmbeddingConfigOut,
     EventIngestResponse,
+    FavoriteAddIn,
+    FavoriteItem,
+    FavoriteListResponse,
+    FavoriteStateResponse,
     FeedbackIn,
     FeedbackResponse,
     HealthResponse,
@@ -63,6 +67,7 @@ from openbiliclaw.api.models import (
     PendingDelightResponse,
     PendingNotificationOut,
     PendingNotificationResponse,
+    ProfileEditIn,
     ProfileSummaryResponse,
     RecommendationAppendIn,
     RecommendationClickIn,
@@ -1052,16 +1057,29 @@ def create_app(
             logger.debug("Health profile readiness check failed", exc_info=True)
             return None
 
+    def _health_embedding_ready() -> bool:
+        """Whether a working embedding service was built at startup.
+
+        ``False`` means semantic dedup / MMR diversity is degraded — the
+        popup surfaces this as a one-click "enable local Ollama" banner so
+        the user isn't left silently scrolling near-duplicate content with
+        only a log line as the signal.
+        """
+        soul_engine = getattr(ctx, "soul_engine", None)
+        return getattr(soul_engine, "_embedding_service", None) is not None
+
     @app.get("/api/health", response_model=HealthResponse, response_model_exclude_none=True)
     def health() -> HealthResponse | JSONResponse:
         profile_ready = _health_profile_ready()
         lan_ip = _detect_lan_ip()
+        embedding_ready = _health_embedding_ready()
         if bool(getattr(ctx, "degraded", False)):
             body: dict[str, object] = {
                 "status": "degraded",
                 "service": "openbiliclaw-api",
                 "reason": str(getattr(ctx, "degraded_reason", "")),
                 "issues": _degraded_issues_payload(),
+                "embedding_ready": embedding_ready,
             }
             if profile_ready is not None:
                 body["profile_ready"] = profile_ready
@@ -1073,6 +1091,7 @@ def create_app(
             service="openbiliclaw-api",
             profile_ready=profile_ready,
             lan_ip=lan_ip,
+            embedding_ready=embedding_ready,
         )
 
     @app.get("/api/image-proxy", response_model=None)
@@ -1551,6 +1570,14 @@ def create_app(
         except Exception:
             return ProfileSummaryResponse(initialized=False)
 
+        overrides_summary: dict[str, object] = {}
+        _get_overrides = getattr(ctx.soul_engine, "get_overrides", None)
+        if callable(_get_overrides):
+            try:
+                overrides_summary = _get_overrides().to_dict()
+            except Exception:
+                overrides_summary = {}
+
         from openbiliclaw.api.models import (
             AwarenessNoteOut,
             ContextModeOut,
@@ -1780,6 +1807,7 @@ def create_app(
             next_cognition_cursor=next_cognition_cursor,
             active_insights=active_insights_out,
             recent_awareness=recent_awareness_out,
+            overrides=overrides_summary,
         )
 
     @app.get("/api/events")
@@ -1811,6 +1839,55 @@ def create_app(
                 ]
             },
         }
+
+    @app.get("/api/profile/edit-state")
+    async def profile_edit_state() -> dict[str, object]:
+        """Full (un-truncated) editable profile + overrides + drift.
+
+        The edit UI must use this rather than ``/api/profile-summary`` — the
+        latter truncates lists for display, so it cannot reach e.g. the 13th
+        interest or 9th UP.
+        """
+        from openbiliclaw.soul.overrides import build_edit_state
+
+        try:
+            raw = await ctx.soul_engine.get_raw_profile()
+            effective = await ctx.soul_engine.get_profile()
+        except Exception:
+            return {"initialized": False}
+        return build_edit_state(raw, effective, ctx.soul_engine.get_overrides())
+
+    @app.post("/api/profile/edit")
+    async def profile_edit(payload: ProfileEditIn) -> dict[str, object]:
+        """Apply one deterministic user edit to the profile overlay.
+
+        Returns the fresh edit-state inline so the client re-renders without
+        a second round-trip. Embedding / LLM services for the dislike pool
+        purge are resolved inside ``apply_user_edit`` from the soul engine.
+        """
+        from openbiliclaw.soul.overrides import ProfileEditError, build_edit_state
+
+        try:
+            await ctx.soul_engine.apply_user_edit(
+                target=payload.target,
+                op=payload.op,
+                value=payload.value,
+                parent=payload.parent,
+                weight=payload.weight,
+                database=ctx.database,
+            )
+        except ProfileEditError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        try:
+            raw = await ctx.soul_engine.get_raw_profile()
+            effective = await ctx.soul_engine.get_profile()
+            edit_state: dict[str, object] = build_edit_state(
+                raw, effective, ctx.soul_engine.get_overrides()
+            )
+        except Exception:
+            edit_state = {"initialized": False}
+        return {"ok": True, "target": payload.target, "op": payload.op, "edit_state": edit_state}
 
     @app.post("/api/events", response_model=EventIngestResponse)
     async def ingest_events(payload: BehaviorEventBatchIn) -> EventIngestResponse:
@@ -1889,7 +1966,7 @@ def create_app(
         # Without the wider pool, capping 原神 at 2 in a 20-row request
         # would leave gaps that other items further back in time would
         # have filled.
-        rows = ctx.database.get_recommendations(limit=40)
+        rows = ctx.database.get_recommendations(limit=40, exclude_processed=True)
 
         # Fresh-install bootstrap: ``recommendations`` table is the
         # write-only history of items we've ever served. On first popup
@@ -1909,7 +1986,7 @@ def create_app(
                 if pool_count > 0:
                     profile = await ctx.soul_engine.get_profile()
                     await ctx.recommendation_engine.serve(profile, limit=10)
-                    rows = ctx.database.get_recommendations(limit=40)
+                    rows = ctx.database.get_recommendations(limit=40, exclude_processed=True)
                     logger.info(
                         "GET /api/recommendations bootstrap: served from "
                         "empty history (pool_count=%d → wrote %d to history)",
@@ -2058,6 +2135,54 @@ def create_app(
                 )
                 for row in rows
             ]
+        )
+
+    # ── Favorites (收藏夹) ────────────────────────────────────────
+
+    def _favorite_state(bvid: str) -> FavoriteStateResponse:
+        return FavoriteStateResponse(
+            saved=ctx.database.is_in_favorites(bvid),
+            total=ctx.database.count_favorites(),
+        )
+
+    @app.post("/api/favorites", response_model=FavoriteStateResponse)
+    async def favorite_add(payload: FavoriteAddIn) -> FavoriteStateResponse:
+        bvid = payload.bvid.strip()
+        if not bvid:
+            raise HTTPException(status_code=422, detail="bvid is required")
+        ctx.database.add_to_favorites(bvid, note=payload.note.strip())
+        return _favorite_state(bvid)
+
+    @app.delete("/api/favorites/{bvid}", response_model=FavoriteStateResponse)
+    async def favorite_remove(bvid: str) -> FavoriteStateResponse:
+        normalized = bvid.strip()
+        ctx.database.remove_from_favorites(normalized)
+        return _favorite_state(normalized)
+
+    @app.get("/api/favorites/{bvid}", response_model=FavoriteStateResponse)
+    async def favorite_status(bvid: str) -> FavoriteStateResponse:
+        return _favorite_state(bvid.strip())
+
+    @app.get("/api/favorites", response_model=FavoriteListResponse)
+    async def favorite_list(
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> FavoriteListResponse:
+        rows = ctx.database.list_favorites(limit=limit, offset=offset)
+        return FavoriteListResponse(
+            items=[
+                FavoriteItem(
+                    bvid=str(row.get("bvid", "")),
+                    title=str(row.get("title", "")),
+                    up_name=str(row.get("up_name", "")),
+                    cover_url=str(row.get("cover_url", "")),
+                    content_url=str(row.get("content_url", "")),
+                    source_platform=str(row.get("source_platform", "") or "bilibili"),
+                    added_at=str(row.get("added_at", "")),
+                )
+                for row in rows
+            ],
+            total=ctx.database.count_favorites(),
         )
 
     @app.get("/api/activity-feed", response_model=ActivityFeedResponse)
@@ -2724,6 +2849,7 @@ def create_app(
         resulting_action: str = "",
         state_key: str = "probe_feedback_history",
         metadata_fn: Any | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         """Persist explicit user feedback for future probe novelty checks."""
         from openbiliclaw.soul.speculator import append_probe_feedback_history
@@ -2737,7 +2863,9 @@ def create_app(
             return
         try:
             state = load_state()
-            if metadata_fn is not None:
+            if metadata is not None:
+                entry = dict(metadata)
+            elif metadata_fn is not None:
                 entry = metadata_fn(domain)
             else:
                 entry = _probe_metadata_from_active_speculation(speculator, domain)
@@ -3288,18 +3416,20 @@ def create_app(
             confirmation_source = requested_source or (
                 "profile_confirmed" if surface == "profile" else "probe_confirmed"
             )
-            _record_probe_feedback_history(
-                domain,
-                "confirm",
-                speculator=speculator,
-                resulting_action="confirmed",
-            )
+            metadata = _probe_metadata_from_active_speculation(speculator, domain)
             ok = _confirm_speculation_with_source(
                 speculator,
                 domain,
                 confirmation_source=confirmation_source,
             )
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "confirm",
+                    speculator=speculator,
+                    resulting_action="confirmed",
+                    metadata=metadata,
+                )
                 # Force_tick generates 5 new probes via LLM (~30-60s).
                 # Running it inline blocks the response past the
                 # browser fetch timeout (35s) — the user gives up,
@@ -3358,13 +3488,15 @@ def create_app(
             return {"ok": ok, "action": "confirmed", "domain": domain}
 
         if response_type == "reject":
-            _record_probe_feedback_history(
-                domain,
-                "reject",
-                speculator=speculator,
-            )
+            metadata = _probe_metadata_from_active_speculation(speculator, domain)
             ok = speculator.user_reject_speculation(domain)
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "reject",
+                    speculator=speculator,
+                    metadata=metadata,
+                )
                 _record_probe_cognition(
                     f"你对「{domain}」暂时不感兴趣，30 天内不再推送。",
                     domain,
@@ -3530,17 +3662,18 @@ def create_app(
             )
 
         if response_type == "confirm":
-            _record_probe_feedback_history(
-                domain,
-                "confirm",
-                speculator=speculator,
-                state_key="avoidance_probe_feedback_history",
-                metadata_fn=metadata_fn,
-            )
+            metadata = metadata_fn(domain)
             confirm_fn = getattr(speculator, "user_confirm_avoidance", None)
             active_avoidance = confirm_fn(domain) if callable(confirm_fn) else None
             ok = active_avoidance is not None
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "confirm",
+                    speculator=speculator,
+                    state_key="avoidance_probe_feedback_history",
+                    metadata=metadata,
+                )
                 topics = topics_for_confirmed_avoidance(active_avoidance)
                 summary = f"你确认了避开「{domain}」，已开始更新不喜欢方向。"
                 _record_probe_cognition(
@@ -3581,16 +3714,17 @@ def create_app(
             return {"ok": ok, "action": "confirmed", "domain": domain}
 
         if response_type == "reject":
-            _record_probe_feedback_history(
-                domain,
-                "reject",
-                speculator=speculator,
-                state_key="avoidance_probe_feedback_history",
-                metadata_fn=metadata_fn,
-            )
+            metadata = metadata_fn(domain)
             reject_fn = getattr(speculator, "user_reject_avoidance", None)
             ok = bool(reject_fn(domain) if callable(reject_fn) else False)
             if ok:
+                _record_probe_feedback_history(
+                    domain,
+                    "reject",
+                    speculator=speculator,
+                    state_key="avoidance_probe_feedback_history",
+                    metadata=metadata,
+                )
                 _record_probe_cognition(
                     f"你表示并不需要避开「{domain}」，30 天内不再推送。",
                     domain,
@@ -4332,6 +4466,15 @@ def create_app(
                 self_info.get("user_id", ""),
                 self_info.get("nickname", ""),
             )
+            # Immediately purge any self-authored rows that slipped into
+            # the pool before this self_info was known.
+            suppressed = _purge_self_authored_pool_items(ctx.database, self_info)
+            if suppressed:
+                logger.info(
+                    "xhs self_info purge: suppressed %d self-authored pool item(s) (nickname=%r)",
+                    suppressed,
+                    self_info.get("nickname", ""),
+                )
         except Exception:
             logger.exception("Failed to persist xhs self_info")
 
@@ -4395,8 +4538,11 @@ def create_app(
                 "SET pool_status = 'suppressed' "
                 "WHERE source_platform = 'xiaohongshu' "
                 "  AND COALESCE(pool_status, 'fresh') = 'fresh' "
-                "  AND LOWER(COALESCE(up_name, '')) = LOWER(?)",
-                (nickname,),
+                "  AND ("
+                "    LOWER(COALESCE(up_name, '')) = LOWER(?)"
+                "    OR LOWER(COALESCE(author_name, '')) = LOWER(?)"
+                "  )",
+                (nickname, nickname),
             )
             database.conn.commit()
             return int(cursor.rowcount or 0)

@@ -19,7 +19,11 @@
       interestProbeRespond: "/interest-probes/respond",
       avoidanceProbeRespond: "/avoidance-probes/respond",
       sourceShareSuggestion: "/config/source-share-suggestion",
-      config: "/config?reveal_keys=true"
+      config: "/config?reveal_keys=true",
+      watchLater: "/watch-later",
+      favorites: "/favorites",
+      profileEdit: "/profile/edit",
+      profileEditState: "/profile/edit-state"
     };
 
     const state = {
@@ -27,6 +31,8 @@
       filter: "全部",
       activeFeedback: null,
       profile: null,
+      editingProfile: false,
+      profileEditState: null,
       activity: null,
       activityItems: [],
       activityCursor: "",
@@ -231,9 +237,23 @@
       element.addEventListener(eventName, handler);
     }
 
+    function locationApiDefault() {
+      try {
+        const loc = window.location;
+        if (loc && /^https?:$/.test(loc.protocol) && loc.hostname) {
+          return { host: loc.hostname, port: loc.port || (loc.protocol === "https:" ? "443" : "80") };
+        }
+      } catch { /* file:// or no window — fall through */ }
+      return { host: "127.0.0.1", port: "8420" };
+    }
+
     function getApiBase() {
-      const host = normalizeBackendHost($("#backendHost")?.value || storageGet("openbiliclaw.webui.backendHost") || "127.0.0.1");
-      const port = String($("#backendPort")?.value || storageGet("openbiliclaw.webui.backendPort") || "8420").trim() || "8420";
+      // Default to the origin the page is served from, so a non-default backend
+      // port "just works" and a profile edit never silently writes to a
+      // different backend on :8420. An explicit saved/typed setting still wins.
+      const def = locationApiDefault();
+      const host = normalizeBackendHost($("#backendHost")?.value || storageGet("openbiliclaw.webui.backendHost") || def.host);
+      const port = String($("#backendPort")?.value || storageGet("openbiliclaw.webui.backendPort") || def.port).trim() || def.port;
       return `http://${host}:${port}/api`;
     }
 
@@ -245,8 +265,9 @@
     }
 
     function persistBackendEndpoint() {
-      const host = normalizeBackendHost($("#backendHost")?.value || "127.0.0.1");
-      const port = String($("#backendPort")?.value || "8420").trim() || "8420";
+      const def = locationApiDefault();
+      const host = normalizeBackendHost($("#backendHost")?.value || def.host);
+      const port = String($("#backendPort")?.value || def.port).trim() || def.port;
       setInput("backendHost", host);
       setInput("backendPort", port);
       storageSet("openbiliclaw.webui.backendHost", host);
@@ -428,7 +449,7 @@
       }
     }
 
-    const MAIN_PAGE_IDS = ["homePage", "profilePage", "chatPage", "settingsPage"];
+    const MAIN_PAGE_IDS = ["homePage", "watchLaterPage", "favoritesPage", "profilePage", "chatPage", "settingsPage"];
 
     function showMainPage(pageId) {
       MAIN_PAGE_IDS.forEach((id) => {
@@ -476,6 +497,139 @@
       document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((drawer) => closePanel(drawer.id));
       setActiveSettingsPanel(panel || "models");
       showMainPage("settingsPage");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    // ── Saved pages: 稍后再看 (watch-later) & 收藏 (favorites) ──────
+    // The two are independent backend collections sharing one list UI.
+
+    function watchLaterStatus(bvid) {
+      return requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`);
+    }
+
+    function favoriteStatus(bvid) {
+      return requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`);
+    }
+
+    function updateSavedBadge(badgeId, total) {
+      const badge = document.getElementById(badgeId);
+      if (!badge) return;
+      const n = Number(total) || 0;
+      if (n > 0) {
+        badge.textContent = n > 99 ? "99+" : String(n);
+        badge.removeAttribute("hidden");
+      } else {
+        badge.textContent = "";
+        badge.setAttribute("hidden", "");
+      }
+    }
+
+    function renderSavedList(listId, emptyId, items, onRemove) {
+      const grid = document.getElementById(listId);
+      const empty = document.getElementById(emptyId);
+      if (!grid) return;
+      const rows = Array.isArray(items) ? items : [];
+      if (!rows.length) {
+        grid.replaceChildren();
+        if (empty) empty.removeAttribute("hidden");
+        return;
+      }
+      if (empty) empty.setAttribute("hidden", "");
+      grid.replaceChildren(...rows.map((item) => {
+        const card = document.createElement("article");
+        card.className = "video-card saved-card";
+        const url = contentUrl(item);
+        card.innerHTML = `
+          <button class="cover" data-platform="${escapeHtml(item.source_platform || item.platform || "bilibili")}" type="button" aria-label="打开 ${escapeHtml(item.title || item.bvid)}">
+            ${coverImg(item)}
+            <span class="platform">${escapeHtml(platformName(item.source_platform || item.platform))}</span>
+          </button>
+          <div>
+            <p class="video-title">${escapeHtml(item.title || item.bvid)}</p>
+            <p class="video-meta">${escapeHtml(item.up_name || "")}</p>
+          </div>
+          <div class="card-actions saved-card-actions">
+            <button class="small-btn saved-remove" type="button">移除</button>
+          </div>`;
+        card.querySelector(".cover").addEventListener("click", () => {
+          if (url) window.open(url, "_blank", "noopener,noreferrer");
+        });
+        card.querySelector(".saved-remove").addEventListener("click", async (e) => {
+          const btn = e.currentTarget;
+          btn.disabled = true;
+          try {
+            await onRemove(item.bvid);
+            card.remove();
+          } catch {
+            btn.disabled = false;
+          }
+        });
+        return card;
+      }));
+    }
+
+    async function refreshWatchLater() {
+      const data = await requestJson(`${ENDPOINTS.watchLater}?limit=100&offset=0`).catch(() => null);
+      renderSavedList("watchLaterList", "watchLaterEmpty", data?.items, async (bvid) => {
+        await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+        await refreshWatchLater();
+        syncWatchLaterButtons();
+      });
+      updateSavedBadge("watchLaterCountBadge", data?.total);
+    }
+
+    async function refreshFavorites() {
+      const data = await requestJson(`${ENDPOINTS.favorites}?limit=100&offset=0`).catch(() => null);
+      renderSavedList("favoritesList", "favoritesEmpty", data?.items, async (bvid) => {
+        await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+        await refreshFavorites();
+        syncFavoriteButtons();
+      });
+      updateSavedBadge("favoritesCountBadge", data?.total);
+    }
+
+    // Re-sync the pressed state + count badge for all visible ☆/♥ toggles.
+    function syncWatchLaterButtons() {
+      requestJson(`${ENDPOINTS.watchLater}?limit=200&offset=0`).then((data) => {
+        const saved = new Set((data?.items || []).map((it) => it.bvid));
+        document.querySelectorAll('.video-card [data-action="watch-later"]').forEach((btn) => {
+          const card = btn.closest(".video-card");
+          const bvid = card?.dataset?.bvid;
+          if (!bvid) return;
+          const on = saved.has(bvid);
+          btn.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        updateSavedBadge("watchLaterCountBadge", data?.total);
+      }).catch(() => {});
+    }
+
+    function syncFavoriteButtons() {
+      requestJson(`${ENDPOINTS.favorites}?limit=200&offset=0`).then((data) => {
+        const saved = new Set((data?.items || []).map((it) => it.bvid));
+        document.querySelectorAll('.video-card [data-action="favorite"]').forEach((btn) => {
+          const card = btn.closest(".video-card");
+          const bvid = card?.dataset?.bvid;
+          if (!bvid) return;
+          const on = saved.has(bvid);
+          btn.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        updateSavedBadge("favoritesCountBadge", data?.total);
+      }).catch(() => {});
+    }
+
+    function openWatchLaterPage() {
+      closeMobileMenu();
+      document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((panel) => closePanel(panel.id));
+      showMainPage("watchLaterPage");
+      void refreshWatchLater();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function openFavoritesPage() {
+      closeMobileMenu();
+      document.querySelectorAll(".drawer.is-open, .overlay.is-open").forEach((panel) => closePanel(panel.id));
+      showMainPage("favoritesPage");
+      void refreshFavorites();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -634,7 +788,37 @@
     function coverImg(item) {
       const url = imageProxyUrl(item.cover_url);
       if (!url) return "";
-      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="lazy" referrerpolicy="no-referrer">`;
+      // loading="eager" (not lazy): cover starts fetching the moment the card is
+      // in the DOM, so a card scrolled into view never shows the gradient
+      // placeholder while a native lazy <img> defers its fetch ("白一下再出来").
+      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(item.title)} 的封面" loading="eager" fetchpriority="auto" decoding="async" referrerpolicy="no-referrer">`;
+    }
+
+    // Warm the browser cache for a batch of cover images before their cards are
+    // (re)rendered. Used by appendMore so newly loaded covers paint instantly
+    // instead of flashing the placeholder while they download. Resolves on a
+    // timeout so one slow cover can't stall the batch.
+    const warmedCoverUrls = new Set();
+    function warmCoverImages(items, { waitForDecode = false, timeoutMs = 4000 } = {}) {
+      if (typeof Image === "undefined") return Promise.resolve();
+      const pending = [];
+      for (const item of items || []) {
+        const src = imageProxyUrl(item?.cover_url);
+        if (!src || warmedCoverUrls.has(src)) continue;
+        warmedCoverUrls.add(src);
+        const img = new Image();
+        img.decoding = "async";
+        const loaded = new Promise((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+        img.src = src;
+        let ready = loaded;
+        if (typeof img.decode === "function") ready = img.decode().catch(() => {});
+        if (waitForDecode) pending.push(ready);
+      }
+      if (!waitForDecode || pending.length === 0) return Promise.resolve();
+      return Promise.race([Promise.all(pending), new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
     }
 
     function contentUrl(item) {
@@ -664,6 +848,7 @@
       grid.replaceChildren(...items.map((item) => {
         const card = document.createElement("article");
         card.className = "video-card";
+        card.dataset.bvid = item.bvid || item.id;
         card.innerHTML = `
           <button class="cover" data-platform="${escapeHtml(item.platform)}" type="button" aria-label="打开 ${escapeHtml(item.title)}">
             ${coverImg(item)}
@@ -688,8 +873,12 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18M9.84 9.91A3 3 0 0 0 12 15c.82 0 1.57-.33 2.11-.87M6.5 6.65A10.45 10.45 0 0 0 2.46 12C3.73 16.06 7.52 19 12 19c1.99 0 3.84-.58 5.4-1.58M11 5.05c.33-.03.66-.05 1-.05 4.48 0 8.27 2.94 9.54 7a10.5 10.5 0 0 1-1.19 2.5"/></svg>
               </button>
               <span class="feedback-separator" aria-hidden="true">/</span>
-              <button class="feedback-icon-btn watch-later-btn" data-action="watch-later" type="button" aria-label="稍后再看" title="稍后再看" data-saved="false">
-                <span class="watch-later-glyph" aria-hidden="true">☆</span>
+              <button class="feedback-icon-btn watch-later-btn" data-action="watch-later" type="button" aria-label="稍后再看" title="稍后再看" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>
+              </button>
+              <span class="feedback-separator" aria-hidden="true">/</span>
+              <button class="feedback-icon-btn favorite-btn" data-action="favorite" type="button" aria-label="收藏" title="收藏" aria-pressed="false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>
               </button>
               ${item.bvid ? `<span class="feedback-separator" aria-hidden="true">/</span>
               <button class="feedback-icon-btn mark-repost-btn" data-action="mark-as-repost" data-state="idle" type="button" aria-label="标记为搬运" title="检测是否为搬运内容"><svg class="mark-repost-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/><line x1="15" y1="3" x2="21" y2="3"/><line x1="21" y1="3" x2="21" y2="9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></button>` : ""}
@@ -717,25 +906,27 @@
           if (event.key === "Enter") handleCardAction("send-comment", item, card);
           if (event.key === "Escape") closeCardComposer(card);
         });
-        // Lazy-check 稍后再看 saved state. Decorative — fine if it lags
-        // by a tick. Star flips ☆ → ★ silently if the bvid is already saved.
-        // We track user-interaction on the button via data-user-touched
-        // so the unsave race is closed: if the user clicked the star
-        // before this lookup returns, skip applying the (now stale)
-        // server snapshot — the user's click is the source of truth.
-        if (item.bvid) {
-          fetch(`/api/watch-later/${encodeURIComponent(item.bvid)}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => {
-              if (!d || d.saved !== true) return;
-              const btn = card.querySelector(".watch-later-btn");
-              if (!btn || btn.dataset.userTouched === "true") return;
-              const glyph = btn.querySelector(".watch-later-glyph");
-              btn.dataset.saved = "true";
-              btn.setAttribute("aria-pressed", "true");
-              if (glyph) glyph.textContent = "★";
-            })
-            .catch(() => { /* non-critical lookup */ });
+        // Lazy-load watch-later state
+        const wlBtn = card.querySelector('[data-action="watch-later"]');
+        if (wlBtn) {
+          const bvid = item.bvid || item.id;
+          watchLaterStatus(bvid).then((res) => {
+            if (res && res.saved) {
+              wlBtn.setAttribute("aria-pressed", "true");
+              wlBtn.title = "\u53D6\u6D88\u7A0D\u540E\u518D\u770B";
+            }
+          }).catch(() => {});
+        }
+        // Lazy-load favorite state
+        const favBtn = card.querySelector('[data-action="favorite"]');
+        if (favBtn) {
+          const bvid = item.bvid || item.id;
+          favoriteStatus(bvid).then((res) => {
+            if (res && res.saved) {
+              favBtn.setAttribute("aria-pressed", "true");
+              favBtn.title = "\u53D6\u6D88\u6536\u85CF";
+            }
+          }).catch(() => {});
         }
         return card;
       }));
@@ -1005,7 +1196,54 @@
       // Feedback actions (like/dislike/dismiss/send-comment) past this point.
       // The pending check protects against double-submission of the same action.
       if (action === "cancel-comment") { closeCardComposer(card); return; }
+      if (action === "watch-later") {
+        const btn = card.querySelector('[data-action="watch-later"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        btn.title = wasSaved ? "\u7A0D\u540E\u518D\u770B" : "\u53D6\u6D88\u6536\u85CF";
+        try {
+          const bvid = item.bvid || item.id;
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid }) });
+          }
+        } catch {
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          btn.title = wasSaved ? "\u53D6\u6D88\u7A0D\u540E\u518D\u770B" : "\u7A0D\u540E\u518D\u770B";
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      if (action === "favorite") {
+        const btn = card.querySelector('[data-action="favorite"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        btn.title = wasSaved ? "\u6536\u85CF" : "\u53D6\u6D88\u6536\u85CF";
+        try {
+          const bvid = item.bvid || item.id;
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.favorites, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid }) });
+          }
+        } catch {
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+          btn.title = wasSaved ? "\u53D6\u6D88\u6536\u85CF" : "\u6536\u85CF";
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      // Feedback double-submit guard (the watch-later / favorite quick
+      // actions above are exempt — they manage their own button-disable).
       if (card.dataset.feedbackPending === "true") return;
+      card.dataset.feedbackPending = "true";
       card.querySelectorAll(".card-actions button, .card-actions input").forEach((control) => { control.disabled = true; });
       try {
         if (action === "send-comment") {
@@ -1682,6 +1920,13 @@
         updateProfileMemoryButton();
         return;
       }
+      if (state.editingProfile) {
+        $("#profileDetails").innerHTML = renderProfileEditPanel();
+        bindProfileEditActions();
+        state.profileCognitionHasMore = false;
+        updateProfileMemoryButton();
+        return;
+      }
       syncProfileCognitionState(profile);
       const html = [
         profileItem("这会儿的你", paragraphsHtml(profile.personality_portrait || profile.summary), "profile-portrait-block"),
@@ -1719,8 +1964,189 @@
           profileItem("近期观察到的", awarenessHtml(profile.recent_awareness))
         ])
       ].join("");
-      $("#profileDetails").innerHTML = html;
+      const profileEditBar = `<div class="profile-edit-bar"><button class="pill-btn" type="button" data-profile-edit-toggle="enter">✏️ 编辑画像</button></div>`;
+      $("#profileDetails").innerHTML = profileEditBar + html;
       bindSpeculativeActions();
+      bindProfileEditToggle();
+    }
+
+    // ── Editable profile (Phase 3, desktop) ──────────────────────
+    const PROFILE_EDIT_LABELS = {
+      personality_portrait: "人格素描",
+      "core.core_traits": "核心特质",
+      "core.deep_needs": "深层需求",
+      "values_layer.values": "价值偏好",
+      "values_layer.motivational_drivers": "内在驱动力",
+      likes: "感兴趣的方向",
+      dislikes: "明显会避开",
+      "interest.favorite_up_users": "常看的 UP 主",
+      "role.life_stage": "大致处在什么阶段",
+      "role.current_phase": "这阵子更像在经历什么",
+      "surface.cognitive_style": "认知风格"
+    };
+    const PROFILE_EDIT_ORDER = [
+      "personality_portrait",
+      "core.core_traits",
+      "core.deep_needs",
+      "values_layer.values",
+      "values_layer.motivational_drivers",
+      "likes",
+      "dislikes",
+      "interest.favorite_up_users",
+      "role.life_stage",
+      "role.current_phase",
+      "surface.cognitive_style"
+    ];
+
+    function bindProfileEditToggle() {
+      const btn = document.querySelector('#profileDetails [data-profile-edit-toggle="enter"]');
+      if (btn) btn.addEventListener("click", () => { void enterProfileEdit(); });
+    }
+
+    async function enterProfileEdit() {
+      state.editingProfile = true;
+      state.profileEditState = null;
+      renderProfileDetails();
+      state.profileEditState = await requestJson(ENDPOINTS.profileEditState);
+      renderProfileDetails();
+    }
+
+    async function exitProfileEdit() {
+      state.editingProfile = false;
+      state.profileEditState = null;
+      const fresh = await requestJson(ENDPOINTS.profile);
+      if (fresh) state.profile = fresh;
+      renderProfileDetails();
+    }
+
+    async function applyProfileEdit(payload) {
+      const res = await requestJson(ENDPOINTS.profileEdit, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res && res.edit_state && res.edit_state.initialized) {
+        state.profileEditState = res.edit_state;
+      } else {
+        const refreshed = await requestJson(ENDPOINTS.profileEditState);
+        if (refreshed) state.profileEditState = refreshed;
+        if (!res) showToast("修改未保存：请检查输入或后端状态");
+      }
+      renderProfileDetails();
+    }
+
+    function profileEditTextField(path, label, field) {
+      const pinned = Boolean(field.pinned);
+      const rows = path === "personality_portrait" ? 4 : 2;
+      return `
+        <div class="edit-field">
+          <div class="edit-field-head"><span class="edit-field-label">${escapeHtml(label)}</span>${pinned ? `<span class="edit-badge">已编辑</span>` : ""}</div>
+          <textarea class="edit-text-input" data-edit-text="${escapeHtml(path)}" rows="${rows}">${escapeHtml(field.value || "")}</textarea>
+          ${field.ai_suggestion ? `<p class="edit-drift-hint">AI 当前想更新为：${escapeHtml(field.ai_suggestion)}</p>` : ""}
+          <div class="edit-field-actions">
+            <button class="pill-btn primary" type="button" data-edit-save="${escapeHtml(path)}">保存</button>
+            ${pinned ? `<button class="edit-reset-btn" type="button" data-edit-reset="${escapeHtml(path)}">恢复 AI 建议</button>` : ""}
+          </div>
+        </div>`;
+    }
+
+    function profileEditListField(path, label, field) {
+      const items = Array.isArray(field.items) ? field.items : [];
+      const edited = (field.added?.length || 0) > 0 || (field.removed?.length || 0) > 0;
+      const chips = items.length
+        ? items.map((it) => `<span class="edit-chip">${escapeHtml(it)}<button class="edit-chip-remove" type="button" data-edit-remove="${escapeHtml(path)}" data-edit-value="${escapeHtml(it)}">✕</button></span>`).join("")
+        : `<p class="video-meta">还没有，添加一个吧</p>`;
+      return `
+        <div class="edit-field">
+          <div class="edit-field-head"><span class="edit-field-label">${escapeHtml(label)}</span>${edited ? `<span class="edit-badge">已编辑</span>` : ""}</div>
+          <div class="edit-chip-list">${chips}</div>
+          <div class="edit-add-row">
+            <input class="edit-add-input" data-edit-add-input="${escapeHtml(path)}" placeholder="添加一项" />
+            <button class="pill-btn" type="button" data-edit-add="${escapeHtml(path)}">添加</button>
+          </div>
+          ${edited ? `<div class="edit-field-actions"><button class="edit-reset-btn" type="button" data-edit-reset="${escapeHtml(path)}">恢复 AI 建议</button></div>` : ""}
+        </div>`;
+    }
+
+    function profileEditInterestField(path, label, field) {
+      const domains = Array.isArray(field.domains) ? field.domains : [];
+      const edited = (field.removed_domains?.length || 0) > 0 || domains.some((d) => d?.user_added);
+      const chips = domains.length
+        ? domains.map((d) => `<span class="edit-chip">${escapeHtml(d.domain)}${d.user_added ? " ＋" : ""}<button class="edit-chip-remove" type="button" data-edit-remove="${escapeHtml(path)}" data-edit-value="${escapeHtml(d.domain)}">✕</button></span>`).join("")
+        : `<p class="video-meta">还没有，添加一个吧</p>`;
+      const placeholder = path === "dislikes" ? "添加要避开的领域" : "添加感兴趣的领域";
+      return `
+        <div class="edit-field">
+          <div class="edit-field-head"><span class="edit-field-label">${escapeHtml(label)}</span>${edited ? `<span class="edit-badge">已编辑</span>` : ""}</div>
+          <div class="edit-chip-list">${chips}</div>
+          <div class="edit-add-row">
+            <input class="edit-add-input" data-edit-add-input="${escapeHtml(path)}" placeholder="${escapeHtml(placeholder)}" />
+            <button class="pill-btn" type="button" data-edit-add="${escapeHtml(path)}">添加</button>
+          </div>
+          ${edited ? `<div class="edit-field-actions"><button class="edit-reset-btn" type="button" data-edit-reset="${escapeHtml(path)}">恢复 AI 建议</button></div>` : ""}
+        </div>`;
+    }
+
+    function renderProfileEditPanel() {
+      const editState = state.profileEditState;
+      let html = `<div class="profile-edit-bar"><button class="pill-btn" type="button" data-profile-edit-toggle="exit">✓ 完成</button></div>`;
+      if (!editState) {
+        html += `<p class="video-meta">加载中…</p>`;
+        return html;
+      }
+      if (!editState.initialized || !editState.fields) {
+        html += `<p class="video-meta">画像还没攒起来，先跑一遍 openbiliclaw init 再回来编辑。</p>`;
+        return html;
+      }
+      html += `<p class="video-meta profile-edit-note">改完即时生效，且不会被后续自动重建覆盖；删错了点「恢复 AI 建议」即可。</p>`;
+      for (const path of PROFILE_EDIT_ORDER) {
+        const field = editState.fields[path];
+        if (!field || typeof field !== "object") continue;
+        const label = PROFILE_EDIT_LABELS[path] || path;
+        if (field.type === "text") html += profileEditTextField(path, label, field);
+        else if (field.type === "list") html += profileEditListField(path, label, field);
+        else if (field.type === "interest") html += profileEditInterestField(path, label, field);
+      }
+      return html;
+    }
+
+    function bindProfileEditActions() {
+      const root = $("#profileDetails");
+      if (!root) return;
+      root.querySelector('[data-profile-edit-toggle="exit"]')?.addEventListener("click", () => { void exitProfileEdit(); });
+      root.querySelectorAll("[data-edit-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => void applyProfileEdit({ target: btn.dataset.editRemove, op: "remove", value: btn.dataset.editValue }));
+      });
+      root.querySelectorAll("[data-edit-reset]").forEach((btn) => {
+        btn.addEventListener("click", () => void applyProfileEdit({ target: btn.dataset.editReset, op: "reset" }));
+      });
+      root.querySelectorAll("[data-edit-add]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const path = btn.dataset.editAdd;
+          const input = root.querySelector(`[data-edit-add-input="${path}"]`);
+          const value = input?.value.trim();
+          if (!value) return;
+          void applyProfileEdit({ target: path, op: "add", value });
+        });
+      });
+      root.querySelectorAll("[data-edit-add-input]").forEach((input) => {
+        input.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          const value = input.value.trim();
+          if (!value) return;
+          void applyProfileEdit({ target: input.dataset.editAddInput, op: "add", value });
+        });
+      });
+      root.querySelectorAll("[data-edit-save]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const path = btn.dataset.editSave;
+          const textarea = root.querySelector(`[data-edit-text="${path}"]`);
+          const value = textarea?.value.trim();
+          if (!value) return;
+          void applyProfileEdit({ target: path, op: "set", value });
+        });
+      });
     }
 
     async function loadMoreProfileMemory() {
@@ -2235,6 +2661,44 @@
         return;
       }
       if (response === "cancel-comment") { closeDelightComposer(); return; }
+      if (response === "watch-later") {
+        const btn = document.querySelector('[data-delight="watch-later"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        try {
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.watchLater}/${encodeURIComponent(delight.bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.watchLater, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid: delight.bvid }) });
+          }
+        } catch {
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      if (response === "favorite") {
+        const btn = document.querySelector('[data-delight="favorite"]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const wasSaved = btn.getAttribute("aria-pressed") === "true";
+        btn.setAttribute("aria-pressed", wasSaved ? "false" : "true");
+        try {
+          if (wasSaved) {
+            await requestJson(`${ENDPOINTS.favorites}/${encodeURIComponent(delight.bvid)}`, { method: "DELETE" });
+          } else {
+            await requestJson(ENDPOINTS.favorites, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bvid: delight.bvid }) });
+          }
+        } catch {
+          btn.setAttribute("aria-pressed", wasSaved ? "true" : "false");
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
       if (response === "send-comment") {
         const input = $("#delightCommentInput");
         const note = input?.value?.trim() || "";
@@ -2457,6 +2921,9 @@
       const payload = await requestJson(ENDPOINTS.append, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ excluded_bvids: state.videos.map((v) => v.bvid) }) });
       if (payload?.items?.length) {
         const freshItems = normalizeRecommendationList(payload.items);
+        // Preload + decode the new covers before re-rendering so they appear
+        // without the placeholder flash.
+        await warmCoverImages(freshItems, { waitForDecode: true });
         state.videos = state.videos.concat(freshItems);
         renderAll();
         showToast(freshItems.length ? "已加载更多推荐" : "后端返回的内容都已反馈过");
@@ -2803,33 +3270,25 @@
       $("#delightReason").textContent = state.delight.reason;
       if ($("#delightStatus")) $("#delightStatus").textContent = state.delight.response_message || "";
       if ($("#delightCount")) $("#delightCount").textContent = `${state.delightIndex + 1}/${state.delights.length}`;
-      // Reset delight watch-later star to ☆ for the new bvid, then
-      // lazy-lookup the saved state. The user-touched flag protects
-      // against the unsave race (user clicks before lookup returns).
-      const wlBtn = document.querySelector(".delight-feedback-actions .watch-later-btn");
-      if (wlBtn) {
-        wlBtn.dataset.saved = "false";
+      // Sync ☆ / ♥ pressed state for the current delight.
+      const delightBvid = state.delight.bvid;
+      const wlBtn = document.querySelector('[data-delight="watch-later"]');
+      if (wlBtn && delightBvid) {
         wlBtn.setAttribute("aria-pressed", "false");
-        wlBtn.dataset.userTouched = "false";
-        const wlGlyph = wlBtn.querySelector(".watch-later-glyph");
-        if (wlGlyph) wlGlyph.textContent = "☆";
-        const activeBvid = state.delight?.bvid;
-        if (activeBvid) {
-          fetch(`/api/watch-later/${encodeURIComponent(activeBvid)}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => {
-              // Skip if the delight has changed, or if the user already
-              // clicked the star on this delight (their click wins).
-              if (state.delight?.bvid !== activeBvid) return;
-              if (wlBtn.dataset.userTouched === "true") return;
-              if (!d || d.saved !== true) return;
-              wlBtn.dataset.saved = "true";
-              wlBtn.setAttribute("aria-pressed", "true");
-              const g = wlBtn.querySelector(".watch-later-glyph");
-              if (g) g.textContent = "★";
-            })
-            .catch(() => { /* non-critical */ });
-        }
+        watchLaterStatus(delightBvid).then((res) => {
+          if (state.delight?.bvid === delightBvid && res?.saved) {
+            wlBtn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
+      }
+      const favBtn = document.querySelector('[data-delight="favorite"]');
+      if (favBtn && delightBvid) {
+        favBtn.setAttribute("aria-pressed", "false");
+        favoriteStatus(delightBvid).then((res) => {
+          if (state.delight?.bvid === delightBvid && res?.saved) {
+            favBtn.setAttribute("aria-pressed", "true");
+          }
+        }).catch(() => {});
       }
       controls.forEach((btn) => {
         const action = btn.dataset.delight;
@@ -3204,6 +3663,8 @@
 
     safeBind("#profileBtn", "click", openProfilePage);
     safeBind("#homeBtn", "click", openHomePage);
+    safeBind("#watchLaterBtn", "click", openWatchLaterPage);
+    safeBind("#favoritesBtn", "click", openFavoritesPage);
     safeBind("#profileMemoryMoreBtn", "click", loadMoreProfileMemory);
     safeBind("#chatBtn", "click", openChatPage);
     safeBind("#messagesBtn", "click", () => {

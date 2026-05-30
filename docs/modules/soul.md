@@ -35,7 +35,11 @@
 | SocraticDialogue.respond() | ✅ | 通过 LLMService 调用 LLM，自动注入画像 |
 | ProfileBuilder | ✅ | 结构化 prompt + JSON 校验 + `OnionProfile` 构建 |
 | SoulEngine.build_initial_profile() | ✅ | 从 history + preference 生成并持久化 `soul.json` |
-| SoulEngine.get_profile() | ✅ | 从 soul 层读取画像，未初始化时抛明确异常 |
+| SoulEngine.get_profile() | ✅ | 从 soul 层读取画像并叠加用户覆盖层返回**有效画像**，未初始化时抛明确异常 |
+| SoulEngine.get_raw_profile() / get_overrides() | ✅ | 返回不叠加覆盖的纯 AI 画像 / 当前 `ProfileOverrides`，供编辑态与 AI 漂移比对 |
+| 用户画像覆盖层 (`soul/overrides.py`) | ✅ | `ProfileOverrides` + 纯函数 `apply_overrides`（文本/标量固定、列表增删、兴趣树增删/权重）+ 带校验的 `apply_edit` 归约器 + `build_edit_state`；用户手动编辑存独立 `profile_overrides.json`，读时叠加到 AI 画像之上，画像重建不覆盖；列表 remove 持续抑制 AI 再次推断出的同项 |
+| SoulEngine.get_effective_disliked_topics() | ✅ | base（raw soul.interest.dislikes ∪ raw preference.disliked_topics）再套覆盖层 remove/add（remove 最后生效），供 delight 硬过滤，用户移除项不被 raw 反向打穿 |
+| SoulEngine.apply_user_edit() | ✅ | 折叠一次确定性编辑：存覆盖层 → 新增 dislike 按编辑前后差集触发 `purge_pool_for_new_dislikes` 清池 → 同步正向/避雷两套 speculator → 记 `source=manual` cognition → 重渲染有效画像镜像并通知两端 |
 | AwarenessAnalyzer | ✅ | 近期事件 → `AwarenessNote` 列表，支持同日去重；解析 LLM 响应时复用 `llm.json_utils.extract_llm_json_list()`，兼容 `results/items/notes/data/observations/recent_observations/latest/latest_observations` 等 object-wrapped array、reasoning 模型 bare singular-note dict、wrapper-key 下单 note、fenced JSON、JSONL 和 MiMo malformed `{ [ ... ] }`；prompt 按画像 → 偏好 → 近期事件排序以保留缓存前缀，并把近期 `dislike` / `thumbs_down` / negative 事件视为“最近开始避开 X”的保守观察信号 |
 | InsightAnalyzer | ✅ | 觉察 + 偏好 + 画像 → `InsightHypothesis` 列表，支持假设合并；解析 LLM 响应时复用共享 JSON helper，能兼容 object wrapper、schema echo 后最终结果和 MiMo malformed array root |
 | CognitionCycle | ✅ | 半日节流生成 awareness + insight 并同步到 `OnionProfile`；仅在 preference 与 soul 都为空的早期初始化状态跳过，已有任一层时仍会运行，避免已初始化画像因 preference 暂空而长期不产出觉察；awareness 失败时单次重试（间隔 2s），仍失败则记 WARNING 且**不推进** `last_awareness_at`，下一 tick 立即重试而不是空等 12h |
@@ -172,7 +176,7 @@
 - runtime push 和 OpenClaw `get_next_probe()` 共用同一套 probe selection 规则
 - `confirmation_count` 仍然是第一优先级；当验证压力相同，会优先选择最近没推过的 `experience_mode + entry_load` 组合
 - probe 去重状态写入并持久化到 `discovery_runtime_state["probed_domains"]`、`discovery_runtime_state["probed_axes"]` 和 `discovery_runtime_state["probed_distance_bands"]`；runtime push 只有在 `interest.probe` 实际投递到至少一个 runtime stream 订阅者后才记录，避免前端离线时误消耗探针
-- `/api/interest-probes/respond` 会把 confirm / reject / chat classification 写入 `discovery_runtime_state["probe_feedback_history"]`；classification 保留 `raw_text_excerpt / classifier / resulting_action` 等审计字段。后续生成会降低 reject / chat_rejected 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴与 probe distance
+- `/api/interest-probes/respond` 会把真实命中 active 探针的 confirm / reject，以及 chat classification 写入 `discovery_runtime_state["probe_feedback_history"]`；stale / 已处理卡片返回 `ok=false` 时不写历史，避免重复点击污染 novelty 依据。classification 保留 `raw_text_excerpt / classifier / resulting_action` 等审计字段。后续生成会降低 reject / chat_rejected 体验轴的入池优先级，选择会跳过明显重复的 domain，并在同等压力下避开负向反馈过的体验轴与 probe distance
 - runtime push 成功投递后、OpenClaw `get_next_probe()` 成功返回后，都会记录本次 domain / axis / probe_mode，连续调用不会重复返回同一条 active probe
 
 ### 短期探索 Buffer
@@ -250,6 +254,7 @@ active 池会做两层多样性保护：词面 / specifics 的 novelty guard 阻
 
 - `GET /api/profile-summary` 返回 `speculative_avoidances`，供移动 Web、桌面 Web 和插件画像页展示。
 - `GET /api/avoidance-probes/pending` / `POST /api/avoidance-probes/respond` / `POST /api/avoidance-probes/trigger` 提供前端与 OpenClaw 的操作入口。
+- `POST /api/avoidance-probes/respond` 只有在 active 避雷探针真实命中时才写入 `avoidance_probe_feedback_history`；已确认、已拒绝或被刷新替换的 stale 卡片会返回 `ok=false`，不会再追加矛盾的 confirm / reject 历史。
 - runtime stream 推送 `avoidance.probe`，确认、否认和聊天分别广播 `avoidance.confirmed` / `avoidance.rejected` / `avoidance.chat`。
 - 配置热重载后，`RuntimeContext.restart_background_tasks()` 会 detached 调度避雷 speculator 的 `force_tick()`，并传入 `discovery_runtime_state["avoidance_probe_feedback_history"]`；这条 one-shot 与正向兴趣 speculator 共用 `_safe_post_reload_speculate()`，避免阻塞 `/api/config` 响应。
 - `ProfileUpdatePipeline.tick()` 调用避雷 speculator 时会捕获并记录 warning，避免 refresh loop 外层的 broad suppress 把异常静默吞掉。

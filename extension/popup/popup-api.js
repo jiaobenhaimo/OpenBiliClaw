@@ -138,6 +138,20 @@ export async function checkBackendStatus() {
   }
 }
 
+// Full /health payload (status, profile_ready, embedding_ready, ...).
+// Returns null when the backend is unreachable so callers can no-op
+// instead of throwing on startup.
+export async function fetchHealth() {
+  try {
+    const backendUrl = await getBackendBaseUrl();
+    const response = await fetch(`${backendUrl}/health`, { method: "GET" });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchRecommendations() {
   const payload = await requestJson("/recommendations", { method: "GET" });
   return Array.isArray(payload.items) ? payload.items.map(normalizeRecommendation) : [];
@@ -226,6 +240,25 @@ export async function fetchProfileSummary({ limit, cursor } = {}) {
   }
   const query = params.toString();
   return requestJson(`/profile-summary${query ? `?${query}` : ""}`, { method: "GET" });
+}
+
+export async function fetchEditState() {
+  return requestJson("/profile/edit-state", { method: "GET" });
+}
+
+export async function submitProfileEdit({ target, op, value = null, parent = "", weight = null }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35_000);
+  try {
+    return await requestJson("/profile/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target, op, value, parent, weight }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function submitFeedback(payload) {
@@ -476,4 +509,52 @@ export async function updateRuntimeToggle(name, value) {
     return updateConfig({ scheduler: { pause_on_extension_disconnect: enabled } });
   }
   throw new Error(`Unknown runtime toggle: ${name}`);
+}
+
+// ── Watch-later ──────────────────────────────────────────────────
+
+export async function addToWatchLater(bvid) {
+  return requestJson("/watch-later", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bvid }),
+  });
+}
+
+export async function removeFromWatchLater(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function watchLaterStatus(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`);
+}
+
+export async function fetchWatchLater(limit = 50, offset = 0) {
+  return requestJson(`/watch-later?limit=${limit}&offset=${offset}`);
+}
+
+// ── Favorites (收藏夹) ────────────────────────────────────────────
+
+export async function addToFavorite(bvid) {
+  return requestJson("/favorites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bvid }),
+  });
+}
+
+export async function removeFromFavorite(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function favoriteStatus(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`);
+}
+
+export async function fetchFavorites(limit = 50, offset = 0) {
+  return requestJson(`/favorites?limit=${limit}&offset=${offset}`);
 }

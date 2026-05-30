@@ -54,7 +54,7 @@
    - 与插件共享 `session=popup&scope=chat` 的主聊天历史
    - 聊天回复完成后刷新画像摘要与活动流
    - 底部固定两行输入框，优先保留聊天上下文浏览空间
-   - 消息收件箱 overlay（兴趣探测 + 惊喜推荐通知；兴趣探测动作对齐插件为「喜欢 / 不喜欢 / 多聊聊」，惊喜推荐动作对齐插件为「看看 / 喜欢 / 不感兴趣 / 聊一聊」）
+   - 消息收件箱 overlay（兴趣探测 + 避雷探针 + 惊喜推荐通知；兴趣探测动作对齐插件为「喜欢 / 不喜欢 / 多聊聊」，避雷探针动作为「确实不喜欢 / 不是 / 多聊聊」，惊喜推荐动作对齐插件为「看看 / 喜欢 / 不感兴趣 / 聊一聊」；探针卡片首次点击后会锁住同卡片其它动作，避免重复提交；空态提示保持 X 关闭入口可用）
 
 4. **通用**
    - 底部 Tab 导航栏（推荐/画像/对话）
@@ -164,7 +164,8 @@ if web_dir.is_dir():
 | 消息 | `GET /api/notifications/pending`, `POST /api/notifications/sent` |
 | 认知通知 | `GET /api/cognition-updates/pending`, `POST /api/cognition-updates/seen` |
 | 活动流 | `GET /api/activity-feed` |
-| 兴趣探测 | `POST /api/interest-probes/respond` |
+| 兴趣探测 | `GET /api/interest-probes/pending`, `POST /api/interest-probes/respond` |
+| 避雷探针 | `GET /api/avoidance-probes/pending`, `POST /api/avoidance-probes/respond` |
 | 实时 | `WS /api/runtime-stream` |
 | 健康 | `GET /api/health` |
 
@@ -187,7 +188,7 @@ if web_dir.is_dir():
 ### WebSocket
 
 复用插件的 `runtime-stream` 协议，移动端关注的事件：
-- `refresh.pool_updated` → 刷新推荐列表
+- `refresh.pool_updated` → 更新池子状态 / header，不替换当前推荐列表
 - `delight.candidate` → 更新惊喜推荐
 - `profile_updated` → 刷新画像
 - `interest.probe` → 弹出探测通知

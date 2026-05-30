@@ -127,6 +127,17 @@ export async function fetchProfileSummary({ limit, cursor } = {}) {
   return requestJson(`/profile-summary${qs ? `?${qs}` : ""}`);
 }
 
+export async function fetchEditState() {
+  return requestJson("/profile/edit-state");
+}
+
+export async function submitProfileEdit({ target, op, value = null, parent = "", weight = null }) {
+  return requestJson("/profile/edit", {
+    ...json({ target, op, value, parent, weight }),
+    timeoutMs: 35_000,
+  });
+}
+
 // ── Notifications ───────────────────────────────────────────
 export async function fetchPendingNotifications() {
   return requestJson("/notifications/pending");
@@ -225,4 +236,40 @@ export async function respondToAvoidanceProbe(domain, responseType, message = ""
     ...json({ domain, response: responseType, message }),
     timeoutMs: 35_000,
   });
+}
+
+// ── Watch-later ──────────────────────────────────────────────────
+
+export async function addToWatchLater(bvid) {
+  return requestJson("/watch-later", { ...json({ bvid }), method: "POST" });
+}
+
+export async function removeFromWatchLater(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+}
+
+export async function watchLaterStatus(bvid) {
+  return requestJson(`/watch-later/${encodeURIComponent(bvid)}`);
+}
+
+export async function fetchWatchLater(limit = 50, offset = 0) {
+  return requestJson(`/watch-later?limit=${limit}&offset=${offset}`);
+}
+
+// ── Favorites (收藏夹) ────────────────────────────────────────────
+
+export async function addToFavorite(bvid) {
+  return requestJson("/favorites", { ...json({ bvid }), method: "POST" });
+}
+
+export async function removeFromFavorite(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`, { method: "DELETE" });
+}
+
+export async function favoriteStatus(bvid) {
+  return requestJson(`/favorites/${encodeURIComponent(bvid)}`);
+}
+
+export async function fetchFavorites(limit = 50, offset = 0) {
+  return requestJson(`/favorites?limit=${limit}&offset=${offset}`);
 }

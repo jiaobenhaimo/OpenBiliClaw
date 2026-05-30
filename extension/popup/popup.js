@@ -51,6 +51,7 @@ import {
   fetchChatTurn,
   fetchChatTurns,
   fetchConfig,
+  fetchHealth,
   fetchPendingDelight,
   fetchPendingDelightBatch,
   fetchProfileSummary,
@@ -68,10 +69,16 @@ import {
   respondToAvoidanceProbe,
   respondToDelight,
   respondToInterestProbe,
+  fetchEditState,
+  submitProfileEdit,
   startChatTurn,
   submitFeedback,
   updateConfig,
   watchLaterStatus,
+  addToFavorite,
+  removeFromFavorite,
+  favoriteStatus,
+  fetchFavorites,
 } from "./popup-api.js";
 
 const state = {
@@ -144,15 +151,23 @@ const elements = {
   poolTopics: document.getElementById("poolTopics"),
   delightSlot: document.getElementById("delightSlot"),
   tabRecommend: document.getElementById("tabRecommend"),
+  tabFavorites: document.getElementById("tabFavorites"),
   tabProfile: document.getElementById("tabProfile"),
   tabChat: document.getElementById("tabChat"),
   viewRecommend: document.getElementById("viewRecommend"),
+  viewFavorites: document.getElementById("viewFavorites"),
   viewProfile: document.getElementById("viewProfile"),
   viewChat: document.getElementById("viewChat"),
+  favoritesList: document.getElementById("favoritesList"),
+  favoritesEmpty: document.getElementById("favoritesEmpty"),
   profileEmpty: document.getElementById("profileEmpty"),
   profileEmptyTitle: document.getElementById("profileEmptyTitle"),
   profileEmptyText: document.getElementById("profileEmptyText"),
   profileCard: document.getElementById("profileCard"),
+  profileEditBar: document.getElementById("profileEditBar"),
+  profileEditToggle: document.getElementById("profileEditToggle"),
+  profileEditHint: document.getElementById("profileEditHint"),
+  profileEditPanel: document.getElementById("profileEditPanel"),
   profilePortrait: document.getElementById("profilePortrait"),
   profileTraits: document.getElementById("profileTraits"),
   profileNeeds: document.getElementById("profileNeeds"),
@@ -202,6 +217,32 @@ async function setProxyImageSrc(image, coverUrl) {
   const origin = await getBackendOrigin();
   image.src = `${origin}${path}`;
   return true;
+}
+
+// Warm the browser cache for a batch of cover images BEFORE their cards are
+// inserted into the DOM. Without this, appended (load-more) cards paint their
+// near-white gradient placeholder while the cover is still downloading — the
+// "白一下再出来" flash. Pre-decoding here means the <img> in each card hits a
+// warm cache and paints on the first frame. Resolves on a timeout so one slow
+// cover can't stall the whole batch (the rest keep warming in the background).
+async function preloadCoverImages(items, { timeoutMs = 4000 } = {}) {
+  const origin = await getBackendOrigin();
+  const loaders = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const path = item?.cover_url ? buildImageProxyPath(item.cover_url) : null;
+      if (!path) return null;
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.addEventListener("load", () => resolve(), { once: true });
+        img.addEventListener("error", () => resolve(), { once: true });
+        img.src = `${origin}${path}`;
+      });
+    })
+    .filter(Boolean);
+  if (loaders.length === 0) return;
+  const timeout = new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  await Promise.race([Promise.allSettled(loaders), timeout]);
 }
 
 let recommendationLoadCheckTimer = null;
@@ -380,6 +421,7 @@ function setActiveTab(tabName) {
 
   const tabs = [
     ["recommend", elements.tabRecommend, elements.viewRecommend],
+    ["favorites", elements.tabFavorites, elements.viewFavorites],
     ["profile", elements.tabProfile, elements.viewProfile],
     ["chat", elements.tabChat, elements.viewChat],
   ];
@@ -401,6 +443,74 @@ function setActiveTab(tabName) {
   if (tabName === "recommend") {
     queueRecommendationLoadCheck();
   }
+  if (tabName === "favorites") {
+    void loadFavorites();
+  }
+}
+
+// ── Favorites view (收藏夹) ─────────────────────────────────────
+async function loadFavorites() {
+  const list = elements.favoritesList;
+  const empty = elements.favoritesEmpty;
+  if (!(list instanceof HTMLElement)) return;
+  let data = null;
+  try {
+    data = await fetchFavorites(100, 0);
+  } catch {
+    data = null;
+  }
+  const items = Array.isArray(data?.items) ? data.items : [];
+  list.replaceChildren();
+  if (!items.length) {
+    if (empty instanceof HTMLElement) empty.hidden = false;
+    return;
+  }
+  if (empty instanceof HTMLElement) empty.hidden = true;
+  for (const item of items) {
+    list.appendChild(buildFavoriteCard(item));
+  }
+}
+
+function buildFavoriteCard(item) {
+  const card = document.createElement("article");
+  card.className = "saved-card";
+  card.dataset.bvid = item.bvid;
+
+  const body = document.createElement("button");
+  body.type = "button";
+  body.className = "saved-card-open";
+  const title = document.createElement("p");
+  title.className = "saved-card-title";
+  title.textContent = item.title || item.bvid;
+  const up = document.createElement("p");
+  up.className = "saved-card-up";
+  up.textContent = item.up_name || "";
+  body.append(title, up);
+  body.addEventListener("click", () => {
+    const url = buildContentUrl(item);
+    if (url) window.open(url, "_blank");
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "saved-card-remove";
+  remove.textContent = "移除";
+  remove.title = "取消收藏";
+  remove.addEventListener("click", async () => {
+    remove.disabled = true;
+    try {
+      await removeFromFavorite(item.bvid);
+      card.remove();
+      if (!elements.favoritesList?.children.length && elements.favoritesEmpty instanceof HTMLElement) {
+        elements.favoritesEmpty.hidden = false;
+      }
+    } catch {
+      remove.disabled = false;
+    }
+  });
+
+  card.append(body, remove);
+  return card;
 }
 
 function showRecommendationEmptyState(title, message) {
@@ -691,15 +801,9 @@ function connectRuntimeStream() {
         setHint("后端配置已热重载，正在刷新数据…", "success");
         scheduleRecommendationsRefresh();
       }
-      // Discovery refresh tick produced new pool items — silently refetch
-      // the recommendation list so the popup doesn't show stale content
-      // when the daemon's been quietly replenishing the pool. No setHint
-      // (event happens from the background refresh loop, not a user action,
-      // so a banner would be intrusive). No DOM jump because top-N items
-      // mostly persist across pool replenishments.
-      if (event.type === "refresh.pool_updated") {
-        scheduleRecommendationsRefresh();
-      }
+      // Pool updates are already merged into runtimeStatus above. Keep the
+      // current recommendation list intact so appended history is not replaced
+      // by the latest top window from /api/recommendations.
       // Activity log got a new behavior event — refresh the activity feed
       // so the popup's "刚刚看了..." panel stays current without polling.
       if (event.type === "activity.added") {
@@ -2532,6 +2636,7 @@ function renderProfileSummary(summary) {
       loadingMore: false,
       loadMoreError: "",
     });
+    syncProfileEditChrome(false);
     return;
   }
 
@@ -2573,6 +2678,326 @@ function renderProfileSummary(summary) {
   // Signals
   renderActiveInsights(elements.profileActiveInsights, summary.active_insights);
   renderRecentAwareness(elements.profileRecentAwareness, summary.recent_awareness);
+  syncProfileEditChrome(true);
+}
+
+// ── Editable profile (Phase 2) ──────────────────────────────────────────
+// Inline edit mode: the display card is hidden and an edit panel is rendered
+// from GET /api/profile/edit-state (un-truncated). Each control posts one
+// deterministic edit to /api/profile/edit and re-renders from the returned
+// edit_state. Edits survive profile rebuilds (server-side overrides overlay).
+
+let profileEditing = false;
+
+const EDIT_FIELD_LABELS = {
+  personality_portrait: "人格画像",
+  "core.core_traits": "核心特质",
+  "core.deep_needs": "深层需求",
+  "values_layer.values": "价值偏好",
+  "values_layer.motivational_drivers": "内在驱动力",
+  likes: "感兴趣的方向",
+  dislikes: "明显会避开",
+  "interest.favorite_up_users": "常看的 UP 主",
+  "role.life_stage": "人生阶段",
+  "role.current_phase": "当前阶段",
+  "surface.cognitive_style": "认知风格",
+};
+const EDIT_FIELD_ORDER = [
+  "personality_portrait",
+  "core.core_traits",
+  "core.deep_needs",
+  "values_layer.values",
+  "values_layer.motivational_drivers",
+  "likes",
+  "dislikes",
+  "interest.favorite_up_users",
+  "role.life_stage",
+  "role.current_phase",
+  "surface.cognitive_style",
+];
+
+function syncProfileEditChrome(initialized) {
+  if (elements.profileEditBar instanceof HTMLElement) {
+    elements.profileEditBar.hidden = !initialized;
+  }
+  if (!initialized && profileEditing) {
+    // Profile vanished while editing — bail out of edit mode quietly.
+    exitProfileEditMode({ refresh: false });
+    return;
+  }
+  if (initialized && profileEditing) {
+    // Stay in edit mode even if a background refresh re-rendered the card.
+    if (elements.profileCard instanceof HTMLElement) elements.profileCard.hidden = true;
+    if (elements.profileEditPanel instanceof HTMLElement) elements.profileEditPanel.hidden = false;
+  }
+}
+
+async function refreshEditPanel() {
+  try {
+    const editState = await fetchEditState();
+    renderEditPanel(elements.profileEditPanel, editState);
+  } catch (err) {
+    console.error("load edit-state failed:", err);
+  }
+}
+
+async function enterProfileEditMode() {
+  profileEditing = true;
+  if (elements.profileCard instanceof HTMLElement) elements.profileCard.hidden = true;
+  if (elements.profileEditPanel instanceof HTMLElement) elements.profileEditPanel.hidden = false;
+  if (elements.profileEditHint instanceof HTMLElement) elements.profileEditHint.hidden = false;
+  if (elements.profileEditToggle instanceof HTMLButtonElement) {
+    elements.profileEditToggle.textContent = "✓ 完成";
+  }
+  await refreshEditPanel();
+}
+
+function exitProfileEditMode({ refresh = true } = {}) {
+  profileEditing = false;
+  if (elements.profileEditPanel instanceof HTMLElement) {
+    elements.profileEditPanel.hidden = true;
+    elements.profileEditPanel.replaceChildren();
+  }
+  if (elements.profileEditHint instanceof HTMLElement) elements.profileEditHint.hidden = true;
+  if (elements.profileEditToggle instanceof HTMLButtonElement) {
+    elements.profileEditToggle.textContent = "✏️ 编辑画像";
+  }
+  if (elements.profileCard instanceof HTMLElement) elements.profileCard.hidden = false;
+  if (refresh) void loadProfileSummary({ force: true });
+}
+
+function bindProfileEditToggle() {
+  if (!(elements.profileEditToggle instanceof HTMLButtonElement)) return;
+  elements.profileEditToggle.addEventListener("click", () => {
+    if (profileEditing) exitProfileEditMode();
+    else void enterProfileEditMode();
+  });
+}
+
+async function applyProfileEdit(payload) {
+  const panel = elements.profileEditPanel;
+  if (panel instanceof HTMLElement) {
+    panel.querySelectorAll("button, input, textarea").forEach((el) => {
+      if (
+        el instanceof HTMLButtonElement ||
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement
+      ) {
+        el.disabled = true;
+      }
+    });
+  }
+  try {
+    const res = await submitProfileEdit(payload);
+    const next =
+      res && res.edit_state && res.edit_state.initialized
+        ? res.edit_state
+        : await fetchEditState();
+    renderEditPanel(panel, next);
+  } catch (err) {
+    console.error("profile edit failed:", err);
+    void refreshEditPanel();
+  }
+}
+
+function makeEditedBadge() {
+  const badge = document.createElement("span");
+  badge.className = "edit-badge";
+  badge.textContent = "已编辑";
+  return badge;
+}
+
+function makeResetButton(path) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "edit-reset-btn";
+  btn.textContent = "恢复 AI 建议";
+  btn.addEventListener("click", () => void applyProfileEdit({ target: path, op: "reset" }));
+  return btn;
+}
+
+function makeRemovableChip(label, onRemove) {
+  const chip = document.createElement("span");
+  chip.className = "edit-chip";
+  const text = document.createElement("span");
+  text.textContent = label;
+  chip.append(text);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "edit-chip-remove";
+  remove.textContent = "✕";
+  remove.setAttribute("aria-label", `移除 ${label}`);
+  remove.addEventListener("click", onRemove);
+  chip.append(remove);
+  return chip;
+}
+
+function makeAddRow(placeholder, onAdd) {
+  const row = document.createElement("div");
+  row.className = "edit-add-row";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "edit-add-input";
+  input.placeholder = placeholder;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "action-button edit-add-btn";
+  btn.textContent = "添加";
+  const submit = () => {
+    const value = input.value.trim();
+    if (!value) return;
+    input.value = "";
+    void onAdd(value);
+  };
+  btn.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit();
+    }
+  });
+  row.append(input, btn);
+  return row;
+}
+
+function makeEditFieldBlock(label, edited) {
+  const block = document.createElement("div");
+  block.className = "edit-field";
+  const head = document.createElement("div");
+  head.className = "edit-field-head";
+  const title = document.createElement("span");
+  title.className = "edit-field-label";
+  title.textContent = label;
+  head.append(title);
+  if (edited) head.append(makeEditedBadge());
+  block.append(head);
+  return block;
+}
+
+function renderTextEditField(path, label, field) {
+  const block = makeEditFieldBlock(label, Boolean(field.pinned));
+  const textarea = document.createElement("textarea");
+  textarea.className = "chat-input edit-text-input";
+  textarea.rows = path === "personality_portrait" ? 4 : 2;
+  textarea.value = typeof field.value === "string" ? field.value : "";
+  block.append(textarea);
+
+  if (field.ai_suggestion) {
+    const hint = document.createElement("p");
+    hint.className = "edit-drift-hint";
+    hint.textContent = `AI 当前想更新为：${field.ai_suggestion}`;
+    block.append(hint);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "edit-field-actions";
+  const editSaveBtn = document.createElement("button");
+  editSaveBtn.type = "button";
+  editSaveBtn.className = "action-button action-primary edit-save-btn";
+  editSaveBtn.textContent = "保存";
+  editSaveBtn.addEventListener("click", () => {
+    const value = textarea.value.trim();
+    if (!value) return;
+    void applyProfileEdit({ target: path, op: "set", value });
+  });
+  actions.append(editSaveBtn);
+  if (field.pinned) actions.append(makeResetButton(path));
+  block.append(actions);
+  return block;
+}
+
+function renderListEditField(path, label, field) {
+  const items = Array.isArray(field.items) ? field.items : [];
+  const added = Array.isArray(field.added) ? field.added : [];
+  const removed = Array.isArray(field.removed) ? field.removed : [];
+  const edited = added.length > 0 || removed.length > 0;
+  const block = makeEditFieldBlock(label, edited);
+
+  const chips = document.createElement("div");
+  chips.className = "edit-chip-list";
+  for (const item of items) {
+    chips.append(
+      makeRemovableChip(item, () => applyProfileEdit({ target: path, op: "remove", value: item })),
+    );
+  }
+  if (items.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "edit-empty";
+    empty.textContent = "还没有，添加一个吧";
+    chips.append(empty);
+  }
+  block.append(chips);
+  block.append(makeAddRow("添加一项", (value) => applyProfileEdit({ target: path, op: "add", value })));
+  if (edited) {
+    const actions = document.createElement("div");
+    actions.className = "edit-field-actions";
+    actions.append(makeResetButton(path));
+    block.append(actions);
+  }
+  return block;
+}
+
+function renderInterestEditField(path, label, field) {
+  const domains = Array.isArray(field.domains) ? field.domains : [];
+  const removed = Array.isArray(field.removed_domains) ? field.removed_domains : [];
+  const edited = removed.length > 0 || domains.some((d) => d && d.user_added);
+  const block = makeEditFieldBlock(label, edited);
+
+  const chips = document.createElement("div");
+  chips.className = "edit-chip-list";
+  for (const dom of domains) {
+    if (!dom || !dom.domain) continue;
+    const name = dom.user_added ? `${dom.domain} ＋` : dom.domain;
+    chips.append(
+      makeRemovableChip(name, () =>
+        applyProfileEdit({ target: path, op: "remove", value: dom.domain }),
+      ),
+    );
+  }
+  if (domains.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "edit-empty";
+    empty.textContent = "还没有，添加一个吧";
+    chips.append(empty);
+  }
+  block.append(chips);
+  const placeholder = path === "dislikes" ? "添加要避开的领域" : "添加感兴趣的领域";
+  block.append(makeAddRow(placeholder, (value) => applyProfileEdit({ target: path, op: "add", value })));
+  if (edited) {
+    const actions = document.createElement("div");
+    actions.className = "edit-field-actions";
+    actions.append(makeResetButton(path));
+    block.append(actions);
+  }
+  return block;
+}
+
+function renderEditPanel(container, editState) {
+  if (!(container instanceof HTMLElement)) return;
+  container.replaceChildren();
+  if (!editState || !editState.initialized || !editState.fields) {
+    const note = document.createElement("p");
+    note.className = "profile-edit-note";
+    note.textContent = "画像还没攒起来，先跑一遍 openbiliclaw init 再回来编辑。";
+    container.append(note);
+    return;
+  }
+  const intro = document.createElement("p");
+  intro.className = "profile-edit-note";
+  intro.textContent = "改完即时生效，且不会被后续自动重建覆盖；删错了点「恢复 AI 建议」即可。";
+  container.append(intro);
+
+  const fields = editState.fields;
+  for (const path of EDIT_FIELD_ORDER) {
+    const field = fields[path];
+    if (!field || typeof field !== "object") continue;
+    const label = EDIT_FIELD_LABELS[path] || path;
+    let block = null;
+    if (field.type === "text") block = renderTextEditField(path, label, field);
+    else if (field.type === "list") block = renderListEditField(path, label, field);
+    else if (field.type === "interest") block = renderInterestEditField(path, label, field);
+    if (block) container.append(block);
+  }
 }
 
 function appendChatMessage(role, content, { turnId = "", part = "" } = {}) {
@@ -3275,61 +3700,92 @@ function renderDelightSlot() {
       },
     );
 
-    // 稍后再看 button for the delight banner — same /api/watch-later
-    // endpoint as the regular rec card's star, so a delight and a
-    // rec row pointing at the same bvid stay in sync. Optimistic
-    // flip + reconcile + revert-on-error mirrors the rec-card pattern.
-    let delightWatchLaterSaved = false;
-    let delightWatchLaterUserInteracted = false;
-    const renderDelightWatchLater = (saved) => (saved ? "★ 已收藏" : "☆ 稍后再看");
-    const watchLaterButton = createActionButton(
-      renderDelightWatchLater(false),
-      "action-button action-secondary delight-banner-action",
-      async () => {
-        if (!delight.bvid) return;
-        delightWatchLaterUserInteracted = true;
-        const wasSaved = delightWatchLaterSaved;
-        const nextSaved = !wasSaved;
-        delightWatchLaterSaved = nextSaved;
-        watchLaterButton.textContent = renderDelightWatchLater(nextSaved);
-        watchLaterButton.disabled = true;
+    // 稍后再看 (☆) — ephemeral queue
+    // 稍后再看 = 时钟图标（状态走 aria-pressed + CSS，不做字形替换）
+    const delightWatchLaterButton = (() => {
+      let busy = false;
+      let saved = false;
+      const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle watch-later-btn", async () => {
+        if (busy) return;
+        busy = true;
+        const wasSaved = saved;
+        saved = !wasSaved;
+        btn.setAttribute("aria-pressed", saved ? "true" : "false");
         try {
-          const res = nextSaved
-            ? await addToWatchLater(delight.bvid)
-            : await removeFromWatchLater(delight.bvid);
-          // Reconcile with server truth.
-          if (res && typeof res.saved === "boolean") {
-            delightWatchLaterSaved = res.saved;
-            watchLaterButton.textContent = renderDelightWatchLater(res.saved);
+          if (wasSaved) {
+            await removeFromWatchLater(delight.bvid);
+          } else {
+            await addToWatchLater(delight.bvid);
           }
         } catch {
-          // Revert optimistic flip.
-          delightWatchLaterSaved = wasSaved;
-          watchLaterButton.textContent = renderDelightWatchLater(wasSaved);
+          saved = wasSaved;
+          btn.setAttribute("aria-pressed", saved ? "true" : "false");
         } finally {
-          watchLaterButton.disabled = false;
+          busy = false;
         }
-      },
-    );
-    // Lazy-check initial saved state — same race-protection idiom as
-    // the rec card (skip applying if the user already clicked).
-    if (delight.bvid) {
-      void (async () => {
-        const status = await watchLaterStatus(delight.bvid);
-        if (delightWatchLaterUserInteracted) return;
-        if (status && status.saved === true) {
-          delightWatchLaterSaved = true;
-          watchLaterButton.textContent = renderDelightWatchLater(true);
+      });
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
+      btn.setAttribute("aria-pressed", "false");
+      btn.title = "\u7A0D\u540E\u518D\u770B";
+      watchLaterStatus(delight.bvid).then((res) => {
+        if (res && res.saved) {
+          saved = true;
+          btn.setAttribute("aria-pressed", "true");
+          btn.title = "\u53D6\u6D88\u7A0D\u540E\u518D\u770B";
         }
-      })();
-    }
+      }).catch(() => {});
+      return btn;
+    })();
+
+    // \u6536\u85CF = \u661F\u661F\u56FE\u6807\uFF0C\u4E0E\u7A0D\u540E\u518D\u770B\u76F8\u4E92\u72EC\u7ACB
+    const delightFavoriteButton = (() => {
+      let busy = false;
+      let saved = false;
+      const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle favorite-btn", async () => {
+        if (busy) return;
+        busy = true;
+        const wasSaved = saved;
+        saved = !wasSaved;
+        btn.setAttribute("aria-pressed", saved ? "true" : "false");
+        try {
+          if (wasSaved) {
+            await removeFromFavorite(delight.bvid);
+          } else {
+            await addToFavorite(delight.bvid);
+          }
+        } catch {
+          saved = wasSaved;
+          btn.setAttribute("aria-pressed", saved ? "true" : "false");
+        } finally {
+          busy = false;
+        }
+      });
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>';
+      btn.setAttribute("aria-pressed", "false");
+      btn.title = "\u6536\u85CF";
+      favoriteStatus(delight.bvid).then((res) => {
+        if (res && res.saved) {
+          saved = true;
+          btn.setAttribute("aria-pressed", "true");
+          btn.title = "\u53D6\u6D88\u6536\u85CF";
+        }
+      }).catch(() => {});
+      return btn;
+    })();
 
     if (isHandled || isChatting) {
       rejectButton.disabled = true;
       likeButton.disabled = true;
     }
 
-    actions.append(openButton, likeButton, rejectButton, watchLaterButton, chatButton);
+    actions.append(
+      openButton,
+      likeButton,
+      delightWatchLaterButton,
+      delightFavoriteButton,
+      rejectButton,
+      chatButton,
+    );
     body.append(actions);
 
     if (delight.composer_open) {
@@ -3783,6 +4239,40 @@ function renderRecommendations(items, { append = false } = {}) {
           setHint("这条反馈没记上，先看看本地后端是不是开着。", "error");
         }
       }),
+      (() => {
+        let busy = false;
+        let saved = false;
+        const btn = createActionButton("\u2606", "action-button action-secondary", async () => {
+          if (busy) return;
+          busy = true;
+          const wasSaved = saved;
+          saved = !wasSaved;
+          btn.textContent = saved ? "\u2605" : "\u2606";
+          btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+          try {
+            if (wasSaved) {
+              await removeFromWatchLater(item.bvid);
+            } else {
+              await addToWatchLater(item.bvid);
+            }
+          } catch {
+            saved = wasSaved;
+            btn.textContent = saved ? "\u2605" : "\u2606";
+            btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
+          } finally {
+            busy = false;
+          }
+        });
+        btn.title = "\u7A0D\u540E\u518D\u770B";
+        watchLaterStatus(item.bvid).then((res) => {
+          if (res && res.saved) {
+            saved = true;
+            btn.textContent = "\u2605";
+            btn.title = "\u53D6\u6D88\u6536\u85CF";
+          }
+        }).catch(() => {});
+        return btn;
+      })(),
       createActionButton("少来点", "action-button action-secondary", async () => {
         try {
           setFeedbackStatusWithTone(
@@ -3935,6 +4425,8 @@ async function loadMoreRecommendations() {
 
     if (appended.length > 0) {
       state.recommendations = [...state.recommendations, ...appended];
+      // Preload covers before inserting cards so they paint without the white flash.
+      await preloadCoverImages(appended);
       renderRecommendations(appended, { append: true });
       setHint(`又给你续了 ${appended.length} 条，继续往下翻。`, "success");
     } else if (incoming.length === 0) {
@@ -3966,8 +4458,11 @@ function maybeLoadMoreRecommendations() {
     return;
   }
 
+  // Trigger well before the bottom (not 96px) so preloadCoverImages has time to
+  // warm the next batch's covers before the user actually scrolls onto them —
+  // keeps newly revealed content flash-free.
   const remaining = elements.content.scrollHeight - elements.content.scrollTop - elements.content.clientHeight;
-  if (remaining <= 96) {
+  if (remaining <= 600) {
     recommendationAutoLoadUserArmed = false;
     void loadMoreRecommendations();
   }
@@ -4351,6 +4846,7 @@ async function handleManualRefresh() {
 function bindTabs() {
   const bindings = [
     [elements.tabRecommend, "recommend"],
+    [elements.tabFavorites, "favorites"],
     [elements.tabProfile, "profile"],
     [elements.tabChat, "chat"],
   ];
@@ -4378,6 +4874,8 @@ function bindProfileHistoryLoading() {
       void loadMoreCognitionHistory();
     });
   }
+
+  bindProfileEditToggle();
 }
 
 function bindRefreshButton() {
@@ -5305,6 +5803,82 @@ function bindSettings() {
   });
 }
 
+// Session-scoped dismissal so we don't nag on every popup open after the
+// user explicitly closes the banner. Re-appears next session if embedding
+// is still disabled.
+const EMBEDDING_BANNER_DISMISS_KEY = "embeddingBannerDismissed";
+
+async function enableLocalOllamaEmbedding(enableBtn) {
+  const original = enableBtn ? enableBtn.textContent : "";
+  if (enableBtn) {
+    enableBtn.disabled = true;
+    enableBtn.textContent = "启用中…";
+  }
+  try {
+    await updateConfig({
+      llm: {
+        embedding: {
+          provider: "ollama",
+          model: "bge-m3",
+          base_url: "http://localhost:11434/v1",
+        },
+      },
+    });
+    // Re-check: hot-reload rebuilds the embedding service in-process, so
+    // health flips to embedding_ready=true only if Ollama actually served
+    // a vector. Don't claim success on a config write alone.
+    const health = await fetchHealth();
+    const banner = document.getElementById("embeddingBanner");
+    if (health && health.embedding_ready) {
+      if (banner) banner.hidden = true;
+      setHint("已启用本地 Ollama 语义去重，重复内容会少很多。", "success");
+    } else {
+      if (enableBtn) {
+        enableBtn.disabled = false;
+        enableBtn.textContent = "重试";
+      }
+      setHint(
+        "配置已写入，但 Ollama 还没就绪。请确认已运行 `ollama serve` 并 `ollama pull bge-m3`。",
+        "error",
+      );
+    }
+  } catch {
+    if (enableBtn) {
+      enableBtn.disabled = false;
+      enableBtn.textContent = "重试";
+    }
+    setHint("启用失败，请检查后端连接后重试。", "error");
+  }
+}
+
+async function maybeShowEmbeddingBanner() {
+  const banner = document.getElementById("embeddingBanner");
+  if (!banner) return;
+  if (sessionStorage.getItem(EMBEDDING_BANNER_DISMISS_KEY) === "1") return;
+  const health = await fetchHealth();
+  // Only nag when the backend explicitly reports embedding is off. A null
+  // health (backend unreachable) or older backend without the field stays
+  // silent — the connection banner already covers "backend down".
+  if (!health || health.embedding_ready !== false) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  const enableBtn = document.getElementById("embeddingBannerEnable");
+  const dismissBtn = document.getElementById("embeddingBannerDismiss");
+  if (enableBtn && !enableBtn.dataset.bound) {
+    enableBtn.dataset.bound = "1";
+    enableBtn.addEventListener("click", () => void enableLocalOllamaEmbedding(enableBtn));
+  }
+  if (dismissBtn && !dismissBtn.dataset.bound) {
+    dismissBtn.dataset.bound = "1";
+    dismissBtn.addEventListener("click", () => {
+      sessionStorage.setItem(EMBEDDING_BANNER_DISMISS_KEY, "1");
+      banner.hidden = true;
+    });
+  }
+}
+
 async function initializePopup() {
   const params = new URLSearchParams(window.location.search);
   const requestedTab = params.get("tab");
@@ -5327,6 +5901,7 @@ async function initializePopup() {
   );
   setHint("先看看本地后端连上没。");
   await initializeRecommendations();
+  void maybeShowEmbeddingBanner();
   await hydrateChatHistory();
   // Always fetch profile-summary on startup so the messages inbox is
   // populated regardless of which tab the user lands on.  Without this

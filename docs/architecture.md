@@ -10,7 +10,12 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 4. **多源适配层（v0.3.0+）** — `SourceAdapter` 协议下的 B 站 / 小红书 / 抖音 / YouTube / 通用 Web 源
 5. **多层网状记忆存储** — Core / Episodic / Semantic / Working Memory（SQLite + 向量索引 + JSON）
 
-详见 [项目 Spec](spec.md) 中的架构图。
+详见 [项目 Spec](spec.md) 中的架构图。模块级可视化图放在 `docs/diagrams/`：
+
+- [Soul 模块架构与流程图](diagrams/soul-architecture.html)
+- [Recommendation 模块架构与流程图](diagrams/recommendation-architecture.html)
+- [Web HTML 模块架构与流程图](diagrams/web-architecture.html)
+- [Discovery 模块架构图](diagrams/discovery-architecture.html)
 
 ## 模块职责
 
@@ -28,6 +33,7 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 ### User Soul Engine (`soul/`)
 - 行为数据分析和画像构建
 - 五层灵魂模型（事件→偏好→觉察→洞察→灵魂）
+- 用户画像覆盖层（`overrides.py`）：用户手动编辑存独立 `profile_overrides.json`，在读收口 `get_profile()` 与镜像收口 `sync_profile_files()` 叠加到 AI 画像之上（有效画像 = AI ⊕ 覆盖），画像重建不覆盖用户编辑；删 / 拉黑经有效 dislikes 影响 discovery / recommendation / delight 硬过滤（Phase 1 后端；编辑 UI 见 Phase 2/3）
 - `event_filters` / `satisfaction_filter_enabled` — 偏好分析前只丢弃 `negative`（quick_exit / explicit_negative）事件，保留 positive / neutral / unknown 作为上下文
 - `negative_exemplars` — 从事件层抽取近期 negative 标题，供 Discovery eval-batch 做负样本锚点
 - `InterestSpeculator` — 兴趣推测与投机性发现
