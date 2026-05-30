@@ -14,7 +14,7 @@ from typing import Any
 
 from . import detect
 from . import search as _search_mod
-from .cache import MISS, RepostCache
+from .cache import MISS, RepostCache, _Miss
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class RepostService:
         pass (:meth:`warm_bilibili_to_youtube`) fills the cache.
         """
         cached = self._b2y.get(bvid) if not force else MISS
-        if cached is not MISS:
+        if not isinstance(cached, _Miss):
             return cached  # may be None (cached no-match)
 
         if not search:
@@ -137,7 +137,7 @@ class RepostService:
         :meth:`link_bilibili_to_youtube`).
         """
         cached = self._y2b.get(yt_id) if not force else MISS
-        if cached is not MISS:
+        if not isinstance(cached, _Miss):
             return cached
 
         if not search:
@@ -282,7 +282,7 @@ class RepostService:
                 continue
             if str(row.get("source_platform", "") or "") == "youtube":
                 continue
-            if self._b2y.get(bvid) is not MISS:
+            if not isinstance(self._b2y.get(bvid), _Miss):
                 continue  # already resolved (match or no-match)
             scanned += 1
             result = self.link_bilibili_to_youtube(

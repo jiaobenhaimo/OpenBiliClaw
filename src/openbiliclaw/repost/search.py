@@ -84,7 +84,8 @@ def _search_youtube(query: str, max_results: int = 10) -> list[dict[str, Any]]:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-            return list(info.get("entries", [])) if info else []
+            entries = info.get("entries", []) if info else []
+            return list(entries) if isinstance(entries, list) else []
     except Exception:
         logger.debug("yt-dlp search failed for query=%r", query, exc_info=True)
         return []
@@ -190,7 +191,9 @@ def _search_bilibili(query: str, max_results: int = 10) -> list[dict[str, Any]]:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
-        result_list = (data.get("data", {}) or {}).get("result", []) or []
+        result_list = (data.get("data", {}) or {}).get("result", [])
+        if not isinstance(result_list, list):
+            return []
         return result_list[:max_results]
     except Exception:
         logger.debug("bilibili search failed for query=%r", query, exc_info=True)

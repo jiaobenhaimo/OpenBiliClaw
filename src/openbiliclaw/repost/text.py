@@ -91,7 +91,8 @@ def find_youtube_id(text: str) -> str | None:
     m = _YT_URL_RE.search(text)
     if not m:
         return None
-    return m.group(1) or m.group(2)
+    vid: str | None = m.group(1) or m.group(2)
+    return vid
 
 
 def find_bilibili_id(text: str) -> str | None:
@@ -106,9 +107,13 @@ def find_bilibili_id(text: str) -> str | None:
         return None
     url_match = _BILI_URL_RE.search(text)
     if url_match and url_match.group(1):
-        return url_match.group(1)
+        bvid: str = url_match.group(1)
+        return bvid
     bare = _BV_ID_RE.search(text)
-    return bare.group(0) if bare else None
+    if bare:
+        token: str = bare.group(0)
+        return token
+    return None
 
 
 def has_bilibili_link(text: str) -> bool:

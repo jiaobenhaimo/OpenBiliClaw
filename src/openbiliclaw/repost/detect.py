@@ -128,7 +128,9 @@ def detect_bilibili_from_youtube(
         return RepostSignal(True, 0.55, [f"描述含来源标记:{desc_sig}"])
 
     # 6. Social: comment accusations.
-    signal = _comment_signal(comments, vocab.A_REPOST_COMMENT_KEYWORDS, ("youtube", "youtu.be", "油管", "YT"))
+    signal = _comment_signal(
+        comments, vocab.A_REPOST_COMMENT_KEYWORDS, ("youtube", "youtu.be", "油管", "YT")
+    )
     if signal:
         reasons.append(signal)
         return RepostSignal(True, 0.5, reasons)
