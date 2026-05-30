@@ -43,6 +43,7 @@ import {
   getMobileQrViewState,
   isLoopbackMobileHost,
 } from "./popup-qr.js";
+import { createSavedToggleRegistry } from "./popup-saved-sync.js";
 import {
   addToWatchLater,
   appendRecommendations,
@@ -254,6 +255,22 @@ const CHAT_SESSION = "popup";
 const CHAT_POLL_INTERVAL_MS = 1200;
 const CHAT_POLL_DEADLINE_MS = 180_000;
 const activeChatPolls = new Map();
+const watchLaterToggles = createSavedToggleRegistry({
+  labels: {
+    checkedTitle: "取消稍后再看",
+    uncheckedTitle: "稍后再看",
+    checkedAriaLabel: "取消稍后再看",
+    uncheckedAriaLabel: "稍后再看",
+  },
+});
+const favoriteToggles = createSavedToggleRegistry({
+  labels: {
+    checkedTitle: "取消收藏",
+    uncheckedTitle: "收藏",
+    checkedAriaLabel: "取消收藏",
+    uncheckedAriaLabel: "收藏",
+  },
+});
 
 const CHAT_PLACEHOLDERS = [
   // 想法与内容判断类
@@ -448,6 +465,32 @@ function setActiveTab(tabName) {
   }
 }
 
+async function toggleWatchLaterSaved(bvid) {
+  return watchLaterToggles.toggle(bvid, {
+    add: addToWatchLater,
+    remove: removeFromWatchLater,
+  });
+}
+
+async function toggleFavoriteSaved(bvid) {
+  return favoriteToggles.toggle(bvid, {
+    add: addToFavorite,
+    remove: removeFromFavorite,
+  });
+}
+
+function bindWatchLaterToggle(button, bvid, labels = {}) {
+  watchLaterToggles.registerButton(bvid, button, labels);
+  void watchLaterToggles.hydrateStatus(bvid, watchLaterStatus);
+  return button;
+}
+
+function bindFavoriteToggle(button, bvid, labels = {}) {
+  favoriteToggles.registerButton(bvid, button, labels);
+  void favoriteToggles.hydrateStatus(bvid, favoriteStatus);
+  return button;
+}
+
 // ── Favorites view (收藏夹) ─────────────────────────────────────
 async function loadFavorites() {
   const list = elements.favoritesList;
@@ -467,6 +510,7 @@ async function loadFavorites() {
   }
   if (empty instanceof HTMLElement) empty.hidden = true;
   for (const item of items) {
+    favoriteToggles.setSaved(item.bvid, true);
     list.appendChild(buildFavoriteCard(item));
   }
 }
@@ -500,6 +544,7 @@ function buildFavoriteCard(item) {
     remove.disabled = true;
     try {
       await removeFromFavorite(item.bvid);
+      favoriteToggles.setSaved(item.bvid, false);
       card.remove();
       if (!elements.favoritesList?.children.length && elements.favoritesEmpty instanceof HTMLElement) {
         elements.favoritesEmpty.hidden = false;
@@ -2701,6 +2746,10 @@ const EDIT_FIELD_LABELS = {
   "role.life_stage": "人生阶段",
   "role.current_phase": "当前阶段",
   "surface.cognitive_style": "认知风格",
+  "surface.exploration_openness": "探索开放度",
+  "surface.style.quality_sensitivity": "质量敏感度",
+  "surface.style.humor_preference": "幽默偏好",
+  "surface.style.depth_preference": "深度偏好",
 };
 const EDIT_FIELD_ORDER = [
   "personality_portrait",
@@ -2714,6 +2763,10 @@ const EDIT_FIELD_ORDER = [
   "role.life_stage",
   "role.current_phase",
   "surface.cognitive_style",
+  "surface.exploration_openness",
+  "surface.style.quality_sensitivity",
+  "surface.style.humor_preference",
+  "surface.style.depth_preference",
 ];
 
 function syncProfileEditChrome(initialized) {
@@ -2906,6 +2959,55 @@ function renderTextEditField(path, label, field) {
   return block;
 }
 
+// Scalar (0..1) fields render as a percent slider. Like text fields they
+// commit on an explicit 保存 tap (not per-drag); the live label tracks the
+// slider on input so the value is visible while dragging.
+function renderScalarEditField(path, label, field) {
+  const block = makeEditFieldBlock(label, Boolean(field.pinned));
+  const pct = Math.round((Number(field.value) || 0) * 100);
+
+  const row = document.createElement("div");
+  row.className = "edit-scalar-row";
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "100";
+  slider.step = "1";
+  slider.value = String(pct);
+  slider.className = "edit-scalar-input";
+  const out = document.createElement("span");
+  out.className = "edit-scalar-value";
+  out.textContent = `${pct}%`;
+  slider.addEventListener("input", () => {
+    out.textContent = `${slider.value}%`;
+  });
+  row.append(slider, out);
+  block.append(row);
+
+  if (typeof field.ai_suggestion === "number") {
+    const hint = document.createElement("p");
+    hint.className = "edit-drift-hint";
+    hint.textContent = `AI 当前想更新为：${Math.round(field.ai_suggestion * 100)}%`;
+    block.append(hint);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "edit-field-actions";
+  // Named editSaveBtn (not saveBtn) to match renderTextEditField and avoid the
+  // settings-test regex that anchors on the lowercase `saveBtn.addEventListener`.
+  const editSaveBtn = document.createElement("button");
+  editSaveBtn.type = "button";
+  editSaveBtn.className = "action-button action-primary edit-save-btn";
+  editSaveBtn.textContent = "保存";
+  editSaveBtn.addEventListener("click", () => {
+    void applyProfileEdit({ target: path, op: "set", value: Number(slider.value) / 100 });
+  });
+  actions.append(editSaveBtn);
+  if (field.pinned) actions.append(makeResetButton(path));
+  block.append(actions);
+  return block;
+}
+
 function renderListEditField(path, label, field) {
   const items = Array.isArray(field.items) ? field.items : [];
   const added = Array.isArray(field.added) ? field.added : [];
@@ -2984,7 +3086,8 @@ function renderEditPanel(container, editState) {
   }
   const intro = document.createElement("p");
   intro.className = "profile-edit-note";
-  intro.textContent = "改完即时生效，且不会被后续自动重建覆盖；删错了点「恢复 AI 建议」即可。";
+  intro.textContent =
+    "标签 / 兴趣类增删即时生效；文本与滑杆类改完点「保存」才生效。改动都不会被后续自动重建覆盖，删错了点「恢复 AI 建议」即可。";
   container.append(intro);
 
   const fields = editState.fields;
@@ -2994,6 +3097,7 @@ function renderEditPanel(container, editState) {
     const label = EDIT_FIELD_LABELS[path] || path;
     let block = null;
     if (field.type === "text") block = renderTextEditField(path, label, field);
+    else if (field.type === "scalar") block = renderScalarEditField(path, label, field);
     else if (field.type === "list") block = renderListEditField(path, label, field);
     else if (field.type === "interest") block = renderInterestEditField(path, label, field);
     if (block) container.append(block);
@@ -3703,73 +3807,29 @@ function renderDelightSlot() {
     // 稍后再看 (☆) — ephemeral queue
     // 稍后再看 = 时钟图标（状态走 aria-pressed + CSS，不做字形替换）
     const delightWatchLaterButton = (() => {
-      let busy = false;
-      let saved = false;
       const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle watch-later-btn", async () => {
-        if (busy) return;
-        busy = true;
-        const wasSaved = saved;
-        saved = !wasSaved;
-        btn.setAttribute("aria-pressed", saved ? "true" : "false");
         try {
-          if (wasSaved) {
-            await removeFromWatchLater(delight.bvid);
-          } else {
-            await addToWatchLater(delight.bvid);
-          }
+          await toggleWatchLaterSaved(delight.bvid);
         } catch {
-          saved = wasSaved;
-          btn.setAttribute("aria-pressed", saved ? "true" : "false");
-        } finally {
-          busy = false;
+          // Registry already rolled back the optimistic state.
         }
       });
       btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.2 1.9"/></svg>';
-      btn.setAttribute("aria-pressed", "false");
-      btn.title = "\u7A0D\u540E\u518D\u770B";
-      watchLaterStatus(delight.bvid).then((res) => {
-        if (res && res.saved) {
-          saved = true;
-          btn.setAttribute("aria-pressed", "true");
-          btn.title = "\u53D6\u6D88\u7A0D\u540E\u518D\u770B";
-        }
-      }).catch(() => {});
+      bindWatchLaterToggle(btn, delight.bvid);
       return btn;
     })();
 
     // \u6536\u85CF = \u661F\u661F\u56FE\u6807\uFF0C\u4E0E\u7A0D\u540E\u518D\u770B\u76F8\u4E92\u72EC\u7ACB
     const delightFavoriteButton = (() => {
-      let busy = false;
-      let saved = false;
       const btn = createActionButton("", "action-button action-secondary delight-banner-action delight-save-toggle favorite-btn", async () => {
-        if (busy) return;
-        busy = true;
-        const wasSaved = saved;
-        saved = !wasSaved;
-        btn.setAttribute("aria-pressed", saved ? "true" : "false");
         try {
-          if (wasSaved) {
-            await removeFromFavorite(delight.bvid);
-          } else {
-            await addToFavorite(delight.bvid);
-          }
+          await toggleFavoriteSaved(delight.bvid);
         } catch {
-          saved = wasSaved;
-          btn.setAttribute("aria-pressed", saved ? "true" : "false");
-        } finally {
-          busy = false;
+          // Registry already rolled back the optimistic state.
         }
       });
       btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.65 5.37 5.93.86-4.29 4.18 1.01 5.9L12 17.1l-5.31 2.8 1.01-5.9L3.41 9.83l5.93-.86z"/></svg>';
-      btn.setAttribute("aria-pressed", "false");
-      btn.title = "\u6536\u85CF";
-      favoriteStatus(delight.bvid).then((res) => {
-        if (res && res.saved) {
-          saved = true;
-          btn.setAttribute("aria-pressed", "true");
-          btn.title = "\u53D6\u6D88\u6536\u85CF";
-        }
-      }).catch(() => {});
+      bindFavoriteToggle(btn, delight.bvid);
       return btn;
     })();
 
@@ -3917,6 +3977,10 @@ function renderDelightSlot() {
 
   elements.delightSlot.hidden = false;
   elements.delightSlot.replaceChildren(banner);
+  // The previous banner's save toggles are now detached; drop them so the
+  // shared registries don't grow across the delight banner's frequent re-renders.
+  watchLaterToggles.pruneDetached();
+  favoriteToggles.pruneDetached();
 }
 
 function createCommentComposer(item, statusLine) {
@@ -4032,6 +4096,10 @@ function renderRecommendations(items, { append = false } = {}) {
   }
   if (!append) {
     elements.list.replaceChildren();
+    // Cleared cards' toggle buttons are now detached; drop them so the shared
+    // registries don't accumulate stale entries across re-renders.
+    watchLaterToggles.pruneDetached();
+    favoriteToggles.pruneDetached();
   }
 
   for (const item of items) {
@@ -4240,37 +4308,18 @@ function renderRecommendations(items, { append = false } = {}) {
         }
       }),
       (() => {
-        let busy = false;
-        let saved = false;
         const btn = createActionButton("\u2606", "action-button action-secondary", async () => {
-          if (busy) return;
-          busy = true;
-          const wasSaved = saved;
-          saved = !wasSaved;
-          btn.textContent = saved ? "\u2605" : "\u2606";
-          btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
           try {
-            if (wasSaved) {
-              await removeFromWatchLater(item.bvid);
-            } else {
-              await addToWatchLater(item.bvid);
-            }
+            await toggleWatchLaterSaved(item.bvid);
           } catch {
-            saved = wasSaved;
-            btn.textContent = saved ? "\u2605" : "\u2606";
-            btn.title = saved ? "\u53D6\u6D88\u6536\u85CF" : "\u7A0D\u540E\u518D\u770B";
-          } finally {
-            busy = false;
+            // Registry already rolled back the optimistic state.
           }
         });
-        btn.title = "\u7A0D\u540E\u518D\u770B";
-        watchLaterStatus(item.bvid).then((res) => {
-          if (res && res.saved) {
-            saved = true;
-            btn.textContent = "\u2605";
-            btn.title = "\u53D6\u6D88\u6536\u85CF";
-          }
-        }).catch(() => {});
+        btn.classList.add("saved-toggle", "watch-later-btn");
+        bindWatchLaterToggle(btn, item.bvid, {
+          checkedText: "\u2605",
+          uncheckedText: "\u2606",
+        });
         return btn;
       })(),
       createActionButton("少来点", "action-button action-secondary", async () => {
@@ -4480,6 +4529,8 @@ function renderRecommendationState(stateShape) {
 
   if (elements.list instanceof HTMLElement) {
     elements.list.replaceChildren();
+    watchLaterToggles.pruneDetached();
+    favoriteToggles.pruneDetached();
   }
 
   if (stateShape.kind === "offline") {
