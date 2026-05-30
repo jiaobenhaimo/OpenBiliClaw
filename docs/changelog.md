@@ -4,6 +4,24 @@
 
 ---
 
+## 搬运检测重构为双向包 + 推荐流非阻塞（2026-05-30）
+
+- **`yt_replacer.py`（916 行单文件、0 测试）重构为 `repost/` 包**：拆成 `vocab` / `text` / `cache` / `detect` / `search` / `service` / `__init__` 七个职责清晰、可单测的模块。两个搬运方向（B站←YouTube、YouTube←B站）从「逻辑纠缠 + 单缓存字典 + `bili:` 前缀键」改为**独立缓存、独立检测器、独立检索后端、独立 API 端点**。对应 PR #53 中「体量过大 + 缺测试」的拒绝意见。
+- **方向 B 补上真实检测器**：旧实现的「检测」只是「标题含任意中文字符」，会把 YouTube 上所有原创中文内容误判为 B 站搬运。新检测器与方向 A 平行的信号阶梯（链接/BV号决定性 → 显式来源声明 → 中文主导 + B站文化词 → 评论指认），且**中文主导为必要非充分条件**，纯中文原创不再误判。
+- **方向 A 修一类误判**：「我用 Python 写推荐系统」这类中文主导但含英文术语的标题旧实现会因拉丁占比命中；现叠加 CJK 占比 < 0.20 门槛消除该类误判。
+- **独立双缓存**：`repost_bili_to_yt.json` 与 `repost_yt_to_bili.json` 两个文件；`clear()` 顺带清除旧 `yt_replacer_cache.json` 残留。新增方向 B 的 `GET /api/yt-replacer/reverse-lookup` 端点（此前方向 B 仅能经重载的 `mark-as-repost` 触发，无独立端点）。
+- **推荐流两段式，慢检索不再阻塞响应**：`/api/recommendations` 旧实现对每行同步调 `replace_recommendation_row`，可能触发顺序的 yt-dlp 检索（子进程 + 网络，每次 3–5s），整条响应可被拖到 15–30s+，且因 yt-dlp 阻塞还会卡住事件循环。现 serve path 仅 inline 套用已缓存替换（纯字典查询）；未解析行交给托管后台任务 `repost_warm` 预热——评论并发拉取走 async，阻塞检索经 `asyncio.to_thread` 在工作线程跑，结果落缓存供下次 inline 命中。首次看到新搬运显示 B 站版，预热后翻转为 YouTube 原版。
+- 测试：新增 `tests/test_repost.py` 27 例（文本工具、两个方向检测器的正负样本含「纯中文不算 B 站搬运」与「嵌入英文术语不算 A 搬运」两个关键 case、缓存 MISS vs None / 持久化 / 两缓存独立、检索打分 mock 网络），全绿。改动文件 ruff（line-length / isort / pyupgrade / bugbear / simplify / type-checking）与 mypy --strict（含哨兵 isinstance 收窄、`warn_return_any` 兜底）干净。
+- 同步文档：新增 `docs/modules/repost.md`（模块文档：已实现功能 / 公开 API / HTTP 端点 / 配置项 / 设计决策），`docs/index.md` 补模块行。
+
+## 上游同步 + PR #53 评审修复（2026-05-30）
+
+- **合并 upstream/main（38 commits）**：可编辑用户画像（#19）、独立收藏夹、封面白闪修复等。22 个文件重叠、8 个真冲突共 31 处 hunk；解析要点：OR-join 去重采用上游 `COALESCE` 子查询（弃 fork 的 `ROW_NUMBER`）、保留 fork 更丰富的 watch_later（字段更全 + 输入归一）、采纳上游 favorites 表与 `xhs_self_nickname` 形参、合并 fork 营销号 backfill 助手与上游 `_xhs_self_info_provider`、前端取上游 SVG/aria-pressed 收藏/稍后再看按钮并保留 fork 的 `:active` 动效与「标记搬运」按钮。
+- **PR #53 评审三处 bug 修复**：`bilibili.ts` 相对 `fetch` URL 在生产环境错误解析到 bilibili.com（改用共享 `apiUrl`）；`popup-launcher.js` 属性插值未转义引号（新增 `escapeAttr`）；`app.py` 按 bvid 反馈时 `recommendation_id=None` 导致 `WHERE id=NULL` 静默丢弃（改为从查得行解析规范 id）。
+- **营销号评分从 curator 迁到 evaluate_content（issue #54）**：新增 `content_cache.marketing_score` 列 + migration，评分在内容评估阶段计算并持久化，curator 直接读取；新增 tag 感知评分、过度堆砌标签信号、LLM 降级时仍计算的兜底路径，以及幂等回填助手。
+- **移除 Safari 扩展目标**：删除 safari/ 树与相关构建脚本、CI job、manifest 与三个分发器的 `_isSafari` 分支（维护成本 vs 收益）。
+- 测试：营销号过滤 23 例、上游合并后全 .py 编译 + 全新 DB init 创建 watch_later/favorites/marketing_score 且 CRUD 正常。
+
 ## 可编辑用户画像 · Phase 2/3：插件 + Web 编辑 UI（2026-05-29）
 
 - **三端可编辑画像 UI**：插件 side panel、移动 Web（`/m`）、桌面 Web（`/web`）画像页都新增「编辑画像」开关，进入后是由未截断的 `GET /api/profile/edit-state` 驱动的编辑面板——chip 增删（核心特质 / 深层需求 / 价值观 / 内在驱动 / 认知风格 / 常看 UP）、兴趣树领域增删（喜欢 / 不喜欢）、长文改写（人格素描 / 人生阶段 / 当前阶段）。

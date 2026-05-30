@@ -73,6 +73,12 @@ OpenBiliClaw 采用分层架构设计，从上到下依次为：
 - `batch_insert_recommendations` — 单 transaction 批量插入，避免 popup 给 10 条结果时 10 次 fsync
 - 个性化专题生成
 
+### Repost (`repost/`) — 双向搬运检测
+- 双向独立：方向 A（B站视频←YouTube 原版）+ 方向 B（YouTube视频←B站原版），各自独立缓存（`repost_bili_to_yt.json` / `repost_yt_to_bili.json`）、检测器、检索后端（YouTube 走 yt-dlp、B站走 HTTP）、API 端点
+- `RepostService` 按方向串起 检测 → 可达性探测 → 检索 → 缓存；检测器返回 `RepostSignal(detected/confidence/reasons)`
+- **推荐流两段式（跨模块）**：`/api/recommendations` serve path 只 inline 套用**已缓存**替换（`replace_recommendation_row(search=False)`，纯字典查询零网络），未解析行交给托管后台任务 `repost_warm`——评论并发拉取走 async、阻塞式 yt-dlp 检索经 `asyncio.to_thread` 在工作线程跑，结果落缓存供下次请求 inline 命中。慢检索绝不阻塞响应或事件循环
+- 方向 B 检测以「中文主导」为必要非充分条件，须伴随真实 B 站来源信号（链接 / BV号 / 显式声明 / 文化词），避免把原创中文内容误判为搬运
+
 ### Runtime (`runtime/`)
 - 系统生命周期管理和服务编排
 - 降级模式启动：生产 `create_app()` 遇到 LLM registry 配置错误时保留 `/api/health`、`/api/config`、`/api/runtime-status` 和 `/api/runtime-stream`，让 popup 设置页仍能保存修复配置；其他 API 返回 503，避免半初始化 runtime 继续跑推荐/发现链路
