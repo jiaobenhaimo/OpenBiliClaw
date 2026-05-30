@@ -46,28 +46,40 @@ class RepostCache:
         self._path = Path(path)
         self._ttl = max(0, int(ttl_seconds))
         self._data: dict[str, dict[str, Any] | None] = {}
+        self._stamps: dict[str, float] = {}  # key -> epoch seconds of last set
         self._disk_mtime: float = 0.0
         self._loaded = False
 
     # ── public API ────────────────────────────────────────────────
 
     def get(self, key: str) -> dict[str, Any] | None | _Miss:
-        """Return the cached value, ``None`` (cached no-match), or ``MISS``."""
+        """Return the cached value, ``None`` (cached no-match), or ``MISS``.
+
+        Entries older than the configured TTL are reported as ``MISS`` so
+        the caller re-fetches rather than serving aged data; a TTL of 0
+        disables expiry. Previously the TTL was accepted but never
+        applied, so a cached match to a since-deleted video (or a cached
+        no-match) lived forever.
+        """
         self._ensure_loaded()
         if key not in self._data:
             return MISS
+        if self._ttl > 0 and (time.time() - self._stamps.get(key, 0.0)) > self._ttl:
+            return MISS  # stale: force a re-fetch instead of serving old data
         value = self._data[key]
         return dict(value) if isinstance(value, dict) else None
 
     def set(self, key: str, value: dict[str, Any] | None) -> None:
-        """Store *value* for *key* and persist to disk."""
+        """Store *value* for *key* (timestamped now) and persist to disk."""
         self._ensure_loaded()
         self._data[key] = dict(value) if isinstance(value, dict) else None
+        self._stamps[key] = time.time()
         self._save()
 
     def clear(self) -> None:
         """Drop all in-memory entries and remove the backing file."""
         self._data.clear()
+        self._stamps.clear()
         self._disk_mtime = 0.0
         self._loaded = True  # an explicit clear means we "know" it's empty
         try:
@@ -101,10 +113,23 @@ class RepostCache:
         try:
             with open(self._path, encoding="utf-8") as fh:
                 loaded = json.load(fh)
-            if isinstance(loaded, dict):
-                # Merge rather than replace: another worker may have
-                # written keys this process hasn't seen, and this
-                # process may hold keys not yet flushed.
+            # Merge rather than replace: another worker may have written
+            # keys this process hasn't seen, and this process may hold
+            # keys not yet flushed.
+            if isinstance(loaded, dict) and loaded.get("version") == 2:
+                values = loaded.get("values")
+                stamps = loaded.get("stamps")
+                if isinstance(values, dict):
+                    self._data.update(values)
+                if isinstance(stamps, dict):
+                    self._stamps.update(
+                        {k: float(v) for k, v in stamps.items() if isinstance(v, int | float)}
+                    )
+            elif isinstance(loaded, dict):
+                # Legacy flat {key: value} file from before the TTL was
+                # enforced. Leave stamps empty so these entries read as
+                # expired and get re-fetched — the correct behaviour for
+                # a cache that now honours a TTL.
                 self._data.update(loaded)
             self._disk_mtime = mtime
         except (OSError, ValueError):
@@ -115,8 +140,9 @@ class RepostCache:
     def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"version": 2, "values": self._data, "stamps": self._stamps}
             with open(self._path, "w", encoding="utf-8") as fh:
-                json.dump(self._data, fh, ensure_ascii=False, indent=2)
+                json.dump(payload, fh, ensure_ascii=False, indent=2)
             self._disk_mtime = time.time()
         except OSError:
             logger.debug("RepostCache: failed to save %s", self._path, exc_info=True)

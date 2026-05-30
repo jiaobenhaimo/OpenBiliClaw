@@ -11,6 +11,7 @@ Run a single test inline (pytest may be unavailable in some envs):
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 
 from openbiliclaw.repost import (
@@ -192,6 +193,23 @@ def test_two_caches_are_independent() -> None:
         b.set("shared_key", {"side": "B"})
         assert a.get("shared_key") == {"side": "A"}
         assert b.get("shared_key") == {"side": "B"}
+
+
+def test_cache_ttl_expires_stale_entries() -> None:
+    # The TTL was previously declared but never applied. An entry older
+    # than the TTL must now read as MISS so the caller re-fetches rather
+    # than serving aged data (e.g. a match to a since-deleted video).
+    with tempfile.TemporaryDirectory() as td:
+        c = RepostCache(Path(td) / "c.json", ttl_seconds=100)
+        c.set("k", {"a": 1})
+        assert c.get("k") == {"a": 1}  # fresh
+        c._stamps["k"] = time.time() - 1000  # backdate well past the TTL
+        assert c.get("k") is MISS
+        # ttl_seconds=0 means "never expire": age is ignored entirely.
+        c0 = RepostCache(Path(td) / "c0.json", ttl_seconds=0)
+        c0.set("k", {"a": 1})
+        c0._stamps["k"] = time.time() - 10**9
+        assert c0.get("k") == {"a": 1}
 
 
 # ── search scoring (network mocked) ─────────────────────────────────
