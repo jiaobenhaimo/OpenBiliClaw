@@ -4,6 +4,11 @@
 
 ---
 
+## 搬运包代码审查修复：兑现缓存 TTL + 热路径微优化（2026-05-30）
+
+- **修复 `RepostCache` 声明却从未生效的 TTL**：`ttl_seconds`（默认 24h，由 `cache_ttl_hours` 一路透传）此前只存不读，`get()` 从不校验过期，导致命中（含指向已删除视频的命中）与「查过无匹配」条目永久驻留。现每条 `set()` 打时间戳，`get()` 对超过 TTL 的条目返回 `MISS` 触发重查；`ttl_seconds=0` 保留永不过期语义。落盘格式升为 `{version, values, stamps}`，旧扁平文件按过期处理重查一次（无害，缓存运行时重建）。新增 TTL 过期测试（repost 测试 27→28）。
+- **热路径微优化（行为不变）**：`detect.py` 把 title+description 的小写计算从「每个关键词算一次」提到循环外算一次；`search.py` 的 `<em>` 剥离 `re` 从函数内 import 提到模块级；`_best_match` 用 `max(key=)` 取最佳，免去整表 O(n log n) 排序（语义与并列取首一致）。
+
 ## 同步上游 v0.3.96 / extension v0.3.55（2026-05-30）
 
 - 合并 upstream/main 5 个新提交：profile 编辑器新增标量滑块编辑（桌面 + 移动 + 插件三端）、dislike-add 清池改为后台异步使 profile 编辑即时返回、profile-summary 显示上限不再截断用户手动新增项、插件收藏 / 稍后再看会话内状态同步 + 状态注册表游离按钮泄漏修复、extension v0.3.55 发布。
