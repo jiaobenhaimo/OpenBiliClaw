@@ -12,7 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import detect, search
+from . import detect
+from . import search as _search_mod
 from .cache import MISS, RepostCache
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class RepostService:
         force: bool = False,
         skip_detection: bool = False,
         comments: list[str] | None = None,
+        search: bool = True,
     ) -> dict[str, Any] | None:
         """Resolve a Bilibili repost to its YouTube original.
 
@@ -53,10 +55,21 @@ class RepostService:
         on a confirmed match; a transient dict with
         ``repost_detected=True`` and empty ``yt_url`` when it's clearly
         a repost but YouTube isn't reachable right now; or ``None``.
+
+        ``search=False`` is cache-only mode: return whatever is cached
+        and otherwise ``None``, without running detection, the
+        reachability probe, or the (blocking) YouTube search. The serve
+        path uses this so a request never stalls on yt-dlp; a background
+        pass (:meth:`warm_bilibili_to_youtube`) fills the cache.
         """
         cached = self._b2y.get(bvid) if not force else MISS
         if cached is not MISS:
             return cached  # may be None (cached no-match)
+
+        if not search:
+            # Cache-only: we don't know yet, and we won't block to find
+            # out. The warming pass will populate this entry.
+            return None
 
         if not skip_detection:
             signal = detect.detect_bilibili_from_youtube(
@@ -69,7 +82,7 @@ class RepostService:
         # Don't persist a no-match when the platform is simply
         # unreachable — that's transient, and the long-lived cache
         # would lock the bvid out for the full TTL.
-        if not search.youtube_reachable():
+        if not _search_mod.youtube_reachable():
             logger.info("link_bilibili_to_youtube: youtube unreachable for %s", bvid)
             return {
                 "bvid": bvid,
@@ -80,7 +93,7 @@ class RepostService:
                 "repost_detected": True,
             }
 
-        match = search.find_youtube_original(
+        match = _search_mod.find_youtube_original(
             title, author=author, description=description
         )
         if match is None:
@@ -110,6 +123,7 @@ class RepostService:
         force: bool = False,
         skip_detection: bool = False,
         comments: list[str] | None = None,
+        search: bool = True,
     ) -> dict[str, Any] | None:
         """Resolve a YouTube repost to its Bilibili original.
 
@@ -118,10 +132,16 @@ class RepostService:
         ``{yt_id, bvid, bili_url, bili_title, bili_up_name, bili_cover_url}``
         on a confirmed match; a transient ``repost_detected=True`` dict
         when Bilibili is unreachable; or ``None``.
+
+        ``search=False`` is cache-only mode (see
+        :meth:`link_bilibili_to_youtube`).
         """
         cached = self._y2b.get(yt_id) if not force else MISS
         if cached is not MISS:
             return cached
+
+        if not search:
+            return None
 
         if not skip_detection:
             signal = detect.detect_youtube_from_bilibili(
@@ -131,7 +151,7 @@ class RepostService:
                 self._y2b.set(yt_id, None)
                 return None
 
-        if not search.bilibili_reachable():
+        if not _search_mod.bilibili_reachable():
             logger.info("link_youtube_to_bilibili: bilibili unreachable for %s", yt_id)
             return {
                 "yt_id": yt_id,
@@ -143,7 +163,7 @@ class RepostService:
                 "repost_detected": True,
             }
 
-        match = search.find_bilibili_original(
+        match = _search_mod.find_bilibili_original(
             title, author=author, description=description
         )
         if match is None:
@@ -169,6 +189,7 @@ class RepostService:
         row: dict[str, Any],
         *,
         comments: list[str] | None = None,
+        search: bool = True,
     ) -> dict[str, Any] | None:
         """Compute the field overrides to swap a Bilibili-sourced repost
         row for its YouTube original.
@@ -178,6 +199,9 @@ class RepostService:
         replacement applies. Direction A only — the rec feed surfaces
         Bilibili-pool items, so the only automatic swap that makes sense
         here is bilibili→youtube.
+
+        ``search=False`` applies only an already-cached replacement and
+        never blocks on a lookup (used by the serve path).
         """
         bvid = str(row.get("bvid", "") or "")
         title = str(row.get("title", "") or "")
@@ -191,7 +215,12 @@ class RepostService:
             return None
 
         yt = self.link_bilibili_to_youtube(
-            bvid, title, author=author, description=description, comments=comments
+            bvid,
+            title,
+            author=author,
+            description=description,
+            comments=comments,
+            search=search,
         )
         if yt is None:
             return None
@@ -220,6 +249,57 @@ class RepostService:
         if yt_cover:
             override["cover_url"] = yt_cover
         return override
+
+    # ── background warming (the slow, search-enabled pass) ────────
+
+    def warm_bilibili_to_youtube(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        comments_by_bvid: dict[str, list[str]] | None = None,
+    ) -> dict[str, int]:
+        """Populate the direction-A cache for a batch of rows.
+
+        This is the slow counterpart to the cache-only serve path: it
+        actually runs detection + (when reachable) the blocking YouTube
+        search for each Bilibili row not already cached, and persists
+        the result so a subsequent cache-only lookup is instant.
+
+        BLOCKING — yt-dlp and urllib are synchronous. Call this from a
+        worker thread (``asyncio.to_thread``), never directly on the
+        event loop.
+
+        Skips youtube-sourced rows and any bvid already in the cache
+        (whether it cached a match or a no-match), so repeated calls
+        only do new work. Returns ``{scanned, matched}`` for logging.
+        """
+        comments_by_bvid = comments_by_bvid or {}
+        scanned = 0
+        matched = 0
+        for row in rows:
+            bvid = str(row.get("bvid", "") or "")
+            if not bvid:
+                continue
+            if str(row.get("source_platform", "") or "") == "youtube":
+                continue
+            if self._b2y.get(bvid) is not MISS:
+                continue  # already resolved (match or no-match)
+            scanned += 1
+            result = self.link_bilibili_to_youtube(
+                bvid,
+                str(row.get("title", "") or ""),
+                author=str(row.get("up_name", "") or ""),
+                description=str(row.get("description", "") or ""),
+                comments=comments_by_bvid.get(bvid),
+                search=True,
+            )
+            if result and result.get("yt_url"):
+                matched += 1
+        if scanned:
+            logger.info(
+                "warm_bilibili_to_youtube: scanned=%d matched=%d", scanned, matched
+            )
+        return {"scanned": scanned, "matched": matched}
 
     # ── maintenance ───────────────────────────────────────────────
 

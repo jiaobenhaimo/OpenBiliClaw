@@ -36,6 +36,7 @@ __all__ = [
     "replace_if_foreign",
     "replace_if_from_bilibili",
     "replace_recommendation_row",
+    "warm_recommendation_reposts",
     "clear_cache",
 ]
 
@@ -166,9 +167,34 @@ def replace_recommendation_row(
     *,
     data_dir: str = "",
     comments: list[str] | None = None,
+    search: bool = True,
 ) -> dict[str, Any] | None:
-    """Direction-A recommendation-row override (unchanged signature)."""
-    return _service(data_dir).replace_recommendation_row(row, comments=comments)
+    """Direction-A recommendation-row override.
+
+    ``search=False`` applies only an already-cached replacement (used
+    by the serve path so a request never blocks on a YouTube lookup).
+    """
+    return _service(data_dir).replace_recommendation_row(
+        row, comments=comments, search=search
+    )
+
+
+def warm_recommendation_reposts(
+    rows: list[dict[str, Any]],
+    *,
+    data_dir: str = "",
+    comments_by_bvid: dict[str, list[str]] | None = None,
+) -> dict[str, int]:
+    """Background warming for direction A (bilibili → youtube).
+
+    Runs the actual (blocking) searches for uncached rows and persists
+    results into the SAME per-``data_dir`` cache the cache-only serve
+    path reads. BLOCKING — call via ``asyncio.to_thread`` off the event
+    loop. Returns ``{scanned, matched}``.
+    """
+    return _service(data_dir).warm_bilibili_to_youtube(
+        rows, comments_by_bvid=comments_by_bvid
+    )
 
 
 def clear_cache(data_dir: str = "") -> None:

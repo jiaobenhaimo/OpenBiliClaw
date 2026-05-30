@@ -1997,6 +1997,15 @@ def create_app(
         rows = _cap_by_franchise(rows, max_per_franchise=2)[:20]
 
         # ── YouTube repost replacement ──────────────────────────────
+        # Two-phase, so a slow yt-dlp search never stalls this response:
+        #   1. INLINE (fast): apply only replacements already in the
+        #      repost cache. Pure dict lookups, no network.
+        #   2. DETACHED (slow): warm the cache for any not-yet-resolved
+        #      rows — comment fetch runs concurrently (async), the
+        #      blocking YouTube searches run in a worker thread. The
+        #      results land in the cache so the *next* request serves
+        #      them inline. The very first view of a fresh repost shows
+        #      the Bilibili version; once warmed it flips to YouTube.
         if rows and ctx.config.sources.youtube.replace_bilibili_reposts:
             try:
                 import os as _os
@@ -2009,111 +2018,86 @@ def create_app(
                     else ""
                 )
 
-                # Signal 6 enablement: fetch comments for borderline rows
-                # so the comment-keyword detector can catch AI-dubbed
-                # reposts whose title is fully Chinese and description is
-                # empty. Bounded by ``comment_detection_max_rows`` to
-                # cap Bilibili API quota burn.
-                yt_cfg = ctx.config.sources.youtube
-                use_comments = (
-                    yt_cfg.use_comments_for_detection
-                    and getattr(ctx, "bilibili_client", None) is not None
-                )
-                comments_by_bvid: dict[str, list[str]] = {}
-                if use_comments:
-                    max_rows = yt_cfg.comment_detection_max_rows
-                    borderline_rows: list[tuple[int, dict[str, Any]]] = []
-                    for i, row in enumerate(rows):
-                        if str(row.get("source_platform", "") or "") == "youtube":
-                            continue
-                        title = str(row.get("title", "") or "")
-                        description = str(row.get("description", "") or "")
-                        # Skip if title already trips obvious signals 1-5
-                        # — comments add no value, and we'd be wasting an
-                        # API call. ``is_likely_repost`` on title alone
-                        # mimics the sync-path's first pass.
-                        from openbiliclaw.repost import is_likely_repost
-
-                        if is_likely_repost(title, description=description):
-                            continue
-                        # Heuristic for "could be a repost worth checking
-                        # comments for": some Latin characters OR mentions
-                        # of foreign brands / weak repost keywords in title
-                        # or description. Rules out the 80% obvious
-                        # Chinese-original videos.
-                        latin = sum(1 for ch in title if "a" <= ch.lower() <= "z")
-                        latin_ratio = latin / max(1, len(title))
-                        combined = (title + " " + description).lower()
-                        borderline = latin_ratio > 0.05 or any(
-                            kw in combined
-                            for kw in (
-                                "配音",
-                                "翻译",
-                                "搬运",
-                                "ai",
-                                "youtube",
-                                "油管",
-                                "双语",
-                                "中字",
-                                "字幕",
-                                "英配",
-                                "熟肉",
-                                "译制",
-                                "外网",
-                                "国外视频",
-                                "海外",
-                                "原视频",
-                                "原版",
-                                "转载",
-                                "转录",
-                                "素材来源",
-                                "视频来源",
-                                "原作者",
-                                "CC",
-                                "sub",
-                                "dub",
-                                "clone",
-                                "voiceover",
-                            )
-                        )
-                        if borderline:
-                            borderline_rows.append((i, row))
-                    if max_rows > 0:
-                        borderline_rows = borderline_rows[:max_rows]
-                    # Fetch comments concurrently to keep latency bounded.
-                    if borderline_rows:
-
-                        async def _fetch(bvid: str) -> tuple[str, list[str]]:
-                            try:
-                                client = ctx.bilibili_client
-                                infos = await client.get_video_comments(bvid, limit=20)
-                                return bvid, [str(getattr(c, "message", "") or "") for c in infos]
-                            except Exception as exc:
-                                logger.debug(
-                                    "comment-fetch failed for %s: %s — falling "
-                                    "back to title-only detection",
-                                    bvid,
-                                    exc,
-                                )
-                                return bvid, []
-
-                        import asyncio as _asyncio
-
-                        fetched = await _asyncio.gather(
-                            *[_fetch(str(row.get("bvid", "") or "")) for _, row in borderline_rows],
-                            return_exceptions=False,
-                        )
-                        comments_by_bvid = {bvid: msgs for bvid, msgs in fetched if msgs}
-
+                # Phase 1 — inline, cache-only (never blocks).
                 for i, row in enumerate(rows):
-                    bvid = str(row.get("bvid", "") or "")
                     override = replace_recommendation_row(
-                        row,
-                        data_dir=data_dir,
-                        comments=comments_by_bvid.get(bvid),
+                        row, data_dir=data_dir, search=False
                     )
                     if override:
                         rows[i] = {**row, **override}
+
+                # Phase 2 — detached warm for next time.
+                rows_snapshot = [dict(r) for r in rows]
+                yt_cfg = ctx.config.sources.youtube
+                bili_client = getattr(ctx, "bilibili_client", None)
+                use_comments = yt_cfg.use_comments_for_detection and bili_client is not None
+
+                async def _warm_reposts() -> None:
+                    from openbiliclaw.repost import (
+                        is_likely_repost,
+                        warm_recommendation_reposts,
+                    )
+
+                    # 2a. Fetch comments for borderline rows (concurrent,
+                    # async) so the detector can catch AI-dubbed reposts
+                    # whose title is fully Chinese. Bounded by
+                    # comment_detection_max_rows to cap API quota.
+                    comments_by_bvid: dict[str, list[str]] = {}
+                    if use_comments:
+                        borderline: list[str] = []
+                        for row in rows_snapshot:
+                            if str(row.get("source_platform", "") or "") == "youtube":
+                                continue
+                            title = str(row.get("title", "") or "")
+                            description = str(row.get("description", "") or "")
+                            if is_likely_repost(title, description=description):
+                                continue  # title alone decides; no comment needed
+                            latin = sum(1 for ch in title if "a" <= ch.lower() <= "z")
+                            latin_ratio = latin / max(1, len(title))
+                            combined = (title + " " + description).lower()
+                            if latin_ratio > 0.05 or any(
+                                kw in combined
+                                for kw in (
+                                    "配音", "翻译", "搬运", "ai", "youtube", "油管",
+                                    "双语", "中字", "字幕", "英配", "熟肉", "译制",
+                                    "外网", "海外", "原视频", "原版", "转载", "素材来源",
+                                    "视频来源", "原作者", "cc", "sub", "dub", "clone",
+                                    "voiceover",
+                                )
+                            ):
+                                borderline.append(str(row.get("bvid", "") or ""))
+                        max_rows = yt_cfg.comment_detection_max_rows
+                        if max_rows > 0:
+                            borderline = borderline[:max_rows]
+
+                        async def _fetch(bvid: str) -> tuple[str, list[str]]:
+                            try:
+                                infos = await bili_client.get_video_comments(bvid, limit=20)
+                                return bvid, [
+                                    str(getattr(c, "message", "") or "") for c in infos
+                                ]
+                            except Exception:
+                                return bvid, []
+
+                        if borderline:
+                            fetched = await asyncio.gather(
+                                *[_fetch(b) for b in borderline if b]
+                            )
+                            comments_by_bvid = {b: m for b, m in fetched if m}
+
+                    # 2b. Run the blocking searches off the event loop.
+                    await asyncio.to_thread(
+                        warm_recommendation_reposts,
+                        rows_snapshot,
+                        data_dir=data_dir,
+                        comments_by_bvid=comments_by_bvid,
+                    )
+
+                registry = getattr(ctx, "task_registry", None)
+                if registry is not None:
+                    registry.track("repost_warm", _warm_reposts())
+                else:
+                    asyncio.create_task(_warm_reposts())
             except Exception as exc:
                 logger.exception("YT replacer failed: %s", exc)  # don't break the response
 
